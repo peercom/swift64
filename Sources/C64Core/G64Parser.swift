@@ -6,6 +6,20 @@ import Foundation
 /// sync marks, gaps, headers, and timing information. This parser decodes
 /// the GCR data back to standard 256-byte sectors so the existing
 /// DiskDrive infrastructure can serve files via Kernal traps.
+private func g64log(_ msg: String) {
+    let line = msg + "\n"
+    let path = "/tmp/c64_debug.log"
+    if let data = line.data(using: .utf8) {
+        if let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile()
+            fh.write(data)
+            fh.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: data)
+        }
+    }
+}
+
 public enum G64Parser {
 
     // MARK: - G64 header constants
@@ -49,11 +63,11 @@ public enum G64Parser {
         // bytes[10..11] = max track size (little-endian), not needed for decoding
 
         guard version == 0 else {
-            print("G64: unsupported version \(version)")
+            g64log("G64: unsupported version \(version)")
             return nil
         }
         guard numTracks > 0 && numTracks <= 84 else {
-            print("G64: invalid track count \(numTracks)")
+            g64log("G64: invalid track count \(numTracks)")
             return nil
         }
 
@@ -75,6 +89,7 @@ public enum G64Parser {
         // Build D64-compatible image: 35 tracks, standard sector counts
         let d64Size = 174848
         var d64 = [UInt8](repeating: 0, count: d64Size)
+        var totalDecoded = 0
 
         // Process whole tracks (indices 0, 2, 4, ... = tracks 1, 2, 3, ...)
         for trackNum in 1...35 {
@@ -82,18 +97,69 @@ public enum G64Parser {
             guard halfTrackIndex < numTracks else { continue }
 
             let offset = trackOffsets[halfTrackIndex]
-            guard offset > 0 && offset + 2 <= bytes.count else { continue }
+            guard offset > 0 && offset + 2 <= bytes.count else {
+                g64log("G64: track \(trackNum) no data (offset=\(offset))")
+                continue
+            }
 
             // Track data: 2-byte little-endian length + GCR data
             let trackLen = Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8)
-            guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else { continue }
+            guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else {
+                g64log("G64: track \(trackNum) invalid length \(trackLen)")
+                continue
+            }
 
             let trackData = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
+
+            // Dump first bytes and FF count for track 18
+            if trackNum == 18 {
+                let first40 = trackData.prefix(40).map { String(format: "%02X", $0) }.joined(separator: " ")
+                let ffCount = trackData.filter { $0 == 0xFF }.count
+                g64log("G64: T18 raw first 40: \(first40)")
+                g64log("G64: T18 total $FF bytes: \(ffCount) / \(trackLen)")
+
+                var maxRun = 0; var curRun = 0
+                for b in trackData {
+                    if b == 0xFF { curRun += 1; maxRun = max(maxRun, curRun) }
+                    else { curRun = 0 }
+                }
+                g64log("G64: T18 longest FF run: \(maxRun)")
+            }
+
+            // After decoding, dump T18/S0 (BAM) for verification
+            if trackNum == 18 {
+                // Will be filled after sector decode below
+            }
 
             // Decode all sectors from this track's GCR data
             let expectedSectors = DiskDrive.sectorsPerTrack[trackNum]
             let sectors = decodeSectors(from: trackData, track: trackNum,
                                         expectedSectors: expectedSectors)
+
+            if sectors.count != expectedSectors {
+                g64log("G64: track \(trackNum): decoded \(sectors.count)/\(expectedSectors) sectors from \(trackLen) GCR bytes")
+            }
+
+            // Dump BAM sector (T18/S0) for debugging
+            if trackNum == 18 {
+                for sn in [0, 1, 9] {
+                    if let s = sectors.first(where: { $0.0 == sn }) {
+                        let d = s.1
+                        let first16 = d.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                        g64log("G64: T18/S\(sn) first 16: \(first16)")
+                    } else {
+                        g64log("G64: T18/S\(sn) NOT FOUND")
+                    }
+                }
+                // Disk name at offset $90 in S0
+                if let s0 = sectors.first(where: { $0.0 == 0 }) {
+                    let nameBytes = Array(s0.1[0x90..<0xA0])
+                    let nameHex = nameBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+                    g64log("G64: T18/S0 diskname @$90: \(nameHex)")
+                }
+            }
+
+            totalDecoded += sectors.count
 
             // Copy decoded sectors into the D64 image
             for (sectorNum, sectorData) in sectors {
@@ -104,6 +170,13 @@ public enum G64Parser {
                     d64[d64Offset + i] = sectorData[i]
                 }
             }
+        }
+
+        g64log("G64: decoded \(totalDecoded)/683 total sectors")
+
+        // Sanity check: did we get any sectors at all?
+        if totalDecoded == 0 {
+            g64log("G64: WARNING — no sectors decoded, file may use non-standard format")
         }
 
         return d64
@@ -119,122 +192,146 @@ public enum G64Parser {
         let len = gcrData.count
         guard len > 20 else { return [] }
 
-        // Scan for sync marks (5+ consecutive $FF bytes) followed by sector headers
-        var pos = 0
+        // Convert to bits for bit-level sync detection.
+        // Duplicate the data to handle wrap-around (track is circular).
+        let bits = toBits(gcrData + gcrData)
+        let maxBit = len * 8  // Only scan through original data length
+
+        var bitPos = 0
         var foundSectors = Set<Int>()
+        var syncCount = 0
+        var headerFails = 0
+        var dataFails = 0
 
-        // We may need to wrap around (track data is circular)
-        let extendedData = gcrData + gcrData  // Duplicate to handle wrap-around
-        let maxPos = len  // Only scan through original data length
+        while bitPos < maxBit && foundSectors.count < expectedSectors {
+            // Find next sync mark (10+ consecutive 1-bits)
+            let afterSync = findSyncBit(in: bits, from: bitPos)
+            guard afterSync >= 0 && afterSync < maxBit + len * 8 - 200 else { break }
 
-        while pos < maxPos && foundSectors.count < expectedSectors {
-            // Find sync mark: 5+ bytes of $FF
-            let syncPos = findSync(in: extendedData, from: pos)
-            guard syncPos >= 0 && syncPos < maxPos + len - 20 else { break }
+            syncCount += 1
 
-            let afterSync = syncPos
+            // Decode sector header: 8 bytes = 80 bits of GCR after sync
+            guard afterSync + 80 <= bits.count else { break }
+            let headerBytes = decodeGCRFromBits(bits, from: afterSync, count: 8)
 
-            // Decode 10 GCR bytes → 8 data bytes (sector header)
-            guard afterSync + 10 <= extendedData.count else { break }
-            let headerGCR = Array(extendedData[afterSync..<(afterSync + 10)])
-            let headerBytes = decodeGCRBlock(headerGCR, count: 8)
+            if track == 18 && syncCount <= 5 {
+                let dec = headerBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+                g64log("G64: T\(track) sync#\(syncCount) @bit \(afterSync) → [\(dec)]")
+            }
 
             if headerBytes.count >= 6 && headerBytes[0] == 0x08 {
-                // This is a sector header
                 let sectorNum = Int(headerBytes[2])
                 let trackNum = Int(headerBytes[3])
 
                 if trackNum == track && sectorNum < expectedSectors &&
                    !foundSectors.contains(sectorNum) {
 
-                    // Now find the data block: skip gap, find next sync, then data
-                    let dataSync = findSync(in: extendedData, from: afterSync + 10)
-                    if dataSync >= 0 && dataSync + 325 <= extendedData.count {
-                        let dataGCR = Array(extendedData[dataSync..<(dataSync + 325)])
-                        let dataBytes = decodeGCRBlock(dataGCR, count: 260)
+                    // Find next sync for data block
+                    let dataSyncBit = findSyncBit(in: bits, from: afterSync + 80)
+                    // Data block: 260 bytes = 2600 bits of GCR
+                    if dataSyncBit >= 0 && dataSyncBit + 2600 <= bits.count {
+                        let dataBytes = decodeGCRFromBits(bits, from: dataSyncBit, count: 260)
 
                         if dataBytes.count >= 258 && dataBytes[0] == 0x07 {
                             let sectorData = Array(dataBytes[1...256])
                             sectors.append((sectorNum, sectorData))
                             foundSectors.insert(sectorNum)
+                        } else {
+                            dataFails += 1
+                            if track == 18 && dataFails <= 3 {
+                                let marker = dataBytes.isEmpty ? "empty" : String(format: "%02X", dataBytes[0])
+                                g64log("G64: T\(track) S\(sectorNum) data fail: marker=\(marker) count=\(dataBytes.count)")
+                            }
                         }
                     }
                 }
 
-                // Advance past this header
-                pos = afterSync + 10
-                if pos >= maxPos { break }
+                bitPos = afterSync + 80
+                if bitPos >= maxBit { break }
             } else {
-                // Not a header, advance past sync
-                pos = afterSync + 1
-                if pos >= maxPos { break }
+                headerFails += 1
+                // Skip past this sync + a few bits
+                bitPos = afterSync + 10
+                if bitPos >= maxBit { break }
             }
+        }
+
+        if sectors.count < expectedSectors {
+            g64log("G64: T\(track) syncs=\(syncCount) headerFails=\(headerFails) dataFails=\(dataFails) decoded=\(sectors.count)/\(expectedSectors)")
         }
 
         return sectors
     }
 
-    /// Find the position after a sync mark (5+ consecutive $FF bytes).
-    /// Returns the index of the first non-$FF byte after the sync, or -1.
-    static func findSync(in data: [UInt8], from start: Int) -> Int {
+    // MARK: - Bit-level sync detection and GCR decoding
+
+    /// Find the bit position after a sync mark (10+ consecutive one-bits).
+    /// The 1541 hardware detects sync by looking for 10+ consecutive 1-bits
+    /// in the GCR bitstream — NOT aligned to byte boundaries.
+    /// After sync, data is byte-aligned starting from the first 0-bit.
+    /// Returns the bit index of the first 0-bit after sync, or -1.
+    static func findSyncBit(in bits: [UInt8], from start: Int) -> Int {
         var pos = start
-        let len = data.count
+        let len = bits.count
 
-        // Find start of sync ($FF bytes)
-        while pos < len && data[pos] != 0xFF {
-            pos += 1
-        }
+        while pos < len {
+            // Skip zeros
+            while pos < len && bits[pos] == 0 { pos += 1 }
 
-        // Count consecutive $FF bytes (need at least 5)
-        var syncLen = 0
-        while pos < len && data[pos] == 0xFF {
-            syncLen += 1
-            pos += 1
-        }
+            // Count consecutive 1-bits
+            var oneCount = 0
+            while pos < len && bits[pos] == 1 {
+                oneCount += 1
+                pos += 1
+            }
 
-        if syncLen >= 5 && pos < len {
-            return pos
+            // 1541 needs 10+ one-bits for sync
+            if oneCount >= 10 && pos < len {
+                return pos  // First 0-bit after sync — data starts here
+            }
+            // If we hit end of data or not enough ones, keep scanning
+            if pos >= len { break }
         }
         return -1
     }
 
-    /// Decode a GCR byte stream into data bytes.
-    /// Every 5 GCR bytes decode to 4 data bytes (8 nybbles from 40 bits).
-    static func decodeGCRBlock(_ gcr: [UInt8], count expectedBytes: Int) -> [UInt8] {
+    /// Decode GCR data from a bit array starting at a given bit position.
+    /// Every 10 bits (two 5-bit GCR nybbles) decode to 1 byte.
+    static func decodeGCRFromBits(_ bits: [UInt8], from bitPos: Int, count expectedBytes: Int) -> [UInt8] {
         var result = [UInt8]()
         result.reserveCapacity(expectedBytes)
+        var pos = bitPos
 
-        // Process in groups of 5 GCR bytes → 4 data bytes
-        var gcrPos = 0
-        while result.count < expectedBytes && gcrPos + 5 <= gcr.count {
-            let b0 = UInt64(gcr[gcrPos])
-            let b1 = UInt64(gcr[gcrPos + 1])
-            let b2 = UInt64(gcr[gcrPos + 2])
-            let b3 = UInt64(gcr[gcrPos + 3])
-            let b4 = UInt64(gcr[gcrPos + 4])
+        while result.count < expectedBytes && pos + 10 <= bits.count {
+            // Read high nybble (5 bits)
+            var hi: UInt8 = 0
+            for i in 0..<5 { hi = (hi << 1) | bits[pos + i] }
+            // Read low nybble (5 bits)
+            var lo: UInt8 = 0
+            for i in 0..<5 { lo = (lo << 1) | bits[pos + 5 + i] }
 
-            // Pack 5 bytes into 40 bits
-            let bits: UInt64 = (b0 << 32) | (b1 << 24) | (b2 << 16) | (b3 << 8) | b4
-
-            // Extract 8 GCR nybbles (5 bits each)
-            let g0 = gcrDecode[Int((bits >> 35) & 0x1F)]
-            let g1 = gcrDecode[Int((bits >> 30) & 0x1F)]
-            let g2 = gcrDecode[Int((bits >> 25) & 0x1F)]
-            let g3 = gcrDecode[Int((bits >> 20) & 0x1F)]
-            let g4 = gcrDecode[Int((bits >> 15) & 0x1F)]
-            let g5 = gcrDecode[Int((bits >> 10) & 0x1F)]
-            let g6 = gcrDecode[Int((bits >> 5) & 0x1F)]
-            let g7 = gcrDecode[Int(bits & 0x1F)]
-
-            // Combine nybble pairs into bytes
-            if result.count < expectedBytes { result.append((g0 << 4) | g1) }
-            if result.count < expectedBytes { result.append((g2 << 4) | g3) }
-            if result.count < expectedBytes { result.append((g4 << 4) | g5) }
-            if result.count < expectedBytes { result.append((g6 << 4) | g7) }
-
-            gcrPos += 5
+            result.append((gcrDecode[Int(hi)] << 4) | gcrDecode[Int(lo)])
+            pos += 10
         }
 
         return result
+    }
+
+    /// Legacy byte-aligned GCR decode (used by tests that build synthetic GCR data).
+    static func decodeGCRBlock(_ gcr: [UInt8], count expectedBytes: Int) -> [UInt8] {
+        let bits = toBits(gcr)
+        return decodeGCRFromBits(bits, from: 0, count: expectedBytes)
+    }
+
+    /// Convert byte array to bit array.
+    private static func toBits(_ data: [UInt8]) -> [UInt8] {
+        var bits = [UInt8]()
+        bits.reserveCapacity(data.count * 8)
+        for byte in data {
+            for shift in stride(from: 7, through: 0, by: -1) {
+                bits.append((byte >> shift) & 1)
+            }
+        }
+        return bits
     }
 }

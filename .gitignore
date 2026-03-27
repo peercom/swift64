@@ -4,3 +4,4 @@
 .swiftpm/
 DerivedData/
 *.rom
+*.bin

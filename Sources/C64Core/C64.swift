@@ -19,6 +19,18 @@ public final class C64 {
     public let tapeUnit: TapeUnit
     public let kernalTraps: KernalTraps
     public let debugger: Debugger
+    public let drive1541: Drive1541
+    public let iecBus: IECBus
+
+    /// Toggle between true drive emulation and Kernal trap mode.
+    /// When true, the 1541 CPU runs and serial bus communication is used.
+    /// When false, disk access is handled via Kernal traps (faster but less compatible).
+    public var trueDriveEmulation: Bool = false
+
+    /// Fractional clock accumulator for drive timing (1541 runs slightly faster than C64)
+    var driveClockAccumulator: Double = 0.0
+    /// Fraction of extra drive cycles per C64 cycle: (1000000 - 985248) / 985248
+    let driveClockFraction: Double = 14752.0 / 985248.0
 
     // MARK: - State
 
@@ -43,11 +55,16 @@ public final class C64 {
         tapeUnit = TapeUnit()
         kernalTraps = KernalTraps()
         debugger = Debugger()
+        drive1541 = Drive1541()
+        iecBus = IECBus()
 
         // Debugger wiring
         debugger.cpu = cpu
         debugger.memory = memory
         memory.debugger = debugger
+
+        // 1541 drive wiring
+        drive1541.iecBus = iecBus
 
         // Wire up chip references
         memory.vic = vic
@@ -82,6 +99,18 @@ public final class C64 {
             self?.updateIRQ()
         }
 
+        // CIA2 → IEC bus
+        cia2.onPortAWrite = { [weak self] portA in
+            self?.iecBus.updateFromC64(portA)
+        }
+        cia2.readPortAExternal = { [weak self] in
+            guard let self = self else { return 0xFF }
+            var result: UInt8 = 0x3F  // Bits 0-5 default high (input pull-up)
+            if !self.iecBus.c64ClkIn { result |= 0x40 }   // CLK high → bit 6 = 1
+            if !self.iecBus.c64DataIn { result |= 0x80 }   // DATA high → bit 7 = 1
+            return result
+        }
+
         // Keyboard → CIA1
         keyboard.cia = cia1
 
@@ -107,16 +136,35 @@ public final class C64 {
         memory.loadROMs(basic: basic, kernal: kernal, charset: charset)
     }
 
+    /// Load 1541 drive ROM (16KB).
+    public func loadDriveROM(_ data: Data) {
+        drive1541.loadROM(data)
+    }
+
     // MARK: - Media loading
 
     /// Mount a D64 disk image.
     public func mountDisk(_ url: URL) -> Bool {
-        return diskDrive.mountFromFile(url)
+        let result = diskDrive.mountFromFile(url)
+
+        // Also load into the 1541's GCR disk for true drive emulation
+        if let data = try? Data(contentsOf: url) {
+            let ext = url.pathExtension.lowercased()
+            if ext == "g64" {
+                _ = drive1541.insertDisk(data, isG64: true)
+            } else {
+                _ = drive1541.insertDisk(data, isG64: false)
+            }
+        }
+
+        return result
     }
 
     /// Mount a D64 disk image from data.
     public func mountDisk(_ data: Data) -> Bool {
-        return diskDrive.mount(data)
+        let result = diskDrive.mount(data)
+        _ = drive1541.insertDisk(data, isG64: false)
+        return result
     }
 
     /// Mount a T64/TAP tape image.
@@ -196,6 +244,13 @@ public final class C64 {
         // Reset CPU
         cpu.powerOn()
         running = true
+
+        // Power on 1541 drive if ROM is loaded
+        if trueDriveEmulation {
+            // Sync bus state from current CIA2 output
+            iecBus.updateFromC64(cia2.portAOut)
+            drive1541.powerOn()
+        }
     }
 
     public func reset() {
@@ -223,7 +278,10 @@ public final class C64 {
         if cpu.cycle == 0 {
             debugger.traceInstruction()
             if !debugger.checkBreakpoint() { return }
-            _ = kernalTraps.checkTrap()
+            // Only use Kernal traps when true drive emulation is off
+            if !trueDriveEmulation {
+                _ = kernalTraps.checkTrap()
+            }
         }
 
         // CPU tick
@@ -242,6 +300,17 @@ public final class C64 {
         // Update joystick state on CIA1
         cia1.joystickPort2 = joystick.port2
         cia1.joystickPort1 = joystick.port1
+
+        // 1541 drive tick (runs at ~1 MHz vs C64's ~985 kHz)
+        if trueDriveEmulation && drive1541.enabled {
+            drive1541.tick()
+            // Extra ticks to compensate for clock difference
+            driveClockAccumulator += driveClockFraction
+            if driveClockAccumulator >= 1.0 {
+                driveClockAccumulator -= 1.0
+                drive1541.tick()
+            }
+        }
     }
 
     // MARK: - IRQ management

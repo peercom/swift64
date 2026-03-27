@@ -193,6 +193,11 @@ public final class KernalTraps {
             loadAddr = fileLoadAddr
         }
 
+        // Save the return address from the stack BEFORE writing file data,
+        // because the file data may overwrite the stack area ($0100-$01FF).
+        let savedRetLo = memory.ram[0x0100 + Int(cpu.sp &+ 1)]
+        let savedRetHi = memory.ram[0x0100 + Int(cpu.sp &+ 2)]
+
         // Copy data to RAM
         let payload = Array(data[2...])
         for (i, byte) in payload.enumerated() {
@@ -204,9 +209,11 @@ public final class KernalTraps {
 
         let endAddr = loadAddr &+ UInt16(payload.count)
 
+        // Restore the return address on the stack (in case file data overwrote it)
+        memory.ram[0x0100 + Int(cpu.sp &+ 1)] = savedRetLo
+        memory.ram[0x0100 + Int(cpu.sp &+ 2)] = savedRetHi
+
         debugLog("[LOAD] SUCCESS: \(payload.count) bytes loaded at $\(String(loadAddr, radix: 16, uppercase: true))-$\(String(endAddr - 1, radix: 16, uppercase: true)), endAddr=$\(String(endAddr, radix: 16, uppercase: true))")
-        debugLog("[LOAD] RAM at $0801: \((0..<min(20, payload.count)).map { String(format: "%02X", memory.ram[Int(loadAddr) + $0]) }.joined(separator: " "))")
-        debugLog("[LOAD] SP=$\(String(cpu.sp, radix: 16, uppercase: true)) stack: \(String(format: "%02X %02X", memory.ram[0x0100 + Int(cpu.sp &+ 1)], memory.ram[0x0100 + Int(cpu.sp &+ 2)]))")
 
         // Set end address pointers
         memory.ram[Int(KernalTraps.endAddrLo)] = UInt8(endAddr & 0xFF)
@@ -224,14 +231,9 @@ public final class KernalTraps {
         cpu.a = 0
         cpu.setFlag(Flags.carry, false)
 
-        // Kernal LOAD returns end address in X/Y — BASIC uses these to set $2D/$2E
+        // Kernal LOAD returns end address in X/Y
         cpu.x = UInt8(endAddr & 0xFF)
         cpu.y = UInt8(endAddr >> 8)
-
-        let retLo = memory.ram[0x0100 + Int(cpu.sp &+ 1)]
-        let retHi = memory.ram[0x0100 + Int(cpu.sp &+ 2)]
-        let retAddr = (UInt16(retHi) << 8 | UInt16(retLo)) &+ 1
-        debugLog("[LOAD] RTS will return to $\(String(retAddr, radix: 16, uppercase: true)), X=$\(String(cpu.x, radix: 16, uppercase: true)) Y=$\(String(cpu.y, radix: 16, uppercase: true)) carry=\(cpu.getFlag(Flags.carry))")
 
         doRTS(cpu: cpu, memory: memory)
         return true

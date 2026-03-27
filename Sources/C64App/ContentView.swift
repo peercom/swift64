@@ -107,6 +107,8 @@ final class EmulatorController: ObservableObject {
             var kernalData: Data?
             var charData: Data?
 
+            var driveROMData: Data?
+
             for file in files {
                 let lower = file.lowercased()
                 let path = dir.appendingPathComponent(file)
@@ -116,6 +118,8 @@ final class EmulatorController: ObservableObject {
                     kernalData = try Data(contentsOf: path)
                 } else if lower.contains("character") || lower.contains("char") {
                     charData = try Data(contentsOf: path)
+                } else if lower.contains("1541") {
+                    driveROMData = try Data(contentsOf: path)
                 }
             }
 
@@ -124,6 +128,11 @@ final class EmulatorController: ObservableObject {
                 print("ROMs loaded successfully from \(dir.path)")
             } else {
                 print("WARNING: Not all ROM files found in \(dir.path)")
+            }
+
+            if let driveROM = driveROMData {
+                c64.loadDriveROM(driveROM)
+                print("1541 drive ROM loaded (\(driveROM.count) bytes)")
             }
         } catch {
             print("ERROR loading ROMs: \(error)")

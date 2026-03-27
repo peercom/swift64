@@ -87,6 +87,13 @@ public final class CIA {
     /// Callback for interrupt state changes
     public var onInterrupt: ((Bool) -> Void)?
 
+    /// Callback to read external input bits for port A (used by CIA2 for IEC bus).
+    /// Returns bits to be ORed into port A input (for bits where DDR=0).
+    public var readPortAExternal: (() -> UInt8)?
+
+    /// Callback when port A is written (used by CIA2 for IEC bus).
+    public var onPortAWrite: ((UInt8) -> Void)?
+
     // MARK: - Serial port register (stub)
     var serialData: UInt8 = 0
 
@@ -175,7 +182,9 @@ public final class CIA {
             if isCIA1 {
                 return readKeyboard() & joystickPort1
             }
-            return portAOut
+            // CIA2: output bits from portA, input bits from external (IEC bus)
+            let external = readPortAExternal?() ?? 0xFF
+            return (portA & ddra) | (external & ~ddra)
 
         case 0x01:  // Port B
             if isCIA1 {
@@ -230,9 +239,13 @@ public final class CIA {
 
     public func writeRegister(_ reg: UInt16, value: UInt8) {
         switch reg {
-        case 0x00: portA = value
+        case 0x00:
+            portA = value
+            onPortAWrite?(portAOut)
         case 0x01: portB = value
-        case 0x02: ddra = value
+        case 0x02:
+            ddra = value
+            onPortAWrite?(portAOut)  // DDR change affects output
         case 0x03: ddrb = value
         case 0x04: timerALatch = (timerALatch & 0xFF00) | UInt16(value)
         case 0x05:
