@@ -56,6 +56,8 @@ public final class Drive1541 {
 
     /// Debug: cycle counter for periodic logging
     var debugCycleCount: UInt64 = 0
+    var bus_atn_was_seen = false
+    var driveTraceStart: UInt64 = 0
 
     // MARK: - Init
 
@@ -77,6 +79,11 @@ public final class Drive1541 {
         // VIA2 → CPU IRQ
         via2.onInterrupt = { [weak self] active in
             self?.updateIRQ()
+        }
+
+        // VIA1 PB write → immediately update bus state
+        via1.onPortBWrite = { [weak self] in
+            self?.updateBusFromVIA1()
         }
     }
 
@@ -133,6 +140,11 @@ public final class Drive1541 {
         enabled = true
         debugCycleCount = 0
 
+        // Wire the ATN ack recalculation callback
+        iecBus?.recalcAtnAck = { [weak self] in
+            self?.recalcAtnAck()
+        }
+
         driveLog("[1541] powerOn complete: PC=$\(String(format: "%04X", cpu.pc))")
     }
 
@@ -146,14 +158,18 @@ public final class Drive1541 {
         guard enabled else { return }
 
         debugCycleCount += 1
-        // High-frequency logging around ATN event
-        if debugCycleCount >= 10_000_000 && debugCycleCount <= 10_200_000 && debugCycleCount % 100 == 0 {
-            let bus = iecBus
-            driveLog("[1541] cyc=\(debugCycleCount) PC=$\(String(cpu.pc, radix:16, uppercase:true)) A=$\(String(format:"%02X",cpu.a)) SP=$\(String(format:"%02X",cpu.sp)) P=$\(String(format:"%02X",cpu.p)) ATN=\(bus?.atn ?? true) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true) V1-IFR=$\(String(format:"%02X",via1.ifr)) V2-IFR=$\(String(format:"%02X",via2.ifr)) V2-IER=$\(String(format:"%02X",via2.ier))")
+        // Log every instruction when ATN is active (first time only)
+        if !bus_atn_was_seen && iecBus?.atn == false {
+            bus_atn_was_seen = true
+            driveTraceStart = debugCycleCount
         }
-        if debugCycleCount % 2_000_000 == 0 && debugCycleCount <= 30_000_000 {
+        if bus_atn_was_seen && debugCycleCount < driveTraceStart + 3000 && cpu.cycle == 0 {
             let bus = iecBus
-            driveLog("[1541] cyc=\(debugCycleCount) PC=$\(String(cpu.pc, radix:16, uppercase:true)) ATN=\(bus?.atn ?? true) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true) V1-IFR=$\(String(format:"%02X", via1.ifr)) V2-IFR=$\(String(format:"%02X", via2.ifr)) V2-IER=$\(String(format:"%02X", via2.ier)) V2-T1=$\(String(format:"%04X",via2.timer1Counter)) IRQ=\(cpu.irqLine)")
+            driveLog("[DRV] PC=$\(String(format:"%04X",cpu.pc)) A=$\(String(format:"%02X",cpu.a)) P=$\(String(format:"%02X",cpu.p)) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true) dDATA=\(bus?.dataForDrive ?? true) ack=\(bus?.driveAtnAck ?? false)")
+        }
+        if debugCycleCount % 4_000_000 == 0 && debugCycleCount <= 30_000_000 {
+            let bus = iecBus
+            driveLog("[1541] cyc=\(debugCycleCount) PC=$\(String(cpu.pc, radix:16, uppercase:true)) ATN=\(bus?.atn ?? true) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true)")
         }
 
         // Update IEC bus → VIA1 inputs
@@ -189,8 +205,10 @@ public final class Drive1541 {
         // Bit 4: ATN sense (directly, active high when ATN is low)
         // Bit 7: ATN IN (directly, 1 when ATN is low)
         // Bits 1,3,5,6 are outputs (DATA OUT, CLK OUT, etc.) — don't touch
-        var pb = via1.portBInput & 0x6A  // Preserve output-related bits (1,3,5,6)
-        pb &= ~UInt8(0x85)  // Clear input bits 0, 2, 7
+        // Clear all bus-related bits, then set from actual bus state.
+        // Bits 0,2,4,7 are inputs from bus. Bits 1,3 are outputs (DATA/CLK OUT).
+        // Bits 5,6 are device number (directly from hardware, typically $60 for device 8).
+        var pb: UInt8 = 0x60  // Device 8: bits 5,6 high
         if bus.driveDataIn { pb |= 0x01 }   // DATA IN
         if bus.driveClkIn { pb |= 0x04 }    // CLK IN
         if !bus.atn { pb |= 0x10 }          // ATN sense (bit 4: 1 when ATN low)
@@ -229,7 +247,7 @@ public final class Drive1541 {
         let newDriveData = drivenPB & 0x02 != 0
         let newDriveClk = drivenPB & 0x08 != 0
 
-        if (newDriveData != prevDriveData || newDriveClk != prevDriveClk) && busChangeLog < 30 {
+        if (newDriveData != prevDriveData || newDriveClk != prevDriveClk) && busChangeLog < 100 {
             busChangeLog += 1
             driveLog("[1541] BUS OUT: DATA=\(newDriveData) CLK=\(newDriveClk) PB=$\(String(format:"%02X",via1.portB)) DDRB=$\(String(format:"%02X",ddrb)) atnAck=\(bus.driveAtnAck)")
         }
@@ -239,14 +257,8 @@ public final class Drive1541 {
         bus.driveData = newDriveData
         bus.driveClk = newDriveClk
 
-        // The ATN acknowledge circuit uses XOR logic:
-        // DATA is pulled low when ATN_IN XOR PB4 = 1.
-        // At idle: ATN=high(1), PB4=1 → XOR=0 → DATA released
-        // ATN asserted: ATN=low(0), PB4=1 → XOR=1 → DATA pulled low
-        // Firmware acks: ATN=low(0), PB4=0 → XOR=0 → DATA released
-        let atnState: UInt8 = bus.atn ? 1 : 0  // 1=high, 0=low
-        let pb4State: UInt8 = ((ddrb & 0x10 != 0) && (via1.portB & 0x10 != 0)) ? 1 : 0
-        bus.driveAtnAck = (atnState ^ pb4State) != 0
+        // Recalculate ATN acknowledge
+        recalcAtnAck()
     }
 
     // MARK: - Disk controller (VIA2)
@@ -341,6 +353,31 @@ public final class Drive1541 {
     }
 
     // MARK: - IRQ management
+
+    /// Recalculate ATN ack based on current bus + VIA1 state.
+    /// Called both from the drive tick and from IECBus when C64 changes the bus.
+    var ackDebugCount = 0
+    func recalcAtnAck() {
+        guard let bus = iecBus else { return }
+        let ddrb = via1.ddrb
+        let atnState: UInt8 = bus.atn ? 1 : 0
+        // 1541C ATN acknowledge logic:
+        // DATA is pulled low when ATN is low (asserted) AND PB4 is low (not set).
+        // The firmware sets PB4=1 to release the ack so it can read DATA bits.
+        // No CLK gate — the ack stays until firmware explicitly releases via PB4.
+        let pb4High: Bool
+        if ddrb & 0x10 != 0 {
+            pb4High = via1.portB & 0x10 != 0
+        } else {
+            pb4High = false  // Input: default low for 1541C
+        }
+        let newAck = !bus.atn && !pb4High  // ATN low AND PB4 low
+        if newAck != bus.driveAtnAck && ackDebugCount < 20 {
+            ackDebugCount += 1
+            driveLog("[1541] atnAck: \(bus.driveAtnAck)→\(newAck) ATN=\(bus.atn) CLK=\(bus.clk) PB4=\(pb4High) DDRB=$\(String(format:"%02X",ddrb))")
+        }
+        bus.driveAtnAck = newAck
+    }
 
     func updateIRQ() {
         cpu.irqLine = (via1.ifr & VIA6522.IRQ.any != 0) || (via2.ifr & VIA6522.IRQ.any != 0)

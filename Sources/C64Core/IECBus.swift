@@ -23,9 +23,12 @@ public final class IECBus {
     /// Drive pulls DATA low (VIA1 PB1)
     public var driveData: Bool = false
 
-    /// Drive's ATN acknowledge latch — hardware auto-asserts DATA when ATN goes low.
-    /// Cleared by the drive firmware.
+    /// Drive's ATN acknowledge latch — controlled by XOR logic (ATN ^ PB4) gated by CLK.
     public var driveAtnAck: Bool = false
+
+    /// Callback to recalculate driveAtnAck when bus state changes from C64 side.
+    /// Set by Drive1541 to provide the XOR+CLK gate logic.
+    public var recalcAtnAck: (() -> Void)?
 
     // MARK: - Effective bus state (active-low: true = line is HIGH/released)
 
@@ -35,8 +38,12 @@ public final class IECBus {
     /// CLK line state
     public var clk: Bool { !c64Clk && !driveClk }
 
-    /// DATA line state
+    /// DATA line state (as seen by the C64 — includes ATN ack)
     public var data: Bool { !c64Data && !driveData && !driveAtnAck }
+
+    /// DATA line state as seen by the drive (does NOT include its own ATN ack output,
+    /// because the 1541's DATA IN is tapped before the ATN ack transistor)
+    public var dataForDrive: Bool { !c64Data && !driveData }
 
     // MARK: - C64 reads (for CIA2 port A bits 6-7)
 
@@ -48,8 +55,9 @@ public final class IECBus {
 
     // MARK: - Drive reads (for VIA1 port B)
 
-    /// DATA IN as seen by drive (VIA1 PB0, active low: 1 when DATA is low)
-    public var driveDataIn: Bool { !data }
+    /// DATA IN as seen by drive (VIA1 PB0: 1 when DATA is low on bus)
+    /// Uses dataForDrive which excludes the drive's own ATN ack output.
+    public var driveDataIn: Bool { !dataForDrive }
 
     /// CLK IN as seen by drive (VIA1 PB2, active low: 1 when CLK is low)
     public var driveClkIn: Bool { !clk }
@@ -71,8 +79,11 @@ public final class IECBus {
 
     // MARK: - Update from C64 side
 
-    /// Debug: log ATN transitions
+    /// Debug: log bus transitions
     private var loggedAtnTransitions = 0
+    private var prevLogClk = true
+    private var prevLogData = true
+    private var busTransitionLog = 0
 
     /// Update bus from CIA2 port A write.
     /// CIA2 PA3=ATN, PA4=CLK, PA5=DATA (active: writing 1 = pulling line low)
@@ -82,19 +93,24 @@ public final class IECBus {
         c64Clk = portA & 0x10 != 0
         c64Data = portA & 0x20 != 0
 
-        // ATN acknowledge is handled by XOR logic in Drive1541.updateBusFromVIA1()
-        // (ATN_IN XOR PB4). No automatic latch needed here.
+        // Recalculate ATN ack immediately so C64 reads see the correct state
+        recalcAtnAck?()
 
-        if c64Atn != prevAtnOut && loggedAtnTransitions < 30 {
-            loggedAtnTransitions += 1
-            let msg = "[IEC] C64 ATN \(c64Atn ? "ASSERT" : "RELEASE") PA=$\(String(format:"%02X", portA)) → bus: ATN=\(atn) CLK=\(clk) DATA=\(data) atnAck=\(driveAtnAck) drvData=\(driveData) drvClk=\(driveClk)\n"
-            if let data = msg.data(using: .utf8),
+        // Log all C64 bus writes (not just ATN changes)
+        let newClk = c64Clk
+        let newData = c64Data
+        if (c64Atn != prevAtnOut || newClk != prevLogClk || newData != prevLogData) && busTransitionLog < 200 {
+            busTransitionLog += 1
+            let msg = "[IEC] C64 PA=$\(String(format:"%02X", portA)) ATN=\(c64Atn ? "lo" : "hi") CLK=\(newClk ? "lo" : "hi") DATA=\(newData ? "lo" : "hi") → bus: CLK=\(clk) DATA=\(data) atnAck=\(driveAtnAck)\n"
+            if let d = msg.data(using: .utf8),
                let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
                 fh.seekToEndOfFile()
-                fh.write(data)
+                fh.write(d)
                 fh.closeFile()
             }
         }
+        prevLogClk = newClk
+        prevLogData = newData
     }
 
     // MARK: - Update from drive side

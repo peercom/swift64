@@ -88,6 +88,9 @@ public final class VIA6522 {
     /// Callback when interrupt state changes
     public var onInterrupt: ((Bool) -> Void)?
 
+    /// Callback when port B is written (used by Drive1541 to update bus immediately)
+    public var onPortBWrite: (() -> Void)?
+
     // MARK: - Handshake lines
 
     /// CA1 input line state (directly sampled)
@@ -246,12 +249,15 @@ public final class VIA6522 {
         case 0x00:  // ORB - Port B
             portB = value
             clearIFR(IRQ.cb1 | IRQ.cb2)
+            onPortBWrite?()
 
         case 0x01:  // ORA - Port A (with handshake)
             portA = value
             clearIFR(IRQ.ca1 | IRQ.ca2)
 
-        case 0x02: ddrb = value
+        case 0x02:
+            ddrb = value
+            onPortBWrite?()
         case 0x03: ddra = value
 
         case 0x04:  // T1L-L (write to latch low)
