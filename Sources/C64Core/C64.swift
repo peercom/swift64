@@ -29,6 +29,13 @@ public final class C64 {
 
     /// Fractional clock accumulator for drive timing (1541 runs slightly faster than C64)
     var driveClockAccumulator: Double = 0.0
+    /// Debug counter for CIA2 PA reads
+    var cia2ReadLog: Int = 0
+
+    /// Cached CIA2 external PA value — updated once per tick to avoid
+    /// debounce issues where bus state changes between two reads in the same instruction
+    var cachedCIA2External: UInt8 = 0xFF
+    var cia2ExternalValid: Bool = false
     /// Fraction of extra drive cycles per C64 cycle: (1000000 - 985248) / 985248
     let driveClockFraction: Double = 14752.0 / 985248.0
 
@@ -101,13 +108,22 @@ public final class C64 {
 
         // CIA2 → IEC bus
         cia2.onPortAWrite = { [weak self] portA in
-            self?.iecBus.updateFromC64(portA)
+            guard let self = self else { return }
+            self.iecBus.updateFromC64(portA)
+            // Invalidate the cached CIA2 external value so subsequent reads
+            // in the same cycle see the updated bus state
+            if self.trueDriveEmulation {
+                var ext: UInt8 = 0x3F
+                if !self.iecBus.c64ClkIn { ext |= 0x40 }
+                if !self.iecBus.c64DataIn { ext |= 0x80 }
+                self.cachedCIA2External = ext
+            }
         }
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
-            var result: UInt8 = 0x3F  // Bits 0-5 default high (input pull-up)
-            if !self.iecBus.c64ClkIn { result |= 0x40 }   // CLK high → bit 6 = 1
-            if !self.iecBus.c64DataIn { result |= 0x80 }   // DATA high → bit 7 = 1
+            var result: UInt8 = 0x3F
+            if !self.iecBus.c64ClkIn { result |= 0x40 }
+            if !self.iecBus.c64DataIn { result |= 0x80 }
             return result
         }
 

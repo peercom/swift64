@@ -94,6 +94,7 @@ public final class IECBus {
         c64Data = portA & 0x20 != 0
 
         // Recalculate ATN ack immediately so C64 reads see the correct state
+        let hadCallback = recalcAtnAck != nil
         recalcAtnAck?()
 
         // Log all C64 bus writes (not just ATN changes)
@@ -101,7 +102,7 @@ public final class IECBus {
         let newData = c64Data
         if (c64Atn != prevAtnOut || newClk != prevLogClk || newData != prevLogData) && busTransitionLog < 200 {
             busTransitionLog += 1
-            let msg = "[IEC] C64 PA=$\(String(format:"%02X", portA)) ATN=\(c64Atn ? "lo" : "hi") CLK=\(newClk ? "lo" : "hi") DATA=\(newData ? "lo" : "hi") → bus: CLK=\(clk) DATA=\(data) atnAck=\(driveAtnAck)\n"
+            let msg = "[IEC] C64 PA=$\(String(format:"%02X", portA)) ATN=\(c64Atn ? "lo" : "hi") CLK=\(newClk ? "lo" : "hi") DATA=\(newData ? "lo" : "hi") → bus: CLK=\(clk) DATA=\(data) ack=\(driveAtnAck) cb=\(hadCallback)\n"
             if let d = msg.data(using: .utf8),
                let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
                 fh.seekToEndOfFile()

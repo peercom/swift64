@@ -158,18 +158,15 @@ public final class Drive1541 {
         guard enabled else { return }
 
         debugCycleCount += 1
-        // Log every instruction when ATN is active (first time only)
-        if !bus_atn_was_seen && iecBus?.atn == false {
+        // Trace: start when the drive CPU enters the ATN handler at $E85B
+        if !bus_atn_was_seen && cpu.pc == 0xE85B && cpu.cycle == 0 {
             bus_atn_was_seen = true
             driveTraceStart = debugCycleCount
+            driveLog("[DRV] === ATN handler entered at cyc=\(debugCycleCount) ===")
         }
-        if bus_atn_was_seen && debugCycleCount < driveTraceStart + 3000 && cpu.cycle == 0 {
+        if bus_atn_was_seen && debugCycleCount < driveTraceStart + 5000 && cpu.cycle == 0 {
             let bus = iecBus
-            driveLog("[DRV] PC=$\(String(format:"%04X",cpu.pc)) A=$\(String(format:"%02X",cpu.a)) P=$\(String(format:"%02X",cpu.p)) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true) dDATA=\(bus?.dataForDrive ?? true) ack=\(bus?.driveAtnAck ?? false)")
-        }
-        if debugCycleCount % 4_000_000 == 0 && debugCycleCount <= 30_000_000 {
-            let bus = iecBus
-            driveLog("[1541] cyc=\(debugCycleCount) PC=$\(String(cpu.pc, radix:16, uppercase:true)) ATN=\(bus?.atn ?? true) CLK=\(bus?.clk ?? true) DATA=\(bus?.data ?? true)")
+            driveLog("[DRV] PC=$\(String(format:"%04X",cpu.pc)) A=$\(String(format:"%02X",cpu.a)) PB=$\(String(format:"%02X",via1.portB)) c64Clk=\(bus?.c64Clk ?? false) drvClk=\(bus?.driveClk ?? false) c64Dat=\(bus?.c64Data ?? false) drvDat=\(bus?.driveData ?? false) ack=\(bus?.driveAtnAck ?? false)")
         }
 
         // Update IEC bus → VIA1 inputs
@@ -372,9 +369,9 @@ public final class Drive1541 {
             pb4High = false  // Input: default low for 1541C
         }
         let newAck = !bus.atn && !pb4High  // ATN low AND PB4 low
-        if newAck != bus.driveAtnAck && ackDebugCount < 20 {
+        if newAck != bus.driveAtnAck && ackDebugCount < 30 {
             ackDebugCount += 1
-            driveLog("[1541] atnAck: \(bus.driveAtnAck)→\(newAck) ATN=\(bus.atn) CLK=\(bus.clk) PB4=\(pb4High) DDRB=$\(String(format:"%02X",ddrb))")
+            driveLog("[1541] atnAck: \(bus.driveAtnAck)→\(newAck) ATN=\(bus.atn) PB=$\(String(format:"%02X",via1.portB)) PB4=\(pb4High) DDRB=$\(String(format:"%02X",ddrb)) c64Atn=\(bus.c64Atn)")
         }
         bus.driveAtnAck = newAck
     }
