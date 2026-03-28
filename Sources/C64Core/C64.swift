@@ -101,9 +101,10 @@ public final class C64 {
             self?.updateIRQ()
         }
 
-        // CIA2 → IEC bus
+        // CIA2 → IEC bus (only output-configured pins drive the bus)
         cia2.onPortAWrite = { [weak self] portA in
-            self?.iecBus.updateFromC64(portA)
+            guard let self = self else { return }
+            self.iecBus.updateFromC64(portA, ddra: self.cia2.ddra)
         }
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
@@ -252,8 +253,8 @@ public final class C64 {
 
         // Power on 1541 drive if ROM is loaded
         if trueDriveEmulation {
-            // Sync bus state from current CIA2 output
-            iecBus.updateFromC64(cia2.portAOut)
+            // Sync bus state from current CIA2 output (respecting DDR)
+            iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
             drive1541.powerOn()
         }
     }
@@ -283,13 +284,12 @@ public final class C64 {
         if cpu.cycle == 0 {
             debugger.traceInstruction()
             if !debugger.checkBreakpoint() { return }
-            // Only use Kernal traps when true drive emulation is off
             if !trueDriveEmulation {
                 _ = kernalTraps.checkTrap()
             }
         }
 
-        // CPU tick
+        // C64 CPU tick
         cpu.tick()
 
         // VIC tick
@@ -306,10 +306,10 @@ public final class C64 {
         cia1.joystickPort2 = joystick.port2
         cia1.joystickPort1 = joystick.port1
 
-        // 1541 drive tick (runs at ~1 MHz vs C64's ~985 kHz)
+        // 1541 drive ticks AFTER C64 — it sees the bus state the C64 just wrote.
+        // The drive's VIA1 inputs are updated at the start of its tick().
         if trueDriveEmulation && drive1541.enabled {
             drive1541.tick()
-            // Extra ticks to compensate for clock difference
             driveClockAccumulator += driveClockFraction
             if driveClockAccumulator >= 1.0 {
                 driveClockAccumulator -= 1.0

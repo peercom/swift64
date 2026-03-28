@@ -166,16 +166,13 @@ public final class Drive1541 {
         enabled = true
         debugCycleCount = 0
 
-        // Wire bus update callback so VIA1 inputs update immediately
-        // when the C64 changes the bus (not just on drive tick)
-        if let bus = iecBus {
-            bus.onBusUpdate = { [weak self] in
-                self?.updateVIA1FromBus()
-            }
-            driveLog("[1541] onBusUpdate callback wired")
-        } else {
-            driveLog("[1541] WARNING: iecBus is nil, cannot wire onBusUpdate!")
-        }
+        // Note: onBusUpdate is NOT wired to updateVIA1FromBus.
+        // The drive's VIA1 inputs are updated once per drive tick, not on
+        // every C64 bus change. This prevents rapid C64 bus toggles from
+        // overwriting portBInput before the drive CPU can read it.
+        // The C64 side reads bus state via computed properties (dataLine, etc.)
+        // which always reflect the latest drive outputs.
+        driveLog("[1541] powerOn complete")
 
         driveLog("[1541] powerOn complete: PC=$\(String(format: "%04X", cpu.pc))")
     }
@@ -199,7 +196,7 @@ public final class Drive1541 {
             case 0xE884:
                 driveLog("[DRV] JSR $E9C9 (receive byte) ATN=\(iecBus?.atnLine ?? true) CLK=\(iecBus?.clockLine ?? true)")
             case 0xE887:
-                driveLog("[DRV] Received byte A=$\(String(format:"%02X",cpu.a))")
+                driveLog("[DRV] Received byte A=$\(String(format:"%02X",cpu.a)) drvCyc=\(debugCycleCount)")
             case 0xE87B:
                 let pbRead = via1.readRegister(0x00)
                 driveLog("[DRV] ATN check: PB=$\(String(format:"%02X",pbRead)) bit7=\(pbRead >> 7) atnLine=\(iecBus?.atnLine ?? true) portBInput=$\(String(format:"%02X",via1.portBInput))")
@@ -229,16 +226,6 @@ public final class Drive1541 {
         // GCR head: advance and feed bytes to VIA2
         if motorOn {
             tickGCRHead()
-        }
-
-        // Refresh VIA1 inputs after bus outputs are pushed
-        updateVIA1FromBus()
-
-        // Verify right before CPU tick
-        if cpu.cycle == 0 && cpu.pc == 0xE87B {
-            let pbi = via1.portBInput
-            let pbRead = (via1.portB & via1.ddrb) | (pbi & ~via1.ddrb)
-            driveLog("[PRE-CPU] pc=$E87B portB=$\(String(format:"%02X",via1.portB)) ddrb=$\(String(format:"%02X",via1.ddrb)) pbi=$\(String(format:"%02X",pbi)) read=$\(String(format:"%02X",pbRead)) bit2=\(pbRead & 0x04 != 0 ? 1 : 0) c64Clk=\(iecBus?.c64Clk ?? false) clockLine=\(iecBus?.clockLine ?? true)")
         }
 
         // Tick CPU

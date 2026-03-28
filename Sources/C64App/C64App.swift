@@ -70,7 +70,7 @@ struct C64App: App {
                         emulator.c64.trueDriveEmulation = enabled
                         if enabled {
                             // Sync IEC bus from current CIA2 state before powering on drive
-                            emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portAOut)
+                            emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portA, ddra: emulator.c64.cia2.ddra)
                             emulator.c64.drive1541.powerOn()
                             print("True drive emulation enabled")
                         } else {

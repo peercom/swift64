@@ -241,11 +241,11 @@ public final class CIA {
         switch reg {
         case 0x00:
             portA = value
-            onPortAWrite?(portAOut)
+            onPortAWrite?(portA)
         case 0x01: portB = value
         case 0x02:
             ddra = value
-            onPortAWrite?(portAOut)  // DDR change affects output
+            onPortAWrite?(portA)  // DDR change affects output
         case 0x03: ddrb = value
         case 0x04: timerALatch = (timerALatch & 0xFF00) | UInt16(value)
         case 0x05:

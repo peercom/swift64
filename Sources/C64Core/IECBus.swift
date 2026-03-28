@@ -73,11 +73,13 @@ public final class IECBus {
     public var onBusUpdate: (() -> Void)?
 
     private var busLog = 0
-    public func updateFromC64(_ portA: UInt8) {
-        let prevData = dataLine
-        c64Atn = portA & 0x08 != 0
-        c64Clk = portA & 0x10 != 0
-        c64Data = portA & 0x20 != 0
+    /// Update bus from CIA2 port A. Only output-configured pins (DDR=1) can
+    /// pull bus lines low. Input pins (DDR=0) float high and don't drive the bus.
+    public func updateFromC64(_ portA: UInt8, ddra: UInt8) {
+        let driven = portA & ddra  // Only output bits affect the bus
+        c64Atn = driven & 0x08 != 0
+        c64Clk = driven & 0x10 != 0
+        c64Data = driven & 0x20 != 0
         onBusUpdate?()
         // Log state changes
         if busLog < 60 {
