@@ -2,6 +2,8 @@
 ///
 /// Call `tick()` once per system clock cycle. The CPU communicates with the
 /// outside world exclusively through the `Bus` protocol.
+///
+/// Each tick() performs exactly ONE bus read or write operation.
 public final class CPU6502 {
 
     // MARK: - Registers
@@ -58,11 +60,11 @@ public final class CPU6502 {
     /// Whether the current instruction needs an extra cycle for page crossing.
     var pageCrossed: Bool = false
 
-    /// Number of remaining cycles to burn (instruction already executed).
-    public var pendingCycles: Int = 0
-
-    /// Bus access counter used during instruction execution to track cycle cost.
-    var busAccessCount: Int = 0
+    /// Compatibility shim for KernalTraps — always 0 in per-cycle mode.
+    public var pendingCycles: Int {
+        get { return 0 }
+        set { /* no-op for compatibility */ }
+    }
 
     /// Pending NMI (edge-detected).
     var nmiPending: Bool = false
@@ -71,14 +73,17 @@ public final class CPU6502 {
     /// NMI line state.
     public var nmiLine: Bool = false
 
-    /// Pending interrupt type to service.
-    var interruptPending: InterruptType? = nil
+    /// Whether we're currently servicing an interrupt sequence.
+    public var servicingInterrupt: Bool = false
 
-    enum InterruptType {
+    /// Type of interrupt currently being serviced.
+    enum InterruptKind {
+        case none
         case nmi
         case irq
         case reset
     }
+    var interruptType: InterruptKind = .none
 
     var resetPending: Bool = false
 
@@ -106,12 +111,8 @@ public final class CPU6502 {
         guard !jammed else { return false }
         totalCycles += 1
 
-        // If we have pending cycles from an already-executed instruction, burn one
-        if pendingCycles > 0 {
-            pendingCycles -= 1
-            if pendingCycles == 0 {
-                cycle = 0
-            }
+        if servicingInterrupt {
+            executeInterruptCycle()
             return true
         }
 
@@ -120,18 +121,15 @@ public final class CPU6502 {
             detectNMIEdge()
 
             if resetPending {
-                interruptPending = .reset
                 resetPending = false
+                beginInterrupt(.reset)
+                return true
             } else if nmiPending {
-                interruptPending = .nmi
                 nmiPending = false
+                beginInterrupt(.nmi)
+                return true
             } else if irqLine && !getFlag(Flags.interrupt) {
-                interruptPending = .irq
-            }
-
-            if let interrupt = interruptPending {
-                interruptPending = nil
-                beginInterrupt(interrupt)
+                beginInterrupt(.irq)
                 return true
             }
 
@@ -140,7 +138,7 @@ public final class CPU6502 {
             pc &+= 1
             cycle = 1
         } else {
-            executeInstructionCycle()
+            executeCycle()
         }
 
         return true
@@ -164,6 +162,8 @@ public final class CPU6502 {
         cycle = 0
         totalCycles = 7
         jammed = false
+        servicingInterrupt = false
+        interruptType = .none
     }
 
     // MARK: - Flag helpers
@@ -185,32 +185,6 @@ public final class CPU6502 {
         setFlag(Flags.negative, value & 0x80 != 0)
     }
 
-    // MARK: - Counted bus access (for cycle tracking)
-
-    /// Read from bus and count as one cycle.
-    func busRead(_ address: UInt16) -> UInt8 {
-        busAccessCount += 1
-        return bus.read(address)
-    }
-
-    /// Write to bus and count as one cycle.
-    func busWrite(_ address: UInt16, value: UInt8) {
-        busAccessCount += 1
-        bus.write(address, value: value)
-    }
-
-    // MARK: - Stack helpers
-
-    func push(_ value: UInt8) {
-        busWrite(0x0100 | UInt16(sp), value: value)
-        sp &-= 1
-    }
-
-    func pull() -> UInt8 {
-        sp &+= 1
-        return busRead(0x0100 | UInt16(sp))
-    }
-
     // MARK: - Interrupts
 
     func detectNMIEdge() {
@@ -222,45 +196,15 @@ public final class CPU6502 {
     }
 
     /// Begin an interrupt sequence. This consumes the current cycle (cycle 0)
-    /// and sets up the remaining 6 cycles.
-    func beginInterrupt(_ type: InterruptType) {
-        // Interrupt sequence is 7 cycles total. We're in cycle 0 (1 cycle consumed).
-        // The remaining 6 cycles are set as pendingCycles.
-        switch type {
-        case .reset:
-            _ = bus.read(0x0100 | UInt16(sp))
-            sp &-= 1
-            _ = bus.read(0x0100 | UInt16(sp))
-            sp &-= 1
-            _ = bus.read(0x0100 | UInt16(sp))
-            sp &-= 1
-            setFlag(Flags.interrupt, true)
-            let lo = UInt16(bus.read(Vector.reset))
-            let hi = UInt16(bus.read(Vector.reset + 1))
-            pc = (hi << 8) | lo
-
-        case .nmi:
-            _ = bus.read(pc)  // dummy read
-            push(UInt8(pc >> 8))
-            push(UInt8(pc & 0xFF))
-            push(p & ~Flags.brk | Flags.unused)
-            setFlag(Flags.interrupt, true)
-            let lo = UInt16(bus.read(Vector.nmi))
-            let hi = UInt16(bus.read(Vector.nmi + 1))
-            pc = (hi << 8) | lo
-
-        case .irq:
-            _ = bus.read(pc)  // dummy read
-            push(UInt8(pc >> 8))
-            push(UInt8(pc & 0xFF))
-            push(p & ~Flags.brk | Flags.unused)
-            setFlag(Flags.interrupt, true)
-            let lo = UInt16(bus.read(Vector.irq))
-            let hi = UInt16(bus.read(Vector.irq + 1))
-            pc = (hi << 8) | lo
-        }
-        // 7 cycles total, 1 already consumed by this tick
-        pendingCycles = 6
-        cycle = 1  // non-zero so we don't re-fetch; pendingCycles will drain to 0 then reset cycle
+    /// and sets up the per-cycle interrupt state machine.
+    func beginInterrupt(_ type: InterruptKind) {
+        servicingInterrupt = true
+        interruptType = type
+        // Cycle 0 of interrupt: dummy read (this tick)
+        _ = bus.read(pc)
+        cycle = 1
     }
+
+    /// Begin interrupt sequence for cycle 1-6 (called from executeInterruptCycle in Instructions.swift)
+    // executeInterruptCycle is in Instructions.swift
 }

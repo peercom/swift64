@@ -396,6 +396,6 @@ public final class KernalTraps {
         cpu.pc = (UInt16(hi) << 8 | UInt16(lo)) &+ 1
         // Reset CPU cycle state so it fetches next instruction
         cpu.cycle = 0
-        cpu.pendingCycles = 0
+        cpu.servicingInterrupt = false
     }
 }
