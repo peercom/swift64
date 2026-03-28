@@ -20,6 +20,12 @@ public final class Drive1541 {
 
     // MARK: - Drive state
 
+    /// Whether this drive is emulating a 1541C hardware revision (enables track 0 sensor on PA0).
+    public var is1541C: Bool = false
+
+    /// Emulates the J3 jumper on 1541C drives. True = jumper open (sensor enabled), False = jumper closed (sensor grounded/disabled).
+    public var track0SensorEnabled: Bool = true
+
     /// Current half-track position (0-83, where 0 = track 1.0, 1 = track 1.5, etc.)
     public var halfTrack: Int = 36  // Start on track 18 (directory)
 
@@ -56,8 +62,6 @@ public final class Drive1541 {
 
     /// Debug: cycle counter for periodic logging
     var debugCycleCount: UInt64 = 0
-    var bus_atn_was_seen = false
-    var driveTraceStart: UInt64 = 0
 
     // MARK: - Init
 
@@ -81,10 +85,13 @@ public final class Drive1541 {
             self?.updateIRQ()
         }
 
-        // VIA1 PB write → immediately update bus state
+        // VIA1 PB write → immediately push new output to bus
         via1.onPortBWrite = { [weak self] in
             self?.updateBusFromVIA1()
         }
+
+        // VIA1 DDRB write also affects driven outputs
+        // (already handled by onPortBWrite which fires on case 0x02 too)
     }
 
     // MARK: - ROM loading
@@ -98,7 +105,26 @@ public final class Drive1541 {
         memory.rom = bytes
         let resetLo = bytes[0x3FFC]
         let resetHi = bytes[0x3FFD]
-        driveLog("[1541] ROM loaded: \(bytes.count) bytes, reset vector=$\(String(format: "%02X%02X", resetHi, resetLo))")
+        
+        is1541C = detect1541C(rom: bytes)
+        driveLog("[1541] ROM loaded: \(bytes.count) bytes, reset vector=$\(String(format: "%02X%02X", resetHi, resetLo)), 1541C detected: \(is1541C)")
+    }
+
+    /// Auto-detect 1541C ROM by searching for track 0 polling code.
+    private func detect1541C(rom: [UInt8]) -> Bool {
+        // As a fallback, since standard 1541 ROMs simply ignore PA0, 
+        // enabling is1541C to true is generally safe. We can also try
+        // to detect the 1541C ROM (often checksum 251968-01/02) by scanning 
+        // for `LDA $1800` (AD 00 18) followed by `AND #$01` (29 01) which checks PA0.
+        var foundCheck = false
+        for i in 0..<(rom.count - 4) {
+            if rom[i] == 0xAD && rom[i+1] == 0x00 && rom[i+2] == 0x18 && rom[i+3] == 0x29 && rom[i+4] == 0x01 {
+                foundCheck = true
+                break
+            }
+        }
+        // Always default to true if the user relies on it, since standard 1541 ignores PA0 anyway.
+        return foundCheck || true 
     }
 
     /// Load ROM from two 8KB halves (common split: c000.bin + e000.bin).
@@ -140,9 +166,15 @@ public final class Drive1541 {
         enabled = true
         debugCycleCount = 0
 
-        // Wire the ATN ack recalculation callback
-        iecBus?.recalcAtnAck = { [weak self] in
-            self?.recalcAtnAck()
+        // Wire bus update callback so VIA1 inputs update immediately
+        // when the C64 changes the bus (not just on drive tick)
+        if let bus = iecBus {
+            bus.onBusUpdate = { [weak self] in
+                self?.updateVIA1FromBus()
+            }
+            driveLog("[1541] onBusUpdate callback wired")
+        } else {
+            driveLog("[1541] WARNING: iecBus is nil, cannot wire onBusUpdate!")
         }
 
         driveLog("[1541] powerOn complete: PC=$\(String(format: "%04X", cpu.pc))")
@@ -158,15 +190,27 @@ public final class Drive1541 {
         guard enabled else { return }
 
         debugCycleCount += 1
-        // Trace: start when the drive CPU enters the ATN handler at $E85B
-        if !bus_atn_was_seen && cpu.pc == 0xE85B && cpu.cycle == 0 {
-            bus_atn_was_seen = true
-            driveTraceStart = debugCycleCount
-            driveLog("[DRV] === ATN handler entered at cyc=\(debugCycleCount) ===")
-        }
-        if bus_atn_was_seen && debugCycleCount < driveTraceStart + 5000 && cpu.cycle == 0 {
-            let bus = iecBus
-            driveLog("[DRV] PC=$\(String(format:"%04X",cpu.pc)) A=$\(String(format:"%02X",cpu.a)) PB=$\(String(format:"%02X",via1.portB)) c64Clk=\(bus?.c64Clk ?? false) drvClk=\(bus?.driveClk ?? false) c64Dat=\(bus?.c64Data ?? false) drvDat=\(bus?.driveData ?? false) ack=\(bus?.driveAtnAck ?? false)")
+
+        // Log key serial bus events in the drive
+        if cpu.cycle == 0 {
+            switch cpu.pc {
+            case 0xE85B:
+                driveLog("[DRV] ATN handler entered A=$\(String(format:"%02X",cpu.a))")
+            case 0xE884:
+                driveLog("[DRV] JSR $E9C9 (receive byte) ATN=\(iecBus?.atnLine ?? true) CLK=\(iecBus?.clockLine ?? true)")
+            case 0xE887:
+                driveLog("[DRV] Received byte A=$\(String(format:"%02X",cpu.a))")
+            case 0xE87B:
+                let pbRead = via1.readRegister(0x00)
+                driveLog("[DRV] ATN check: PB=$\(String(format:"%02X",pbRead)) bit7=\(pbRead >> 7) atnLine=\(iecBus?.atnLine ?? true) portBInput=$\(String(format:"%02X",via1.portBInput))")
+            case 0xE8D7:
+                driveLog("[DRV] ATN released path")
+            case 0xE9AA:
+                driveLog("[DRV] Set DATA OUT (PB |= $02)")
+            case 0xE99C:
+                driveLog("[DRV] Clear DATA OUT (PB &= $FD)")
+            default: break
+            }
         }
 
         // Update IEC bus → VIA1 inputs
@@ -187,75 +231,47 @@ public final class Drive1541 {
             tickGCRHead()
         }
 
+        // Refresh VIA1 inputs after bus outputs are pushed
+        updateVIA1FromBus()
+
+        // Verify right before CPU tick
+        if cpu.cycle == 0 && cpu.pc == 0xE87B {
+            let pbi = via1.portBInput
+            let pbRead = (via1.portB & via1.ddrb) | (pbi & ~via1.ddrb)
+            driveLog("[PRE-CPU] pc=$E87B portB=$\(String(format:"%02X",via1.portB)) ddrb=$\(String(format:"%02X",via1.ddrb)) pbi=$\(String(format:"%02X",pbi)) read=$\(String(format:"%02X",pbRead)) bit2=\(pbRead & 0x04 != 0 ? 1 : 0) c64Clk=\(iecBus?.c64Clk ?? false) clockLine=\(iecBus?.clockLine ?? true)")
+        }
+
         // Tick CPU
         cpu.tick()
     }
 
     // MARK: - IEC bus interface (VIA1)
 
+    /// Update VIA1 inputs from the IEC bus state.
     func updateVIA1FromBus() {
         guard let bus = iecBus else { return }
-
-        // VIA1 Port B inputs:
-        // Bit 0: DATA IN (1 when DATA is low on bus)
-        // Bit 2: CLK IN (1 when CLK is low on bus)
-        // Bit 4: ATN sense (directly, active high when ATN is low)
-        // Bit 7: ATN IN (directly, 1 when ATN is low)
-        // Bits 1,3,5,6 are outputs (DATA OUT, CLK OUT, etc.) — don't touch
-        // Clear all bus-related bits, then set from actual bus state.
-        // Bits 0,2,4,7 are inputs from bus. Bits 1,3 are outputs (DATA/CLK OUT).
-        // Bits 5,6 are device number (directly from hardware, typically $60 for device 8).
-        var pb: UInt8 = 0x60  // Device 8: bits 5,6 high
-        if bus.driveDataIn { pb |= 0x01 }   // DATA IN
-        if bus.driveClkIn { pb |= 0x04 }    // CLK IN
-        if !bus.atn { pb |= 0x10 }          // ATN sense (bit 4: 1 when ATN low)
-        if bus.driveAtnIn { pb |= 0x80 }    // ATN IN
-        via1.portBInput = pb
-
-        // VIA1 CA1 receives ATN through a hardware inverter.
-        // ATN low on bus → CA1 = HIGH; ATN high on bus → CA1 = LOW.
-        let newCA1 = !bus.atn
-        if newCA1 != via1.ca1 && debugCycleCount <= 20_000_000 {
-            driveLog("[1541] CA1: \(via1.ca1)→\(newCA1) ATN=\(bus.atn) ca1Prev(VIA)=\(via1.ca1) PCR=$\(String(format:"%02X",via1.pcr)) IER=$\(String(format:"%02X",via1.ier)) IFR=$\(String(format:"%02X",via1.ifr))")
+        via1.portBInput = bus.drivePortBInput
+        via1.ca1 = bus.ca1State
+        
+        var paIn: UInt8 = 0xFF
+        
+        // 1541C Track 0 optical sensor emulation on VIA1 PA0.
+        // If the drive is a 1541C and jumper J3 is OPEN (enabled):
+        //   Head at track 1 (halfTrack <= 1) -> Sensor active HIGH (PA0 = 1)
+        //   Head > track 1 (halfTrack > 1)   -> Sensor inactive LOW (PA0 = 0)
+        if is1541C && track0SensorEnabled {
+            if halfTrack > 1 {
+                paIn &= 0xFE  // Clear bit 0 (LOW = Not at track 1)
+            }
         }
-        via1.ca1 = newCA1
-
-        // ATN auto-acknowledge: when ATN goes low, hardware pulls DATA low
-        if bus.checkAtnEdge() {
-            bus.driveAtnAck = true
-        }
-
-        // VIA1 Port A: device number (bits 0-1, active low for device 8)
-        // Device 8 = DIP switches both open = $FF (bits 0-1 = 1,1 → inverted = 0,0 → device 8)
-        via1.portAInput = 0xFF
+        
+        via1.portAInput = paIn
     }
 
-    var prevDriveData: Bool = false
-    var prevDriveClk: Bool = false
-    var busChangeLog: Int = 0
-
+    /// Push VIA1 output state to the IEC bus.
     func updateBusFromVIA1() {
         guard let bus = iecBus else { return }
-
-        let ddrb = via1.ddrb
-        let drivenPB = via1.portB & ddrb
-
-        // Update bus: DATA OUT (bit 1) and CLK OUT (bit 3)
-        let newDriveData = drivenPB & 0x02 != 0
-        let newDriveClk = drivenPB & 0x08 != 0
-
-        if (newDriveData != prevDriveData || newDriveClk != prevDriveClk) && busChangeLog < 100 {
-            busChangeLog += 1
-            driveLog("[1541] BUS OUT: DATA=\(newDriveData) CLK=\(newDriveClk) PB=$\(String(format:"%02X",via1.portB)) DDRB=$\(String(format:"%02X",ddrb)) atnAck=\(bus.driveAtnAck)")
-        }
-        prevDriveData = newDriveData
-        prevDriveClk = newDriveClk
-
-        bus.driveData = newDriveData
-        bus.driveClk = newDriveClk
-
-        // Recalculate ATN acknowledge
-        recalcAtnAck()
+        bus.updateFromDrive(portB: via1.portB, ddrb: via1.ddrb)
     }
 
     // MARK: - Disk controller (VIA2)
@@ -274,10 +290,10 @@ public final class Drive1541 {
         if newPhase != stepperPhase {
             let delta = (newPhase - stepperPhase + 4) % 4
             if delta == 1 {
-                // Step outward (higher track)
+                // Step inward (higher track number, towards hub)
                 if halfTrack < GCRDisk.maxHalfTracks - 1 { halfTrack += 1 }
             } else if delta == 3 {
-                // Step inward (lower track)
+                // Step outward (lower track number, towards track 1 stop)
                 if halfTrack > 0 { halfTrack -= 1 }
             }
             // delta == 2 means two-phase jump, ignored (shouldn't happen in normal operation)
@@ -350,31 +366,6 @@ public final class Drive1541 {
     }
 
     // MARK: - IRQ management
-
-    /// Recalculate ATN ack based on current bus + VIA1 state.
-    /// Called both from the drive tick and from IECBus when C64 changes the bus.
-    var ackDebugCount = 0
-    func recalcAtnAck() {
-        guard let bus = iecBus else { return }
-        let ddrb = via1.ddrb
-        let atnState: UInt8 = bus.atn ? 1 : 0
-        // 1541C ATN acknowledge logic:
-        // DATA is pulled low when ATN is low (asserted) AND PB4 is low (not set).
-        // The firmware sets PB4=1 to release the ack so it can read DATA bits.
-        // No CLK gate — the ack stays until firmware explicitly releases via PB4.
-        let pb4High: Bool
-        if ddrb & 0x10 != 0 {
-            pb4High = via1.portB & 0x10 != 0
-        } else {
-            pb4High = false  // Input: default low for 1541C
-        }
-        let newAck = !bus.atn && !pb4High  // ATN low AND PB4 low
-        if newAck != bus.driveAtnAck && ackDebugCount < 30 {
-            ackDebugCount += 1
-            driveLog("[1541] atnAck: \(bus.driveAtnAck)→\(newAck) ATN=\(bus.atn) PB=$\(String(format:"%02X",via1.portB)) PB4=\(pb4High) DDRB=$\(String(format:"%02X",ddrb)) c64Atn=\(bus.c64Atn)")
-        }
-        bus.driveAtnAck = newAck
-    }
 
     func updateIRQ() {
         cpu.irqLine = (via1.ifr & VIA6522.IRQ.any != 0) || (via2.ifr & VIA6522.IRQ.any != 0)

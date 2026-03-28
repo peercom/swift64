@@ -3,125 +3,123 @@ import Foundation
 /// IEC serial bus connecting the C64 to the 1541 disk drive.
 ///
 /// Three open-collector lines: ATN, CLK, DATA.
-/// Open-collector means: any device pulling low wins. The line is high
-/// only when nobody drives it low.
+/// Each line is HIGH (true) when nobody pulls it low, and LOW (false) when
+/// any participant pulls it low (wired-AND / open-collector).
+///
+/// Based on VirtualC64's SerialPort implementation.
 public final class IECBus {
 
-    // MARK: - C64 side outputs (from CIA2 port A)
+    // MARK: - Per-device output contributions
 
-    /// C64 pulls ATN low (CIA2 PA3, active: bit set = pull low)
-    public var c64Atn: Bool = false
-    /// C64 pulls CLK low (CIA2 PA4)
-    public var c64Clk: Bool = false
-    /// C64 pulls DATA low (CIA2 PA5)
-    public var c64Data: Bool = false
+    /// C64 outputs (from CIA2 port A)
+    public var c64Atn: Bool = false   // true = pulling ATN low
+    public var c64Clk: Bool = false   // true = pulling CLK low
+    public var c64Data: Bool = false  // true = pulling DATA low
 
-    // MARK: - Drive side outputs (from VIA1 port B)
+    /// Drive outputs (from VIA1 port B)
+    public var driveClk: Bool = false   // PB3: true = pulling CLK low
+    public var driveData: Bool = false  // PB1: true = pulling DATA low
+    public var driveAtn: Bool = false   // PB4: ATNA output (for XOR gate)
 
-    /// Drive pulls CLK low (VIA1 PB3)
-    public var driveClk: Bool = false
-    /// Drive pulls DATA low (VIA1 PB1)
-    public var driveData: Bool = false
+    // MARK: - Combined bus lines (active-high: true = released/high)
 
-    /// Drive's ATN acknowledge latch — controlled by XOR logic (ATN ^ PB4) gated by CLK.
-    public var driveAtnAck: Bool = false
+    /// ATN line. Only driven by C64.
+    public var atnLine: Bool { !c64Atn }
 
-    /// Callback to recalculate driveAtnAck when bus state changes from C64 side.
-    /// Set by Drive1541 to provide the XOR+CLK gate logic.
-    public var recalcAtnAck: (() -> Void)?
+    /// CLK line. Wired-AND of all CLK outputs.
+    public var clockLine: Bool { !c64Clk && !driveClk }
 
-    // MARK: - Effective bus state (active-low: true = line is HIGH/released)
-
-    /// ATN line state (true = high/released, false = asserted low)
-    public var atn: Bool { !c64Atn }
-
-    /// CLK line state
-    public var clk: Bool { !c64Clk && !driveClk }
-
-    /// DATA line state (as seen by the C64 — includes ATN ack)
-    public var data: Bool { !c64Data && !driveData && !driveAtnAck }
-
-    /// DATA line state as seen by the drive (does NOT include its own ATN ack output,
-    /// because the 1541's DATA IN is tapped before the ATN ack transistor)
-    public var dataForDrive: Bool { !c64Data && !driveData }
+    /// DATA line. Wired-AND of all DATA outputs, PLUS the ATN auto-ack XOR gate.
+    /// The XOR gate: when atnLine == driveAtn, DATA is pulled low.
+    public var dataLine: Bool {
+        let baseData = !c64Data && !driveData
+        // XOR gate: pulls DATA low when atnLine and driveAtn are the SAME
+        // (atnLine XOR driveAtn) = 1 means they differ → no pull
+        // (atnLine XOR driveAtn) = 0 means they match → pull DATA low
+        let xorGate = atnLine != driveAtn  // true when they differ (no pull)
+        return baseData && xorGate
+    }
 
     // MARK: - C64 reads (for CIA2 port A bits 6-7)
+    // Active-low sense: line high → bit reads as 1, line low → bit reads as 0
 
-    /// CLK IN as seen by C64 (CIA2 PA6, active low: 0 when CLK is low)
-    public var c64ClkIn: Bool { !clk }
+    /// CLK IN for C64 (CIA2 PA bit 6): 1 when CLK line is high
+    public var c64ReadClk: UInt8 { clockLine ? 0x40 : 0x00 }
 
-    /// DATA IN as seen by C64 (CIA2 PA7, active low: 0 when DATA is low)
-    public var c64DataIn: Bool { !data }
+    /// DATA IN for C64 (CIA2 PA bit 7): 1 when DATA line is high
+    public var c64ReadData: UInt8 { dataLine ? 0x80 : 0x00 }
 
     // MARK: - Drive reads (for VIA1 port B)
+    // The 1541 inverts the bus signals on input: line LOW → pin HIGH (1)
+    // This matches VICE's ^0x85 inversion on bits 0, 2, 7
 
-    /// DATA IN as seen by drive (VIA1 PB0: 1 when DATA is low on bus)
-    /// Uses dataForDrive which excludes the drive's own ATN ack output.
-    public var driveDataIn: Bool { !dataForDrive }
-
-    /// CLK IN as seen by drive (VIA1 PB2, active low: 1 when CLK is low)
-    public var driveClkIn: Bool { !clk }
-
-    /// ATN IN as seen by drive (VIA1 PB7, active low: 1 when ATN is low)
-    public var driveAtnIn: Bool { !atn }
-
-    // MARK: - ATN edge detection
-
-    private var prevAtn: Bool = true  // Previous ATN state (starts high)
-
-    /// Called to check for ATN transitions. Returns true on falling edge.
-    public func checkAtnEdge() -> Bool {
-        let currentAtn = atn
-        let fallingEdge = prevAtn && !currentAtn  // ATN went from high to low
-        prevAtn = currentAtn
-        return fallingEdge
+    /// Port B input byte for VIA1 (bits 0, 2, 7 from bus; 5-6 device address)
+    public var drivePortBInput: UInt8 {
+        var pb: UInt8 = 0x00
+        // Bit 0: DATA IN (inverted: bus low → 1, bus high → 0)
+        if !dataLine { pb |= 0x01 }
+        // Bit 2: CLK IN (inverted: bus low → 1, bus high → 0)
+        if !clockLine { pb |= 0x04 }
+        // Bits 5-6: Device address preset (device 8 = both high)
+        pb |= 0x60
+        // Bit 7: ATN IN (inverted: bus low → 1, bus high → 0)
+        if !atnLine { pb |= 0x80 }
+        return pb
     }
 
     // MARK: - Update from C64 side
 
-    /// Debug: log bus transitions
-    private var loggedAtnTransitions = 0
-    private var prevLogClk = true
-    private var prevLogData = true
-    private var busTransitionLog = 0
+    /// Called when CIA2 port A is written.
+    public var onBusUpdate: (() -> Void)?
 
-    /// Update bus from CIA2 port A write.
-    /// CIA2 PA3=ATN, PA4=CLK, PA5=DATA (active: writing 1 = pulling line low)
+    private var busLog = 0
     public func updateFromC64(_ portA: UInt8) {
-        let prevAtnOut = c64Atn
+        let prevData = dataLine
         c64Atn = portA & 0x08 != 0
         c64Clk = portA & 0x10 != 0
         c64Data = portA & 0x20 != 0
-
-        // Recalculate ATN ack immediately so C64 reads see the correct state
-        let hadCallback = recalcAtnAck != nil
-        recalcAtnAck?()
-
-        // Log all C64 bus writes (not just ATN changes)
-        let newClk = c64Clk
-        let newData = c64Data
-        if (c64Atn != prevAtnOut || newClk != prevLogClk || newData != prevLogData) && busTransitionLog < 200 {
-            busTransitionLog += 1
-            let msg = "[IEC] C64 PA=$\(String(format:"%02X", portA)) ATN=\(c64Atn ? "lo" : "hi") CLK=\(newClk ? "lo" : "hi") DATA=\(newData ? "lo" : "hi") → bus: CLK=\(clk) DATA=\(data) ack=\(driveAtnAck) cb=\(hadCallback)\n"
-            if let d = msg.data(using: .utf8),
-               let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
-                fh.seekToEndOfFile()
-                fh.write(d)
-                fh.closeFile()
+        onBusUpdate?()
+        // Log state changes
+        if busLog < 60 {
+            busLog += 1
+            let msg = "[IEC] PA=$\(String(format:"%02X",portA)) ATN=\(atnLine) CLK=\(clockLine) DATA=\(dataLine) drvAtn=\(driveAtn)\n"
+            if let d = msg.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
             }
         }
-        prevLogClk = newClk
-        prevLogData = newData
     }
 
     // MARK: - Update from drive side
 
-    /// Update bus from VIA1 port B write.
-    /// VIA1 PB1=DATA OUT, PB3=CLK OUT
-    public func updateFromDrive(_ portB: UInt8) {
-        driveData = portB & 0x02 != 0
-        driveClk = portB & 0x08 != 0
+    /// Called when drive VIA1 port B is written.
+    /// Reads the driven output bits (portB & ddrb).
+    private var drvLog = 0
+    public func updateFromDrive(portB: UInt8, ddrb: UInt8) {
+        let driven = portB & ddrb
+        let newData = driven & 0x02 != 0
+        let newClk = driven & 0x08 != 0
+        let newAtn = driven & 0x10 != 0
+        if (newData != driveData || newAtn != driveAtn) && drvLog < 30 {
+            drvLog += 1
+            let msg = "[DRV-BUS] PB=$\(String(format:"%02X",portB)) DDRB=$\(String(format:"%02X",ddrb)) driven=$\(String(format:"%02X",driven)) dData=\(newData) dAtn=\(newAtn) → dataLine=\(!c64Data && !newData && ((!c64Atn) != newAtn))\n"
+            if let d = msg.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
+                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            }
+        }
+        driveData = newData
+        driveClk = newClk
+        driveAtn = newAtn
+        onBusUpdate?()
     }
+
+    // MARK: - ATN edge detection for VIA1 CA1
+
+    private var prevAtnForCA1: Bool = true
+
+    /// Check for ATN transitions. The 1541 has an inverter on the ATN line
+    /// before CA1, so CA1 sees the INVERTED ATN: ATN low → CA1 high.
+    /// Returns the current CA1 pin state (inverted ATN).
+    public var ca1State: Bool { !atnLine }
 
     // MARK: - Init
 

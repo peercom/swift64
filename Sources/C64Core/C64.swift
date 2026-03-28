@@ -31,11 +31,6 @@ public final class C64 {
     var driveClockAccumulator: Double = 0.0
     /// Debug counter for CIA2 PA reads
     var cia2ReadLog: Int = 0
-
-    /// Cached CIA2 external PA value — updated once per tick to avoid
-    /// debounce issues where bus state changes between two reads in the same instruction
-    var cachedCIA2External: UInt8 = 0xFF
-    var cia2ExternalValid: Bool = false
     /// Fraction of extra drive cycles per C64 cycle: (1000000 - 985248) / 985248
     let driveClockFraction: Double = 14752.0 / 985248.0
 
@@ -108,22 +103,16 @@ public final class C64 {
 
         // CIA2 → IEC bus
         cia2.onPortAWrite = { [weak self] portA in
-            guard let self = self else { return }
-            self.iecBus.updateFromC64(portA)
-            // Invalidate the cached CIA2 external value so subsequent reads
-            // in the same cycle see the updated bus state
-            if self.trueDriveEmulation {
-                var ext: UInt8 = 0x3F
-                if !self.iecBus.c64ClkIn { ext |= 0x40 }
-                if !self.iecBus.c64DataIn { ext |= 0x80 }
-                self.cachedCIA2External = ext
-            }
+            self?.iecBus.updateFromC64(portA)
         }
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
-            var result: UInt8 = 0x3F
-            if !self.iecBus.c64ClkIn { result |= 0x40 }
-            if !self.iecBus.c64DataIn { result |= 0x80 }
+            let result = 0x3F | self.iecBus.c64ReadClk | self.iecBus.c64ReadData
+            // Log all reads in Kernal serial bus code ($ED00-$EE00)
+            if self.trueDriveEmulation && self.cpu.pc >= 0xED00 && self.cpu.pc <= 0xEEB5 && self.cia2ReadLog < 200 {
+                self.cia2ReadLog += 1
+                self.kernalTraps.debugLog("[C64-ACK] @\(self.cpu.totalCycles) PC=$\(String(format:"%04X",self.cpu.pc)) ext=$\(String(format:"%02X",result)) dataLine=\(self.iecBus.dataLine) drvData=\(self.iecBus.driveData) drvAtn=\(self.iecBus.driveAtn) c64Atn=\(self.iecBus.c64Atn)")
+            }
             return result
         }
 
