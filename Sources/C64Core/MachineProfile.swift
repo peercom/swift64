@@ -71,11 +71,12 @@ public struct MachineProfile: Equatable {
         }
     }
 
+    public var displayFrameRateHz: Double {
+        cpuClockHz / Double(vicCyclesPerLine * vicRasterLinesPerFrame)
+    }
+
     public var displayFramesPerSecond: Int {
-        switch videoStandard {
-        case .pal: return 50
-        case .ntsc: return 60
-        }
+        Int(displayFrameRateHz.rounded())
     }
 
     public static let palC64 = MachineProfile(

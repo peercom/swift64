@@ -142,7 +142,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             // Sleep for remaining frame time
             let elapsed = CFAbsoluteTimeGetCurrent() - frameStart
-            let frameDuration = 1.0 / Double(c64.machineProfile.displayFramesPerSecond)
+            let frameDuration = 1.0 / c64.machineProfile.displayFrameRateHz
             let sleepTime = frameDuration - elapsed
             if sleepTime > 0 {
                 Thread.sleep(forTimeInterval: sleepTime)
