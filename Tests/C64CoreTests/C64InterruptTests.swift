@@ -61,6 +61,36 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertFalse(c64.cpu.nmiLine)
     }
 
+    func testRestoreKeyPressTriggersMachineLevelNMI() {
+        let c64 = C64()
+
+        XCTAssertFalse(c64.restoreKeyDown)
+
+        XCTAssertTrue(c64.pressRestoreKey())
+
+        XCTAssertTrue(c64.restoreKeyDown)
+        XCTAssertFalse(c64.cpu.nmiLine)
+
+        c64.tickOneCycle()
+
+        XCTAssertTrue(c64.cpu.servicingInterrupt)
+
+        c64.releaseRestoreKey()
+
+        XCTAssertFalse(c64.restoreKeyDown)
+    }
+
+    func testHoldingRestoreKeyDoesNotRetriggerUntilReleased() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.pressRestoreKey())
+        XCTAssertFalse(c64.pressRestoreKey())
+
+        c64.releaseRestoreKey()
+
+        XCTAssertTrue(c64.pressRestoreKey())
+    }
+
     func testRawTAPFallingEdgeDrivesCIA1FlagOnlyWhenCassetteMotorRuns() {
         let c64 = C64()
 

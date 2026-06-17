@@ -42,6 +42,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 ### Recent emulation work
 
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
 - CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
@@ -140,7 +141,7 @@ Example milestone manifest:
 
 ### Keyboard
 
-The Mac keyboard maps to the C64 keyboard layout. The Escape key acts as the RESTORE key (triggers NMI). Joystick port 2 is mapped to the numpad (8/2/4/6 for directions, 0 or Enter for fire).
+The Mac keyboard maps to the C64 keyboard layout. Escape maps to RUN/STOP, and Page Up or F12 act as RESTORE keys that trigger NMI. Joystick port 2 is mapped to the numpad (8/2/4/6 for directions, 0 or Enter for fire).
 
 ## Debugger
 

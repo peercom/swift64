@@ -82,6 +82,8 @@ public final class C64 {
 
     /// Whether the machine is running
     public var running: Bool = false
+    /// RESTORE key input state. Pressing RESTORE raises a CPU NMI edge.
+    public private(set) var restoreKeyDown: Bool = false
 
     /// Display name of the most recently mounted disk image, if any.
     public private(set) var mountedDiskName: String?
@@ -388,6 +390,18 @@ public final class C64 {
     public func typeText(_ text: String) {
         pendingTypedText.append(contentsOf: text)
         feedKeyboardBufferIfPossible()
+    }
+
+    @discardableResult
+    public func pressRestoreKey() -> Bool {
+        guard !restoreKeyDown else { return false }
+        restoreKeyDown = true
+        cpu.triggerNMI()
+        return true
+    }
+
+    public func releaseRestoreKey() {
+        restoreKeyDown = false
     }
 
     private func feedKeyboardBufferIfPossible() {

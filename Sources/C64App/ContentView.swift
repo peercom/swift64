@@ -495,7 +495,7 @@ struct MetalView: NSViewRepresentable {
 
                 if !event.isARepeat {
                     if c64.keyboard.isRestoreKey(event.keyCode) {
-                        c64.cpu.triggerNMI()
+                        c64.pressRestoreKey()
                         return nil
                     }
                     if c64.joystick.handleKeyDown(keyCode: event.keyCode) {
@@ -508,6 +508,10 @@ struct MetalView: NSViewRepresentable {
             case .keyUp:
                 if event.modifierFlags.contains(.command) {
                     return event
+                }
+                if c64.keyboard.isRestoreKey(event.keyCode) {
+                    c64.releaseRestoreKey()
+                    return nil
                 }
                 if c64.joystick.handleKeyUp(keyCode: event.keyCode) {
                     return nil
