@@ -273,6 +273,7 @@ final class EmulatorController: ObservableObject {
     @Published var hasMountedDisk = false
     @Published var emulationStatus: C64.EmulationStatus?
     @Published var romStatusMessage = "ROM paths are not configured."
+    @Published var displayFramesPerSecond = MachineProfile.palC64.displayFramesPerSecond
 
     init() {
         applyEmulationPreferences(reset: false, powerDrive: false)
@@ -355,6 +356,7 @@ final class EmulatorController: ObservableObject {
         let mode = TrueDriveModePreference(rawValue: modeID) ?? .off
 
         c64.machineProfile = profile.profile
+        displayFramesPerSecond = profile.profile.displayFramesPerSecond
         c64.trueDriveEmulationMode = mode.mode
         if reset {
             c64.reset()
@@ -552,7 +554,7 @@ struct MetalView: NSViewRepresentable {
     func makeNSView(context: Context) -> MTKView {
         let view = MTKView()
         view.device = MTLCreateSystemDefaultDevice()
-        view.preferredFramesPerSecond = 50  // PAL
+        view.preferredFramesPerSecond = emulator.displayFramesPerSecond
         view.colorPixelFormat = .bgra8Unorm
         view.isPaused = false
         view.enableSetNeedsDisplay = false
@@ -573,7 +575,11 @@ struct MetalView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: MTKView, context: Context) {}
+    func updateNSView(_ nsView: MTKView, context: Context) {
+        if nsView.preferredFramesPerSecond != emulator.displayFramesPerSecond {
+            nsView.preferredFramesPerSecond = emulator.displayFramesPerSecond
+        }
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(emulator: emulator)

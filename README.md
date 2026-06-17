@@ -43,6 +43,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 - The macOS app now has Settings for machine/drive profile selection and local ROM file paths instead of relying on distributable bundled ROMs
 - ROM loading now validates expected stock ROM sizes before applying Settings-selected files
+- PAL/NTSC machine profiles now drive the macOS display cadence as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges

@@ -106,8 +106,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var debugMemoryPage: UInt16 = 0x0000
 
     func emulationLoop() {
-        // PAL: 50 frames per second = 20ms per frame
-        let frameDuration: Double = 1.0 / 50.0
         var frameCount = 0
 
         while running {
@@ -144,6 +142,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             // Sleep for remaining frame time
             let elapsed = CFAbsoluteTimeGetCurrent() - frameStart
+            let frameDuration = 1.0 / Double(c64.machineProfile.displayFramesPerSecond)
             let sleepTime = frameDuration - elapsed
             if sleepTime > 0 {
                 Thread.sleep(forTimeInterval: sleepTime)
