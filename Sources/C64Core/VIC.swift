@@ -1,15 +1,24 @@
 import Foundation
 
 /// MOS 6569 VIC-II (PAL) video chip emulation.
-/// Renders one rasterline at a time. The host calls `tick()` 63 times per rasterline.
+/// Renders one rasterline at a time with PAL or NTSC raster timing.
 public final class VIC {
 
-    public var videoStandard: C64VideoStandard = .pal
+    public var videoStandard: C64VideoStandard = .pal {
+        didSet {
+            applyVideoStandardTiming()
+        }
+    }
 
     // MARK: - Constants (PAL)
 
-    public static let cyclesPerLine = 63
-    public static let totalLines = 312
+    public static let palCyclesPerLine = 63
+    public static let palRasterLinesPerFrame = 312
+    public static let ntscCyclesPerLine = 65
+    public static let ntscRasterLinesPerFrame = 263
+
+    public static let cyclesPerLine = palCyclesPerLine
+    public static let totalLines = palRasterLinesPerFrame
     public static let cyclesPerFrame = cyclesPerLine * totalLines  // 19656
 
     /// Visible screen area
@@ -79,8 +88,15 @@ public final class VIC {
 
     /// Current rasterline
     public var rasterLine: UInt16 = 0
-    /// Cycle within current rasterline (0-62)
+    /// Cycle within current rasterline.
     public var rasterCycle: Int = 0
+    /// Active chip-profile cycles per rasterline.
+    public private(set) var rasterCyclesPerLine: Int = VIC.palCyclesPerLine
+    /// Active chip-profile rasterlines per frame.
+    public private(set) var rasterLinesPerFrame: Int = VIC.palRasterLinesPerFrame
+    public var activeCyclesPerFrame: Int {
+        rasterCyclesPerLine * rasterLinesPerFrame
+    }
 
     /// Whether the VIC is in the display area vertically
     var displayActive: Bool = false
@@ -162,6 +178,17 @@ public final class VIC {
         framebuffer = [UInt32](repeating: 0, count: VIC.screenWidth * VIC.screenHeight)
     }
 
+    func applyVideoStandardTiming() {
+        switch videoStandard {
+        case .pal:
+            rasterCyclesPerLine = VIC.palCyclesPerLine
+            rasterLinesPerFrame = VIC.palRasterLinesPerFrame
+        case .ntsc:
+            rasterCyclesPerLine = VIC.ntscCyclesPerLine
+            rasterLinesPerFrame = VIC.ntscRasterLinesPerFrame
+        }
+    }
+
     // MARK: - Tick
 
     /// Advance one cycle. Returns true if this is a bad line (CPU should be stalled).
@@ -175,7 +202,7 @@ public final class VIC {
         let shouldStallCPU = isStealingCPU
 
         // Render pixels at specific cycles (raster beam)
-        if rasterCycle >= 0 && rasterCycle < VIC.cyclesPerLine {
+        if rasterCycle >= 0 && rasterCycle < rasterCyclesPerLine {
             renderCycle()
         }
 
@@ -186,7 +213,7 @@ public final class VIC {
 
         // Advance cycle
         rasterCycle += 1
-        if rasterCycle >= VIC.cyclesPerLine {
+        if rasterCycle >= rasterCyclesPerLine {
             endOfLine()
         }
 
@@ -224,7 +251,7 @@ public final class VIC {
         rasterCycle = 0
         rasterLine += 1
 
-        if rasterLine >= UInt16(VIC.totalLines) {
+        if rasterLine >= UInt16(rasterLinesPerFrame) {
             rasterLine = 0
             videoCounterBase = 0
             badLineDENLatched = false

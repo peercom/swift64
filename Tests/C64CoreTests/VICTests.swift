@@ -15,6 +15,40 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth], borderColor)
     }
 
+    func testPALTimingUsesSixtyThreeCyclesAndThreeHundredTwelveLines() {
+        let vic = VIC()
+
+        XCTAssertEqual(vic.videoStandard, .pal)
+        XCTAssertEqual(vic.rasterCyclesPerLine, 63)
+        XCTAssertEqual(vic.rasterLinesPerFrame, 312)
+        XCTAssertEqual(vic.activeCyclesPerFrame, 19_656)
+
+        vic.rasterLine = 311
+        vic.rasterCycle = 62
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertTrue(vic.frameReady)
+    }
+
+    func testNTSCTimingUsesSixtyFiveCyclesAndTwoHundredSixtyThreeLines() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+
+        XCTAssertEqual(vic.rasterCyclesPerLine, 65)
+        XCTAssertEqual(vic.rasterLinesPerFrame, 263)
+        XCTAssertEqual(vic.activeCyclesPerFrame, 17_095)
+
+        vic.rasterLine = 262
+        vic.rasterCycle = 64
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertTrue(vic.frameReady)
+    }
+
     func testSpritesRenderOverVisibleBorderArea() {
         let vic = VIC()
         let spriteColor = ColorPalette.rgba[1]

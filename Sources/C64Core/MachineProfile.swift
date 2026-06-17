@@ -57,6 +57,20 @@ public struct MachineProfile: Equatable {
         }
     }
 
+    public var vicCyclesPerLine: Int {
+        switch videoStandard {
+        case .pal: return VIC.palCyclesPerLine
+        case .ntsc: return VIC.ntscCyclesPerLine
+        }
+    }
+
+    public var vicRasterLinesPerFrame: Int {
+        switch videoStandard {
+        case .pal: return VIC.palRasterLinesPerFrame
+        case .ntsc: return VIC.ntscRasterLinesPerFrame
+        }
+    }
+
     public static let palC64 = MachineProfile(
         name: "PAL C64 + 1541C",
         videoStandard: .pal,

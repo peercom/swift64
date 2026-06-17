@@ -460,7 +460,7 @@ public final class C64 {
 
     // MARK: - Execution
 
-    /// Run one complete frame (312 rasterlines × 63 cycles = 19656 cycles).
+    /// Run one complete frame for the active VIC-II video standard.
     /// Returns true when a frame is ready for display.
     public func runFrame() -> Bool {
         vic.frameReady = false

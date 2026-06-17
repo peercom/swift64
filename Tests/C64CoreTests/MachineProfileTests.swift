@@ -7,6 +7,9 @@ final class MachineProfileTests: XCTestCase {
 
         XCTAssertEqual(c64.machineProfile, .palC64)
         XCTAssertEqual(c64.vic.videoStandard, .pal)
+        XCTAssertEqual(c64.vic.rasterCyclesPerLine, 63)
+        XCTAssertEqual(c64.vic.rasterLinesPerFrame, 312)
+        XCTAssertEqual(c64.vic.activeCyclesPerFrame, 19_656)
         XCTAssertEqual(c64.sid.model, .mos6581)
         XCTAssertEqual(c64.sid.clockRate, 985_248)
         XCTAssertEqual(c64.cia1.cyclesPerTodTenth, 98_525)
@@ -25,6 +28,9 @@ final class MachineProfileTests: XCTestCase {
 
         XCTAssertEqual(c64.machineProfile, .ntscC64)
         XCTAssertEqual(c64.vic.videoStandard, .ntsc)
+        XCTAssertEqual(c64.vic.rasterCyclesPerLine, 65)
+        XCTAssertEqual(c64.vic.rasterLinesPerFrame, 263)
+        XCTAssertEqual(c64.vic.activeCyclesPerFrame, 17_095)
         XCTAssertEqual(c64.sid.clockRate, 1_022_727)
         XCTAssertEqual(c64.cia1.cyclesPerTodTenth, 102_273)
         XCTAssertEqual(c64.cia2.cyclesPerTodTenth, 102_273)
