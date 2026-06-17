@@ -41,6 +41,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 ### Recent emulation work
 
+- Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
 - RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias

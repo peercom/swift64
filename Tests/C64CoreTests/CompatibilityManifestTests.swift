@@ -92,6 +92,36 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.ramSignatures, [])
     }
 
+    func testManifestDecodesC64CProfiles() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "pal-c64c.prg",
+              "mediaType": "prg",
+              "machineProfile": "palC64C",
+              "command": "RUN"
+            },
+            {
+              "file": "ntsc-c64c.prg",
+              "mediaType": "prg",
+              "machineProfile": "ntscC64C",
+              "command": "RUN"
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones[0].machineProfile, .palC64C)
+        XCTAssertEqual(manifest.milestones[0].machineProfile?.profile.sidModel, .mos8580)
+        XCTAssertEqual(manifest.milestones[0].machineProfile?.profile.videoStandard, .pal)
+        XCTAssertEqual(manifest.milestones[1].machineProfile, .ntscC64C)
+        XCTAssertEqual(manifest.milestones[1].machineProfile?.profile.sidModel, .mos8580)
+        XCTAssertEqual(manifest.milestones[1].machineProfile?.profile.videoStandard, .ntsc)
+    }
+
     func testManifestRejectsEmptyCommandSequence() {
         let json = """
         {

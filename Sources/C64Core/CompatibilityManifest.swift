@@ -19,12 +19,16 @@ public enum CompatibilityMediaType: String, Decodable, Equatable {
 
 public enum CompatibilityMachineProfile: String, Decodable, Equatable {
     case palC64
+    case palC64C
     case ntscC64
+    case ntscC64C
 
     public var profile: MachineProfile {
         switch self {
         case .palC64: return .palC64
+        case .palC64C: return .palC64C
         case .ntscC64: return .ntscC64
+        case .ntscC64C: return .ntscC64C
         }
     }
 }

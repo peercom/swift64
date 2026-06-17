@@ -6,6 +6,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 
 | Area | Status | Notes |
 | --- | --- | --- |
+| Machine/chip profiles | Partial | PAL/NTSC C64 profiles select 6581 SID timing, PAL/NTSC C64C profiles select 8580 SID timing, and all current profiles carry matching VIC geometry, CIA TOD, SID clock, and 1541C drive defaults; alternate 1541-family timing and more board/chip revisions remain open. |
 | 6510/6502 CPU | Partial-preservation | Cycle-stepped CPU with documented and many undocumented opcodes; remaining work includes conformance-suite closure for decimal flags, RDY/SO/interrupt edges, and unstable opcodes. |
 | Memory and I/O banking | Good baseline | BASIC/Kernal/Char ROM banking, I/O dispatch, color RAM nibbles, VIC bank selection, CPU port cassette lines, and open-bus behavior have focused tests. |
 | VIC-II | Partial | Rasterline rendering, PAL/NTSC frame timing, bad-line CPU stalls, sprites, collision IRQs, light pen latch, and key readback quirks are covered; full per-cycle BA/AEC, sprite DMA, border tricks, and deeper border timing remain open. |
@@ -24,7 +25,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 
 ## Near-Term Milestones
 
-1. Complete machine/chip profiles for PAL/NTSC, SID 6581/8580, and 1541-family timing.
+1. Extend machine/chip profiles with alternate 1541-family timing and additional board/chip revisions.
 2. Convert the local compatibility manifest into a reusable corpus runner with deterministic pass/fail reasons.
 3. Close VIC-II timing gaps that block raster splits, sprite multiplexing, and protected loaders.
 4. Expand 1541 low-level media support for protected G64 behavior before adding write-back.

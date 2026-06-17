@@ -38,6 +38,29 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(c64.cia1.tod60HzCyclesPerTenth, 102_273)
     }
 
+    func testC64CProfilesSelect8580SIDWithMatchingVideoTiming() {
+        let palC64C = C64(machineProfile: .palC64C)
+        let ntscC64C = C64(machineProfile: .ntscC64C)
+
+        XCTAssertEqual(palC64C.machineProfile.name, "PAL C64C + 1541C")
+        XCTAssertEqual(palC64C.vic.videoStandard, .pal)
+        XCTAssertEqual(palC64C.sid.model, .mos8580)
+        XCTAssertEqual(palC64C.sid.clockRate, 985_248)
+        XCTAssertEqual(palC64C.cia1.cyclesPerTodTenth, 98_525)
+        XCTAssertEqual(palC64C.machineProfile.driveModel, .model1541C)
+        palC64C.trueDriveEmulationMode = .compat1541
+        XCTAssertEqual(palC64C.drive1541.driveModel, .model1541C)
+
+        XCTAssertEqual(ntscC64C.machineProfile.name, "NTSC C64C + 1541C")
+        XCTAssertEqual(ntscC64C.vic.videoStandard, .ntsc)
+        XCTAssertEqual(ntscC64C.sid.model, .mos8580)
+        XCTAssertEqual(ntscC64C.sid.clockRate, 1_022_727)
+        XCTAssertEqual(ntscC64C.cia1.cyclesPerTodTenth, 102_273)
+        XCTAssertEqual(ntscC64C.machineProfile.driveModel, .model1541C)
+        ntscC64C.trueDriveEmulationMode = .compat1541
+        XCTAssertEqual(ntscC64C.drive1541.driveModel, .model1541C)
+    }
+
     func testStandardTrueDriveUsesProfileClockRatio() {
         let c64 = C64(machineProfile: .ntscC64)
 
