@@ -16,6 +16,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 | Tape | Early signal foundation | T64 trap loading, raw TAP v0/v1 pulse parsing/playback, C64 mount-path auto-arming, CPU-port cassette sense/write/motor line surfaces, and TAP-to-CIA1 FLAG edges exist; full datasette/Kernal timing is not complete. |
 | Cartridges/expansion | Early partial | Standard CRT parsing, 8K/16K ROM mapping, and Ultimax ROM/open-bus memory map behavior exist; banked/freezer/fastload cartridges, EasyFlash, expansion I/O, DMA, and REU remain open. |
 | Compatibility harness | Early partial | Local manifests now parse media/profile/run settings, command sequences, drive status expectations, RAM signatures, and screen RAM hashes; full PRG/D64/G64/T64/TAP/CRT execution, screenshots, and resumable result logs remain open. |
+| macOS app settings | Partial | Settings expose machine profile, drive mode, and local BASIC/Kernal/Character/1541 ROM paths; more per-subsystem accuracy toggles and validation presets remain open. |
 
 ## Validation Policy
 

@@ -51,16 +51,7 @@ struct ContentView: View {
                     Toggle(isOn: Binding(
                         get: { emulator.c64.trueDriveEmulation },
                         set: { enabled in
-                            emulator.c64.trueDriveEmulationMode = enabled ? .compat1541 : .off
-                            if enabled {
-                                emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portA, ddra: emulator.c64.cia2.ddra)
-                                emulator.c64.drive1541.powerOn()
-                                print("True drive emulation enabled")
-                            } else {
-                                emulator.c64.drive1541.enabled = false
-                                print("True drive emulation disabled (using Kernal traps)")
-                            }
-                            emulator.refreshStatus()
+                            emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
                         }
                     )) {
                         Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
@@ -83,6 +74,11 @@ struct ContentView: View {
                     }
 
                     Divider()
+
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Open emulator settings")
 
                     Button(action: { openWindow(id: "debugger") }) {
                         Label("Debugger", systemImage: "ladybug")
@@ -276,9 +272,11 @@ final class EmulatorController: ObservableObject {
 
     @Published var hasMountedDisk = false
     @Published var emulationStatus: C64.EmulationStatus?
+    @Published var romStatusMessage = "ROM paths are not configured."
 
     init() {
-        loadROMs()
+        applyEmulationPreferences(reset: false, powerDrive: false)
+        reloadROMs(reset: false)
         c64.powerOn()
         setupAudio()
         refreshStatus()
@@ -335,17 +333,63 @@ final class EmulatorController: ObservableObject {
         }
     }
 
-    func loadROMs() {
-        // Try Bundle.module first (SPM resource bundle)
-        if let romsURL = Bundle.module.url(forResource: "ROMS", withExtension: nil) {
-            loadROMsFromDirectory(romsURL)
+    func setTrueDriveMode(_ mode: TrueDriveEmulationMode) {
+        let preference: TrueDriveModePreference
+        switch mode {
+        case .off: preference = .off
+        case .standard1541: preference = .standard1541
+        case .compat1541: preference = .compat1541
+        }
+        UserDefaults.standard.set(preference.rawValue, forKey: PreferenceKey.trueDriveMode)
+        c64.trueDriveEmulationMode = mode
+        powerDriveIfNeeded()
+        print(mode == .off ? "True drive emulation disabled (using Kernal traps)" : "\(mode.displayName) enabled")
+        refreshStatus()
+    }
+
+    func applyEmulationPreferences(reset: Bool, powerDrive: Bool = true) {
+        let defaults = UserDefaults.standard
+        let profileID = defaults.string(forKey: PreferenceKey.machineProfile) ?? MachineProfilePreference.palC64.rawValue
+        let modeID = defaults.string(forKey: PreferenceKey.trueDriveMode) ?? TrueDriveModePreference.off.rawValue
+        let profile = MachineProfilePreference(rawValue: profileID) ?? .palC64
+        let mode = TrueDriveModePreference(rawValue: modeID) ?? .off
+
+        c64.machineProfile = profile.profile
+        c64.trueDriveEmulationMode = mode.mode
+        if reset {
+            c64.reset()
+        }
+        if powerDrive {
+            powerDriveIfNeeded()
+        }
+        refreshStatus()
+        print("Applied emulation settings: \(profile.title), \(mode.title)")
+    }
+
+    func powerDriveIfNeeded() {
+        if c64.trueDriveEmulationMode == .off {
+            c64.drive1541.enabled = false
+            return
+        }
+
+        c64.iecBus.updateFromC64(c64.cia2.portA, ddra: c64.cia2.ddra)
+        c64.drive1541.powerOn()
+    }
+
+    func reloadROMs(reset: Bool) {
+        if hasConfiguredROMPaths() {
+            guard loadROMsFromConfiguredPaths() else { return }
+            if reset {
+                c64.reset()
+                powerDriveIfNeeded()
+                refreshStatus()
+            }
             return
         }
 
         // Fallback: look relative to executable and working directory
         let execDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
         let candidates = [
-            execDir.appendingPathComponent("C64_C64App.bundle/Contents/Resources/ROMS"),
             execDir.appendingPathComponent("ROMS"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/C64/ROMS"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/Sources/C64App/ROMS"),
@@ -353,15 +397,68 @@ final class EmulatorController: ObservableObject {
 
         for dir in candidates {
             if FileManager.default.fileExists(atPath: dir.path) {
-                loadROMsFromDirectory(dir)
-                return
+                if loadROMsFromDirectory(dir) {
+                    if reset {
+                        c64.reset()
+                        powerDriveIfNeeded()
+                        refreshStatus()
+                    }
+                    return
+                }
             }
         }
 
-        print("WARNING: Could not find ROM files. The emulator will not boot correctly.")
+        romStatusMessage = "ROM files are not configured. Set BASIC, Kernal, Characters, and 1541 paths in Settings."
+        print("WARNING: \(romStatusMessage)")
     }
 
-    func loadROMsFromDirectory(_ dir: URL) {
+    func hasConfiguredROMPaths() -> Bool {
+        let defaults = UserDefaults.standard
+        let paths = [
+            defaults.string(forKey: PreferenceKey.basicROMPath) ?? "",
+            defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "",
+            defaults.string(forKey: PreferenceKey.characterROMPath) ?? "",
+            defaults.string(forKey: PreferenceKey.driveROMPath) ?? "",
+        ]
+        return paths.contains { !$0.isEmpty }
+    }
+
+    func loadROMsFromConfiguredPaths() -> Bool {
+        let defaults = UserDefaults.standard
+        let basicPath = defaults.string(forKey: PreferenceKey.basicROMPath) ?? ""
+        let kernalPath = defaults.string(forKey: PreferenceKey.kernalROMPath) ?? ""
+        let characterPath = defaults.string(forKey: PreferenceKey.characterROMPath) ?? ""
+        let drivePath = defaults.string(forKey: PreferenceKey.driveROMPath) ?? ""
+
+        do {
+            guard !basicPath.isEmpty, !kernalPath.isEmpty, !characterPath.isEmpty else {
+                romStatusMessage = "BASIC, Kernal, and Characters ROM paths are required."
+                print("WARNING: \(romStatusMessage)")
+                return false
+            }
+
+            let basic = try Data(contentsOf: URL(fileURLWithPath: basicPath))
+            let kernal = try Data(contentsOf: URL(fileURLWithPath: kernalPath))
+            let characters = try Data(contentsOf: URL(fileURLWithPath: characterPath))
+            c64.loadROMs(basic: basic, kernal: kernal, charset: characters)
+
+            if !drivePath.isEmpty {
+                let drive = try Data(contentsOf: URL(fileURLWithPath: drivePath))
+                c64.loadDriveROM(drive)
+                romStatusMessage = "ROMs loaded from configured paths, including 1541 drive ROM."
+            } else {
+                romStatusMessage = "C64 ROMs loaded from configured paths. 1541 drive ROM is not configured."
+            }
+            print(romStatusMessage)
+            return true
+        } catch {
+            romStatusMessage = "Could not load configured ROM paths: \(error.localizedDescription)"
+            print("ERROR: \(romStatusMessage)")
+            return false
+        }
+    }
+
+    func loadROMsFromDirectory(_ dir: URL) -> Bool {
         do {
             let files = try FileManager.default.contentsOfDirectory(atPath: dir.path)
             var basicData: Data?
@@ -386,17 +483,24 @@ final class EmulatorController: ObservableObject {
 
             if let basic = basicData, let kernal = kernalData, let charset = charData {
                 c64.loadROMs(basic: basic, kernal: kernal, charset: charset)
-                print("ROMs loaded successfully from \(dir.path)")
+                romStatusMessage = "C64 ROMs loaded from \(dir.path)"
+                print(romStatusMessage)
             } else {
-                print("WARNING: Not all ROM files found in \(dir.path)")
+                romStatusMessage = "Not all C64 ROM files found in \(dir.path)"
+                print("WARNING: \(romStatusMessage)")
+                return false
             }
 
             if let driveROM = driveROMData {
                 c64.loadDriveROM(driveROM)
+                romStatusMessage = "C64 and 1541 ROMs loaded from \(dir.path)"
                 print("1541 drive ROM loaded (\(driveROM.count) bytes)")
             }
+            return true
         } catch {
+            romStatusMessage = "Error loading ROMs: \(error.localizedDescription)"
             print("ERROR loading ROMs: \(error)")
+            return false
         }
     }
 

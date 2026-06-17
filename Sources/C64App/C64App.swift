@@ -77,20 +77,14 @@ struct C64App: App {
                 Toggle("True Drive Emulation (1541)", isOn: Binding(
                     get: { emulator.c64.trueDriveEmulation },
                     set: { enabled in
-                        emulator.c64.trueDriveEmulationMode = enabled ? .compat1541 : .off
-                        if enabled {
-                            // Sync IEC bus from current CIA2 state before powering on drive
-                            emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portA, ddra: emulator.c64.cia2.ddra)
-                            emulator.c64.drive1541.powerOn()
-                            print("True drive emulation enabled")
-                        } else {
-                            emulator.c64.drive1541.enabled = false
-                            print("True drive emulation disabled (using Kernal traps)")
-                        }
-                        emulator.refreshStatus()
+                        emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
                     }
                 ))
             }
+        }
+
+        Settings {
+            SettingsView(emulator: emulator)
         }
 
         // Debugger window

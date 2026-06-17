@@ -41,6 +41,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 ### Recent emulation work
 
+- The macOS app now has Settings for machine/drive profile selection and local ROM file paths instead of relying on distributable bundled ROMs
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
@@ -69,12 +70,14 @@ swift build -c release
 
 ### ROMs
 
-You need C64 ROM files and a 1541 drive ROM placed in `Sources/C64App/ROMS/`:
+ROM files are copyrighted and are not distributed with this project. Open the app's Settings window and choose local paths for:
 
-- `basic` — BASIC ROM (8K)
-- `kernal` — Kernal ROM (8K)
-- `characters` — Character ROM (4K)
-- `1541` — 1541/1541C drive ROM (16K)
+- BASIC ROM (8K)
+- Kernal ROM (8K)
+- Character ROM (4K)
+- 1541/1541C/1541-II drive ROM (16K)
+
+For local development and compatibility testing, the app still falls back to untracked ROM files under `C64/ROMS` or `Sources/C64App/ROMS` when explicit Settings paths are not configured.
 
 ## Running
 
