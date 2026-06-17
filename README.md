@@ -9,7 +9,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Boots to the C64 BASIC screen
 - Keyboard input, joystick (numpad)
 - Audio output (SID chip)
-- Loads PRG, D64, G64, T64, and TAP files
+- Loads PRG, D64, G64, T64, TAP, and standard CRT cartridge files
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
 - Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
@@ -26,6 +26,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
+| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping |
 
 ### What needs work
 
@@ -34,12 +35,13 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - 1541 SAVE/write/format support is deferred until read compatibility is stable
 - Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
 - SID filter is simplified
-- No REU, cartridge, or expansion port support
+- Banked/freezer/fastload cartridges, EasyFlash, REU, and expansion-port DMA/I/O are not implemented
 
 See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
 
 ### Recent emulation work
 
+- Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
 - VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
 - VIC-II bad-line character fetches now stall the C64 CPU during the fetch window while VIC/CIA/SID/drive timing continues
@@ -71,8 +73,8 @@ You need C64 ROM files and a 1541 drive ROM placed in `Sources/C64App/ROMS/`:
 
 ### Loading software
 
-- **Drag and drop** D64, G64, PRG, T64, or TAP files onto the window
-- **File menu**: Open Disk Image (Cmd+D), Open Tape (Cmd+T), Load PRG (Cmd+L)
+- **Drag and drop** D64, G64, PRG, T64, TAP, or CRT files onto the window
+- **File menu**: Open Disk Image (Cmd+D), Open Tape (Cmd+T), Load PRG (Cmd+L), Open Cartridge (Cmd+K)
 - **Toolbar**: switch between Fast Load and compatibility True Drive 1541 mode
 - **Drive Status**: inspect mounted media, LED/motor, track, sync, byte-ready, IEC lines, recent command bytes, and detected hang/JAM reason
 - **Reset**: Cmd+Shift+R

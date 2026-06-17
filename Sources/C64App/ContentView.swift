@@ -41,6 +41,11 @@ struct ContentView: View {
                     }
                     .help("Load PRG Program")
 
+                    Button(action: { openCartridge() }) {
+                        Label("Load Cartridge", systemImage: "memorychip")
+                    }
+                    .help("Mount Standard CRT Cartridge Image")
+
                     Divider()
 
                     Toggle(isOn: Binding(
@@ -116,6 +121,16 @@ struct ContentView: View {
         }
     }
 
+    func openCartridge() {
+        openFile(types: ["crt"], title: "Open Cartridge Image") { url in
+            if emulator.c64.mountCartridge(url) {
+                emulator.c64.reset()
+                emulator.refreshStatus()
+                print("Cartridge mounted: \(url.lastPathComponent)")
+            }
+        }
+    }
+
     func openFile(types: [String], title: String, handler: @escaping (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.title = title
@@ -164,6 +179,7 @@ private struct DriveStatusPopover: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 StatusRow(label: "Image", value: status.mountedDiskName ?? "none")
+                StatusRow(label: "Cartridge", value: status.mountedCartridgeName ?? "none")
                 StatusRow(label: "Media", value: mediaDescription)
                 StatusRow(label: "Capability", value: capabilityDescription)
                 StatusRow(label: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")")
@@ -287,6 +303,12 @@ final class EmulatorController: ObservableObject {
             c64.loadPRG(url, autoRun: true)
             refreshStatus()
             print("PRG loaded: \(url.lastPathComponent)")
+        case "crt":
+            if c64.mountCartridge(url) {
+                c64.reset()
+                refreshStatus()
+                print("Cartridge mounted: \(url.lastPathComponent)")
+            }
         default:
             // Try to guess: if < 200K, probably PRG; if ~170K, probably D64
             if let data = try? Data(contentsOf: url) {

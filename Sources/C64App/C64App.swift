@@ -44,6 +44,17 @@ struct C64App: App {
                 }
                 .keyboardShortcut("l", modifiers: [.command])
 
+                Button("Open Cartridge Image (CRT)...") {
+                    openFile(types: ["crt"], title: "Open Cartridge Image") { url in
+                        if emulator.c64.mountCartridge(url) {
+                            emulator.c64.reset()
+                            emulator.refreshStatus()
+                            print("Cartridge mounted: \(url.lastPathComponent)")
+                        }
+                    }
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+
                 Divider()
 
                 Button("Reset C64") {

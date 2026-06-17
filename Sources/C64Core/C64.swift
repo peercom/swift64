@@ -26,6 +26,7 @@ public final class C64 {
         public let cpuJammed: Bool
         public let totalCycles: UInt64
         public let mountedDiskName: String?
+        public let mountedCartridgeName: String?
         public let mountedDiskFormat: DiskImage.Format?
         public let mediaCapabilities: DiskImage.Capabilities?
         public let drive: Drive1541.StatusSnapshot
@@ -84,6 +85,9 @@ public final class C64 {
 
     /// Display name of the most recently mounted disk image, if any.
     public private(set) var mountedDiskName: String?
+
+    /// Display name of the mounted cartridge image, if any.
+    public private(set) var mountedCartridgeName: String?
 
     /// Last detected emulator failure/hang reason for diagnostics.
     public private(set) var lastFailureReason: String?
@@ -247,6 +251,7 @@ public final class C64 {
             cpuJammed: cpu.jammed,
             totalCycles: cpu.totalCycles,
             mountedDiskName: mountedDiskName,
+            mountedCartridgeName: mountedCartridgeName,
             mountedDiskFormat: mountedDiskImage?.format,
             mediaCapabilities: mountedDiskImage?.capabilities,
             drive: drive1541.statusSnapshot,
@@ -292,6 +297,33 @@ public final class C64 {
     /// Mount a T64/TAP tape image.
     public func mountTape(_ url: URL) -> Bool {
         return tapeUnit.mountFromFile(url)
+    }
+
+    /// Mount a CRT cartridge image.
+    @discardableResult
+    public func mountCartridge(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        if mountCartridge(data) {
+            mountedCartridgeName = url.lastPathComponent
+            return true
+        }
+        return false
+    }
+
+    /// Mount a CRT cartridge image from data.
+    @discardableResult
+    public func mountCartridge(_ data: Data) -> Bool {
+        guard let cartridge = Cartridge.parseCRT(data) else { return false }
+        memory.cartridge = cartridge
+        mountedCartridgeName = cartridge.name
+        clearFailureStatus()
+        return true
+    }
+
+    public func unmountCartridge() {
+        memory.cartridge = nil
+        mountedCartridgeName = nil
+        clearFailureStatus()
     }
 
     /// Load a PRG file directly into RAM.

@@ -22,6 +22,9 @@ public final class MemoryMap: Bus {
     /// Character ROM (4K, mapped at $D000-$DFFF when CHAREN=0 and I/O visible)
     public var charROM = [UInt8](repeating: 0, count: 4096)
 
+    /// Mounted cartridge ROM, if any.
+    public var cartridge: Cartridge?
+
     // MARK: - CPU port
 
     /// CPU port data direction register ($0000)
@@ -81,9 +84,14 @@ public final class MemoryMap: Bus {
 
         let value: UInt8
         switch addr {
+        case 0x8000...0x9FFF:
+            value = cartridge?.read(address) ?? ram[addr]
+
         case 0xA000...0xBFFF:
             // BASIC ROM or RAM
-            if loram && hiram {
+            if let cartridgeValue = cartridge?.read(address) {
+                value = cartridgeValue
+            } else if loram && hiram {
                 value = basicROM[addr - 0xA000]
             } else {
                 value = ram[addr]
@@ -105,7 +113,9 @@ public final class MemoryMap: Bus {
 
         case 0xE000...0xFFFF:
             // Kernal ROM or RAM
-            if hiram {
+            if let cartridgeValue = cartridge?.read(address) {
+                value = cartridgeValue
+            } else if hiram {
                 value = kernalROM[addr - 0xE000]
             } else {
                 value = ram[addr]
