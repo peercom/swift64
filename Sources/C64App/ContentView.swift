@@ -440,11 +440,11 @@ final class EmulatorController: ObservableObject {
             let basic = try Data(contentsOf: URL(fileURLWithPath: basicPath))
             let kernal = try Data(contentsOf: URL(fileURLWithPath: kernalPath))
             let characters = try Data(contentsOf: URL(fileURLWithPath: characterPath))
-            c64.loadROMs(basic: basic, kernal: kernal, charset: characters)
+            try c64.loadROMsValidated(basic: basic, kernal: kernal, charset: characters)
 
             if !drivePath.isEmpty {
                 let drive = try Data(contentsOf: URL(fileURLWithPath: drivePath))
-                c64.loadDriveROM(drive)
+                try c64.loadDriveROMValidated(drive)
                 romStatusMessage = "ROMs loaded from configured paths, including 1541 drive ROM."
             } else {
                 romStatusMessage = "C64 ROMs loaded from configured paths. 1541 drive ROM is not configured."
@@ -482,7 +482,7 @@ final class EmulatorController: ObservableObject {
             }
 
             if let basic = basicData, let kernal = kernalData, let charset = charData {
-                c64.loadROMs(basic: basic, kernal: kernal, charset: charset)
+                try c64.loadROMsValidated(basic: basic, kernal: kernal, charset: charset)
                 romStatusMessage = "C64 ROMs loaded from \(dir.path)"
                 print(romStatusMessage)
             } else {
@@ -492,7 +492,7 @@ final class EmulatorController: ObservableObject {
             }
 
             if let driveROM = driveROMData {
-                c64.loadDriveROM(driveROM)
+                try c64.loadDriveROMValidated(driveROM)
                 romStatusMessage = "C64 and 1541 ROMs loaded from \(dir.path)"
                 print("1541 drive ROM loaded (\(driveROM.count) bytes)")
             }

@@ -15,9 +15,24 @@ public enum TrueDriveEmulationMode: Equatable {
     }
 }
 
+public enum C64ROMValidationError: Error, Equatable, LocalizedError {
+    case invalidSize(name: String, expected: Int, actual: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidSize(name, expected, actual):
+            return "\(name) ROM must be \(expected) bytes; got \(actual)."
+        }
+    }
+}
+
 /// Complete C64 machine emulation.
 /// Orchestrates CPU, VIC-II, SID, CIAs, and memory.
 public final class C64 {
+    public static let basicROMSize = 8_192
+    public static let kernalROMSize = 8_192
+    public static let characterROMSize = 4_096
+    public static let drive1541ROMSize = 16_384
 
     public struct EmulationStatus: Equatable {
         public let running: Bool
@@ -232,7 +247,7 @@ public final class C64 {
         let basic = try Data(contentsOf: URL(fileURLWithPath: basicPath))
         let kernal = try Data(contentsOf: URL(fileURLWithPath: kernalPath))
         let charset = try Data(contentsOf: URL(fileURLWithPath: charsetPath))
-        memory.loadROMs(basic: basic, kernal: kernal, charset: charset)
+        try loadROMsValidated(basic: basic, kernal: kernal, charset: charset)
     }
 
     /// Load ROMs from Data objects.
@@ -240,9 +255,29 @@ public final class C64 {
         memory.loadROMs(basic: basic, kernal: kernal, charset: charset)
     }
 
+    /// Load ROMs after validating expected stock C64 ROM sizes.
+    public func loadROMsValidated(basic: Data, kernal: Data, charset: Data) throws {
+        try validateROMSize(basic, name: "BASIC", expected: Self.basicROMSize)
+        try validateROMSize(kernal, name: "Kernal", expected: Self.kernalROMSize)
+        try validateROMSize(charset, name: "Character", expected: Self.characterROMSize)
+        loadROMs(basic: basic, kernal: kernal, charset: charset)
+    }
+
     /// Load 1541 drive ROM (16KB).
     public func loadDriveROM(_ data: Data) {
         drive1541.loadROM(data)
+    }
+
+    /// Load 1541 drive ROM after validating the expected 16KB size.
+    public func loadDriveROMValidated(_ data: Data) throws {
+        try validateROMSize(data, name: "1541 drive", expected: Self.drive1541ROMSize)
+        loadDriveROM(data)
+    }
+
+    private func validateROMSize(_ data: Data, name: String, expected: Int) throws {
+        guard data.count == expected else {
+            throw C64ROMValidationError.invalidSize(name: name, expected: expected, actual: data.count)
+        }
     }
 
     public var mountedDiskImage: DiskImage? {
