@@ -7,17 +7,7 @@ import Foundation
 /// the GCR data back to standard 256-byte sectors so the existing
 /// DiskDrive infrastructure can serve files via Kernal traps.
 private func g64log(_ msg: String) {
-    let line = msg + "\n"
-    let path = "/tmp/c64_debug.log"
-    if let data = line.data(using: .utf8) {
-        if let fh = FileHandle(forWritingAtPath: path) {
-            fh.seekToEndOfFile()
-            fh.write(data)
-            fh.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: path, contents: data)
-        }
-    }
+    C64Trace.log(.gcr, msg)
 }
 
 public enum G64Parser {

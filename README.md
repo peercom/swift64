@@ -1,6 +1,6 @@
 # C64 Emulator
 
-A Commodore 64 emulator written in Swift, targeting macOS. This project is in **early stages** — it boots to BASIC and runs simple programs, but broader compatibility with real-world software and games is still being developed and tested.
+A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, runs simple programs, supports fast media loading, and now includes an in-progress true-drive 1541 path for compatibility testing with low-level disk images.
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
 
@@ -10,27 +10,39 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Keyboard input, joystick (numpad)
 - Audio output (SID chip)
 - Loads PRG, D64, G64, T64, and TAP files
+- Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
+- Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
+- Focused regression coverage for VIC, CIA, disk, IEC, GCR, SID, and 1541 behavior
 
 ### What works
 
 | Component | Status |
 |-----------|--------|
 | 6502 CPU | Cycle-accurate, 222 opcodes including undocumented |
-| VIC-II | Rasterline rendering, sprites, bad lines, raster IRQ |
+| VIC-II | Rasterline rendering, sprites, bad-line CPU stalls, raster/collision IRQs |
 | SID | 3 voices, ADSR envelopes, waveforms, basic filter |
-| CIA 1 & 2 | Timers, keyboard matrix, joystick, IRQ/NMI |
+| CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
-| Disk Drive | D64 and G64 image support via Kernal traps |
+| Disk Drive | D64/G64 via Kernal traps, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
 
 ### What needs work
 
 - Many games and demos will not run correctly yet — VIC-II timing, sprite multiplexing, and advanced raster effects need further refinement
-- No serial bus emulation (disk access is handled via Kernal traps, not cycle-accurate 1541 emulation)
-- Copy-protected software that relies on drive timing will not work
+- True-drive 1541 compatibility is read-focused and still being validated against protected G64/custom-loader disks
+- 1541 SAVE/write/format support is deferred until read compatibility is stable
+- Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
 - SID filter is simplified
 - No REU, cartridge, or expansion port support
+
+### Recent emulation work
+
+- True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
+- VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
+- VIC-II bad-line character fetches now stall the C64 CPU during the fetch window while VIC/CIA/SID/drive timing continues
+- CIA interrupt masking/read-clear behavior now deasserts CPU IRQ/NMI lines cleanly and avoids duplicate active callbacks
+- C64-level interrupt tests cover combined CIA/VIC IRQ assertion and deassertion
 
 ## Building
 
@@ -42,11 +54,12 @@ swift build -c release
 
 ### ROMs
 
-You need C64 ROM files (not included) placed in `Sources/C64App/ROMS/`:
+You need C64 ROM files and a 1541 drive ROM placed in `Sources/C64App/ROMS/`:
 
 - `basic` — BASIC ROM (8K)
 - `kernal` — Kernal ROM (8K)
 - `characters` — Character ROM (4K)
+- `1541` — 1541/1541C drive ROM (16K)
 
 ## Running
 
@@ -58,7 +71,50 @@ You need C64 ROM files (not included) placed in `Sources/C64App/ROMS/`:
 
 - **Drag and drop** D64, G64, PRG, T64, or TAP files onto the window
 - **File menu**: Open Disk Image (Cmd+D), Open Tape (Cmd+T), Load PRG (Cmd+L)
+- **Toolbar**: switch between Fast Load and compatibility True Drive 1541 mode
+- **Drive Status**: inspect mounted media, LED/motor, track, sync, byte-ready, IEC lines, recent command bytes, and detected hang/JAM reason
 - **Reset**: Cmd+Shift+R
+
+### True-drive compatibility testing
+
+Local disk-image matrix tests are opt-in because they depend on files under `C64/DISKS`:
+
+```sh
+SWIFT64_LOCAL_DISK_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesMountAndEncodeWhenEnabled
+SWIFT64_LOCAL_TRUE_DRIVE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesTrueDriveDirectorySmokeWhenEnabled
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+```
+
+The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter screen/PC milestones with an untracked `C64/DISKS/compatibility.json` file.
+
+Useful fast regression slices:
+
+```sh
+swift test --filter VICTests
+swift test --filter CIATests
+swift test --filter C64InterruptTests
+swift test --filter C64TimingTests
+swift test --filter Drive1541Tests/testTrueDriveD64DirectoryLoadStartsGCRReadHardware
+swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
+```
+
+Example milestone manifest:
+
+```json
+{
+  "milestones": [
+    {
+      "file": "great_giana_sisters[time_warp_1987](pal)(r1)(!).g64",
+      "command": "LOAD\"*\",8,1",
+      "maxCycles": 24000000,
+      "pcStart": 49152,
+      "pcEnd": 53247,
+      "minGCRReads": 64,
+      "minByteReady": 512
+    }
+  ]
+}
+```
 
 ### Keyboard
 

@@ -7,6 +7,36 @@ import Emu6502
 /// and a GCR read/write head. Communicates with the C64 via the IEC serial bus.
 public final class Drive1541 {
 
+    public enum DriveModel: Equatable {
+        case model1541
+        case model1541C
+    }
+
+    public struct StatusSnapshot: Equatable {
+        public let enabled: Bool
+        public let model: DriveModel
+        public let motorOn: Bool
+        public let ledOn: Bool
+        public let halfTrack: Int
+        public let track: Int
+        public let headBitPosition: Int
+        public let syncDetected: Bool
+        public let byteReady: Bool
+        public let byteReadyCount: UInt64
+        public let via2PortAReadCount: UInt64
+        public let syncDetectionCount: UInt64
+        public let writeProtected: Bool
+        public let hasDisk: Bool
+        public let hasNativeLowLevelImage: Bool
+        public let cpuPC: UInt16
+        public let cpuJammed: Bool
+        public let cycleCount: UInt64
+        public let lastIECCommandSummary: String
+        public let noProgressCycleCount: UInt64
+        public let lastFailureReason: String?
+        public let iec: IECBus.Snapshot?
+    }
+
     // MARK: - Components
 
     public let cpu: CPU6502
@@ -17,6 +47,12 @@ public final class Drive1541 {
 
     /// Reference to the shared IEC bus
     public weak var iecBus: IECBus?
+
+    public var driveModel: DriveModel = .model1541 {
+        didSet {
+            is1541C = driveModel == .model1541C
+        }
+    }
 
     // MARK: - Drive state
 
@@ -32,8 +68,8 @@ public final class Drive1541 {
     /// Current track number (1-based)
     public var track: Int { (halfTrack / 2) + 1 }
 
-    /// Head position within the current track's GCR data
-    public var headPosition: Int = 0
+    /// Head position within the current track's GCR data (in bits)
+    public var headBitPosition: Int = 0
 
     /// Stepper motor phase (0-3)
     var stepperPhase: Int = 0
@@ -44,24 +80,70 @@ public final class Drive1541 {
     /// Drive LED state (directly from VIA2 PB3 typically, but also error flash)
     public var ledOn: Bool = false
 
-    /// Byte counter for GCR byte timing
-    var byteReadyCycles: Int = 0
-
-    /// SYNC detected flag (10+ consecutive 1-bits under head)
+    /// SYNC detected flag (10-bit shift register == 0x3FF)
     var syncDetected: Bool = false
 
-    /// Number of consecutive 1-bits seen
-    var consecutiveOnes: Int = 0
+    /// 10-bit shift register (GCR read head hardware)
+    var shiftRegister: UInt16 = 0
 
-    /// Current GCR byte being shifted in
-    var currentByte: UInt8 = 0
-    var bitsShifted: Int = 0
+    /// Bits collected since last aligned byte output
+    var bitCounter: Int = 0
+
+    /// UE7 4-bit counter (clocked at 16 MHz, resets at speed-zone value)
+    var ue7Counter: Int = 0
+
+    /// UF4 4-bit counter (clocked by UE7 carry)
+    var uf4Counter: Int = 0
+
+    /// Byte-ready edge flag (one-shot, drives SO pin on CPU)
+    var byteReadyEdge: Bool = false
+
+    /// Byte-ready level flag (cleared when VIA2 PA is read)
+    var byteReadyLevel: Bool = false
+
+    /// SO delay in 16 MHz sub-ticks (aligned to 16-cycle boundary, range 10-25)
+    var soDelay: Int = 0
+
+    /// Byte-ready generation enabled (controlled by VIA2 CA2 output state)
+    var byteReadyActive: Bool = true
+
+    /// Total byte-ready pulses generated since power-on/reset.
+    public private(set) var byteReadyCount: UInt64 = 0
+
+    /// Total reads from VIA2 Port A since power-on/reset.
+    public private(set) var via2PortAReadCount: UInt64 = 0
+
+    /// Bytes consumed from VIA2 Port A by the 1541 ROM read path.
+    public private(set) var via2PortAReadBytes: [UInt8] = []
+
+    /// Total SYNC detections since power-on/reset.
+    public private(set) var syncDetectionCount: UInt64 = 0
+
+    /// Decoded IEC command bytes observed by the 1541 ROM ATN handler.
+    /// This is a compact acceptance-test/debug aid; the ROM remains authoritative.
+    public private(set) var decodedIECCommandBytes: [UInt8] = []
+
+    /// Decoded IEC listener data bytes observed by the 1541 ROM receive path.
+    public private(set) var decodedIECDataBytes: [UInt8] = []
+
+    /// Diagnostic fields populated by the host C64 progress monitor.
+    public var noProgressCycleCount: UInt64 = 0
+    public var lastFailureReason: String?
+
+    var debugBytesRead: Int = 0
+    var gcrTraceLog: Int = 0
 
     /// Whether the drive is powered on / enabled
     public var enabled: Bool = true
 
     /// Debug: cycle counter for periodic logging
     var debugCycleCount: UInt64 = 0
+
+    /// IEC trace log counter (limits output)
+    var iecTraceLog: Int = 0
+    /// Drive PC trace log counter (separate limit)
+    var drvPCLog: Int = 0
+    var diskPCTraceLog: Int = 0
 
     // MARK: - Init
 
@@ -87,11 +169,40 @@ public final class Drive1541 {
 
         // VIA1 PB write → immediately push new output to bus
         via1.onPortBWrite = { [weak self] in
+            if let pc = self?.cpu.pc {
+                let pbVal = self?.via1.portB ?? 0
+                self?.driveLog("[DRV-VIA1] onPortBWrite PC=$\(String(format:"%04X", pc)) PB=$\(String(format:"%02X", pbVal))")
+                if pbVal == 0x10 {
+                    self?.driveLog("[DRV-10] WRITE OF $10 AT PC=$\(String(format:"%04X", pc))")
+                }
+            }
             self?.updateBusFromVIA1()
         }
 
         // VIA1 DDRB write also affects driven outputs
         // (already handled by onPortBWrite which fires on case 0x02 too)
+
+        // VIA2 CA2 output → byte-ready gating (per VICE: set_ca2 in via2d.c)
+        via2.onCA2Change = { [weak self] state in
+            self?.byteReadyActive = state
+            // If CA2 goes high while byte_ready_edge is pending, fire SO now
+            if state, let s = self, s.byteReadyEdge {
+                s.cpu.pulseSO()
+                s.byteReadyEdge = false
+            }
+        }
+
+        // VIA2 port A read → clear byte-ready signals (per VICE: read_pra in via2d.c)
+        via2.onPortARead = { [weak self] in
+            guard let s = self else { return }
+            s.via2PortAReadCount += 1
+            if s.via2PortAReadBytes.count < 512 {
+                s.via2PortAReadBytes.append(s.via2.portAInput)
+            }
+            s.byteReadyLevel = false
+            s.byteReadyEdge = false
+            s.via2.ca1 = false  // release byte-ready level signal
+        }
     }
 
     // MARK: - ROM loading
@@ -107,6 +218,7 @@ public final class Drive1541 {
         let resetHi = bytes[0x3FFD]
         
         is1541C = detect1541C(rom: bytes)
+        driveModel = is1541C ? .model1541C : .model1541
         driveLog("[1541] ROM loaded: \(bytes.count) bytes, reset vector=$\(String(format: "%02X%02X", resetHi, resetLo)), 1541C detected: \(is1541C)")
     }
 
@@ -123,8 +235,7 @@ public final class Drive1541 {
                 break
             }
         }
-        // Always default to true if the user relies on it, since standard 1541 ignores PA0 anyway.
-        return foundCheck || true 
+        return foundCheck
     }
 
     /// Load ROM from two 8KB halves (common split: c000.bin + e000.bin).
@@ -144,8 +255,74 @@ public final class Drive1541 {
         }
     }
 
+    public func insertDiskImage(_ image: DiskImage) -> Bool {
+        disk.tracks = image.tracks.map { $0?.bytes }
+        disk.trackInfos = image.tracks
+        disk.image = image
+        return image.tracks.contains { $0 != nil }
+    }
+
     public func ejectDisk() {
         disk.tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        disk.trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        disk.image = nil
+    }
+
+    public var statusSnapshot: StatusSnapshot {
+        StatusSnapshot(
+            enabled: enabled,
+            model: driveModel,
+            motorOn: motorOn,
+            ledOn: ledOn,
+            halfTrack: halfTrack,
+            track: track,
+            headBitPosition: headBitPosition,
+            syncDetected: syncDetected,
+            byteReady: byteReadyLevel || byteReadyEdge,
+            byteReadyCount: byteReadyCount,
+            via2PortAReadCount: via2PortAReadCount,
+            syncDetectionCount: syncDetectionCount,
+            writeProtected: disk.writeProtected,
+            hasDisk: disk.hasDisk,
+            hasNativeLowLevelImage: disk.hasNativeLowLevelImage,
+            cpuPC: cpu.pc,
+            cpuJammed: cpu.jammed,
+            cycleCount: debugCycleCount,
+            lastIECCommandSummary: Self.hexSummary(decodedIECCommandBytes.suffix(12)),
+            noProgressCycleCount: noProgressCycleCount,
+            lastFailureReason: lastFailureReason,
+            iec: iecBus?.snapshot
+        )
+    }
+
+    public var progressSignature: UInt64 {
+        var value = UInt64(cpu.pc)
+        value = value &* 1099511628211 &+ UInt64(headBitPosition)
+        value = value &* 1099511628211 &+ UInt64(halfTrack)
+        value = value &* 1099511628211 &+ byteReadyCount
+        value = value &* 1099511628211 &+ via2PortAReadCount
+        value = value &* 1099511628211 &+ syncDetectionCount
+        value = value &* 1099511628211 &+ UInt64(decodedIECCommandBytes.count)
+        value = value &* 1099511628211 &+ UInt64(decodedIECDataBytes.count)
+        if motorOn { value &+= 0x1000_0000 }
+        if ledOn { value &+= 0x2000_0000 }
+        if let iec = iecBus?.snapshot {
+            if iec.atnLine { value &+= 1 }
+            if iec.clockLine { value &+= 2 }
+            if iec.dataLine { value &+= 4 }
+            if iec.c64Atn { value &+= 8 }
+            if iec.c64Clock { value &+= 16 }
+            if iec.c64Data { value &+= 32 }
+            if iec.driveClock { value &+= 64 }
+            if iec.driveData { value &+= 128 }
+            if iec.driveAtn { value &+= 256 }
+        }
+        return value
+    }
+
+    private static func hexSummary<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+        let values = bytes.map { String(format: "%02X", $0) }
+        return values.isEmpty ? "none" : values.joined(separator: " ")
     }
 
     // MARK: - Power on
@@ -155,16 +332,32 @@ public final class Drive1541 {
             driveLog("[1541] cannot power on — ROM not loaded (size=\(memory.rom.count))")
             return
         }
+        C64Trace.resetLog()
+        iecTraceLog = 0
+        drvPCLog = 0
+        gcrTraceLog = 0
+        diskPCTraceLog = 0
+        memory.via1WriteLog = 0
+
         let resetLo = memory.rom[0x3FFC]  // $FFFC - $C000 = $3FFC
         let resetHi = memory.rom[0x3FFD]
         driveLog("[1541] powerOn: ROM reset vector = $\(String(format: "%02X%02X", resetHi, resetLo))")
 
         cpu.powerOn()
         halfTrack = 36  // Track 18
-        headPosition = 0
+        headBitPosition = 0
         motorOn = false
         enabled = true
         debugCycleCount = 0
+        byteReadyCount = 0
+        via2PortAReadCount = 0
+        via2PortAReadBytes.removeAll(keepingCapacity: true)
+        syncDetectionCount = 0
+        decodedIECCommandBytes.removeAll(keepingCapacity: true)
+        decodedIECDataBytes.removeAll(keepingCapacity: true)
+        noProgressCycleCount = 0
+        lastFailureReason = nil
+
 
         // Note: onBusUpdate is NOT wired to updateVIA1FromBus.
         // The drive's VIA1 inputs are updated once per drive tick, not on
@@ -172,9 +365,31 @@ public final class Drive1541 {
         // overwriting portBInput before the drive CPU can read it.
         // The C64 side reads bus state via computed properties (dataLine, etc.)
         // which always reflect the latest drive outputs.
-        driveLog("[1541] powerOn complete")
-
         driveLog("[1541] powerOn complete: PC=$\(String(format: "%04X", cpu.pc))")
+
+        // Dump key ROM routines for debugging
+        let irqVec = UInt16(memory.rom[0x3FFE]) | (UInt16(memory.rom[0x3FFF]) << 8)
+        driveLog("[ROM] IRQ vector = $\(String(format:"%04X", irqVec))")
+        // Dump ATN handler area ($E85B-$E8F0)
+        var dump = "[ROM] $E850: "
+        for addr in 0xE850...0xE8F0 {
+            dump += String(format: "%02X ", memory.rom[addr - 0xC000])
+            if (addr & 0x0F) == 0x0F {
+                driveLog(dump)
+                dump = "[ROM] $\(String(format:"%04X", addr+1)): "
+            }
+        }
+        if !dump.hasSuffix(": ") { driveLog(dump) }
+        // Dump receive byte routine ($E9C0-$E9F0)
+        dump = "[ROM] $E9C0: "
+        for addr in 0xE9C0...0xE9F0 {
+            dump += String(format: "%02X ", memory.rom[addr - 0xC000])
+            if (addr & 0x0F) == 0x0F {
+                driveLog(dump)
+                dump = "[ROM] $\(String(format:"%04X", addr+1)): "
+            }
+        }
+        if !dump.hasSuffix(": ") { driveLog(dump) }
     }
 
     public func reset() {
@@ -183,53 +398,102 @@ public final class Drive1541 {
 
     // MARK: - Tick (one drive clock cycle)
 
+    var debugLogCount = 0
     public func tick() {
+        debugLogCount += 1
+        if debugLogCount % 200000 == 0 {
+            driveLog("[1541] PC=$\(String(cpu.pc, radix: 16, uppercase: true)) flags=$\(String(cpu.p, radix: 16)) A=$\(String(cpu.a, radix: 16)) X=$\(String(cpu.x, radix: 16)) Y=$\(String(cpu.y, radix: 16))")
+        }
         guard enabled else { return }
 
         debugCycleCount += 1
 
         // Log key serial bus events in the drive
         if cpu.cycle == 0 {
-            switch cpu.pc {
-            case 0xE85B:
-                driveLog("[DRV] ATN handler entered A=$\(String(format:"%02X",cpu.a))")
-            case 0xE884:
-                driveLog("[DRV] JSR $E9C9 (receive byte) ATN=\(iecBus?.atnLine ?? true) CLK=\(iecBus?.clockLine ?? true)")
-            case 0xE887:
-                driveLog("[DRV] Received byte A=$\(String(format:"%02X",cpu.a)) drvCyc=\(debugCycleCount)")
-            case 0xE87B:
-                let pbRead = via1.readRegister(0x00)
-                driveLog("[DRV] ATN check: PB=$\(String(format:"%02X",pbRead)) bit7=\(pbRead >> 7) atnLine=\(iecBus?.atnLine ?? true) portBInput=$\(String(format:"%02X",via1.portBInput))")
-            case 0xE8D7:
-                driveLog("[DRV] ATN released path")
-            case 0xE9AA:
-                driveLog("[DRV] Set DATA OUT (PB |= $02)")
-            case 0xE99C:
-                driveLog("[DRV] Clear DATA OUT (PB &= $FD)")
-            default: break
+            let pc = cpu.pc
+            // Log all instruction executions in the ATN handler range ($E850-$E910)
+            if pc >= 0xE850 && pc <= 0xE910 && drvPCLog < 500 {
+                drvPCLog += 1
+                let pbRead = (pc >= 0xE870 && pc <= 0xE890) ? via1.readRegister(0x00) : 0
+                driveLog("[DRV-PC] @\(debugCycleCount) PC=$\(String(format:"%04X",pc)) A=$\(String(format:"%02X",cpu.a)) X=$\(String(format:"%02X",cpu.x)) Y=$\(String(format:"%02X",cpu.y)) P=$\(String(format:"%02X",cpu.p))\(pbRead != 0 ? " PB=$\(String(format:"%02X",pbRead))" : "")")
+            }
+            // Log receive byte routine ($E990-$E9F0)
+            if pc >= 0xE990 && pc <= 0xE9F0 && drvPCLog < 500 {
+                drvPCLog += 1
+                driveLog("[DRV-RX] @\(debugCycleCount) PC=$\(String(format:"%04X",pc)) A=$\(String(format:"%02X",cpu.a)) P=$\(String(format:"%02X",cpu.p))")
+            }
+            if C64Trace.isEnabled(.gcr),
+               ((pc >= 0xD000 && pc <= 0xDFFF) || pc >= 0xF000),
+               diskPCTraceLog < 1000 {
+                diskPCTraceLog += 1
+                C64Trace.log(.gcr, "[DRV-DOS] @\(debugCycleCount) PC=$\(String(format:"%04X",pc)) A=$\(String(format:"%02X",cpu.a)) X=$\(String(format:"%02X",cpu.x)) Y=$\(String(format:"%02X",cpu.y)) P=$\(String(format:"%02X",cpu.p)) PB2=$\(String(format:"%02X",via2.portB)) PA2=$\(String(format:"%02X",via2.portAInput)) V=\(cpu.getFlag(Flags.overflow)) BR=\(byteReadyCount) PAreads=\(via2PortAReadCount)")
             }
         }
+
+        // --- IEC bus trace: capture state before updates ---
+        let prevCA1 = via1.ca1
+        let prevIRQ = cpu.irqLine
+        let prevVIA1PB = via1.portB
+        let prevVIA1DDRB = via1.ddrb
 
         // Update IEC bus → VIA1 inputs
         updateVIA1FromBus()
 
-        // Tick VIAs
+        // Log CA1 state change (ATN edge at drive)
+        if via1.ca1 != prevCA1 && iecTraceLog < 500 {
+            iecTraceLog += 1
+            driveLog("[IEC-TRACE] @\(debugCycleCount) CA1: \(prevCA1)→\(via1.ca1) (atnLine=\(iecBus?.atnLine ?? true)) VIA1: PCR=$\(String(format:"%02X",via1.pcr)) IER=$\(String(format:"%02X",via1.ier)) IFR=$\(String(format:"%02X",via1.ifr)) ca1_int_enabled=\(via1.ier & VIA6522.IRQ.ca1 != 0)")
+        }
+
+        // Tick VIAs (timers, edge detection)
         via1.tick()
         via2.tick()
+
+        // Log if IRQ line changed after VIA tick
+        if cpu.irqLine != prevIRQ && iecTraceLog < 500 {
+            iecTraceLog += 1
+            driveLog("[IEC-TRACE] @\(debugCycleCount) IRQ: \(prevIRQ)→\(cpu.irqLine) PC=$\(String(format:"%04X",cpu.pc)) cycle=\(cpu.cycle) VIA1.IFR=$\(String(format:"%02X",via1.ifr)) VIA2.IFR=$\(String(format:"%02X",via2.ifr))")
+        }
 
         // Update bus from VIA1 outputs
         updateBusFromVIA1()
 
-        // Read VIA2 port B for motor/stepper control
-        updateDriveControl()
+        // Log if drive changed its bus output
+        if (via1.portB != prevVIA1PB || via1.ddrb != prevVIA1DDRB) && iecTraceLog < 500 {
+            let driven = via1.portB & via1.ddrb
+            let prevDriven = prevVIA1PB & prevVIA1DDRB
+            if driven != prevDriven {
+                iecTraceLog += 1
+                driveLog("[IEC-TRACE] @\(debugCycleCount) DRV output changed: PB=$\(String(format:"%02X",via1.portB)) DDRB=$\(String(format:"%02X",via1.ddrb)) driven=$\(String(format:"%02X",driven)) (was $\(String(format:"%02X",prevDriven))) → bus DATA=\(iecBus?.dataLine ?? true) CLK=\(iecBus?.clockLine ?? true)")
+            }
+        }
 
-        // GCR head: advance and feed bytes to VIA2
+        // Read motor/stepper from VIA2 PB (before GCR head)
+        updateMotorAndStepper()
+
+        // GCR head: advance disk and feed bytes to VIA2
         if motorOn {
             tickGCRHead()
+        } else if soDelay > 0 {
+            // Drain pending byte-ready even if motor just stopped
+            soDelay = 0
+            fireByteReady()
         }
+
+        // Update VIA2 PB input (sync, WP) after GCR head so sync state is current
+        updateVIA2Inputs()
 
         // Tick CPU
         cpu.tick()
+
+        if cpu.cycle == 0 && cpu.pc == 0xE887 && decodedIECCommandBytes.count < 64 {
+            decodedIECCommandBytes.append(cpu.a)
+            driveLog("[DRV-CMD] @\(debugCycleCount) byte=$\(String(format:"%02X", cpu.a))")
+        }
+        if cpu.cycle == 0 && cpu.pc == 0xEA47 && decodedIECDataBytes.count < 256 {
+            decodedIECDataBytes.append(cpu.a)
+            driveLog("[DRV-DATA] @\(debugCycleCount) byte=$\(String(format:"%02X", cpu.a))")
+        }
     }
 
     // MARK: - IEC bus interface (VIA1)
@@ -263,92 +527,149 @@ public final class Drive1541 {
 
     // MARK: - Disk controller (VIA2)
 
-    func updateDriveControl() {
+    /// Read motor, LED, and stepper state from VIA2 PB (called before GCR head)
+    func updateMotorAndStepper() {
         let pb = via2.portB
+        let wasMotorOn = motorOn
+        let wasLEDOn = ledOn
 
-        // Motor control (PB2)
         motorOn = pb & 0x04 != 0
-
-        // LED (PB3)
         ledOn = pb & 0x08 != 0
+
+        if (motorOn != wasMotorOn || ledOn != wasLEDOn) && gcrTraceLog < 200 {
+            gcrTraceLog += 1
+            C64Trace.log(.gcr, "[GCR-MOTOR] @\(debugCycleCount) motor=\(motorOn) led=\(ledOn) PB=$\(String(format:"%02X", pb)) track=\(track)")
+        }
 
         // Stepper motor (PB0-PB1)
         let newPhase = Int(pb & 0x03)
         if newPhase != stepperPhase {
             let delta = (newPhase - stepperPhase + 4) % 4
+            let oldTrack = track
             if delta == 1 {
-                // Step inward (higher track number, towards hub)
                 if halfTrack < GCRDisk.maxHalfTracks - 1 { halfTrack += 1 }
             } else if delta == 3 {
-                // Step outward (lower track number, towards track 1 stop)
                 if halfTrack > 0 { halfTrack -= 1 }
             }
-            // delta == 2 means two-phase jump, ignored (shouldn't happen in normal operation)
+            if track != oldTrack {
+                debugBytesRead = 0
+            }
+            if track != oldTrack && gcrTraceLog < 200 {
+                gcrTraceLog += 1
+                C64Trace.log(.gcr, "[GCR-STEP] @\(debugCycleCount) halfTrack=\(halfTrack) track=\(track) phase=\(stepperPhase)->\(newPhase)")
+            }
             stepperPhase = newPhase
         }
+    }
 
-        // Speed zone from PB5-PB6
-        // (Used for byte timing in tickGCRHead)
-
-        // Write protect sense on PB4 (active low: 0 = protected)
+    /// Update VIA2 PB input with sync and write-protect state (called after GCR head)
+    func updateVIA2Inputs() {
         var pbInput = via2.portBInput & 0x6F  // Clear bits 4 and 7
         if !disk.writeProtected {
-            pbInput |= 0x10  // WP tab = not protected
+            pbInput |= 0x10
         }
-        // Bit 7: SYNC (0 when sync detected)
         if !syncDetected {
-            pbInput |= 0x80  // No sync — bit 7 = 1
+            pbInput |= 0x80
         }
         via2.portBInput = pbInput
     }
 
-    // MARK: - GCR head simulation
+    // MARK: - GCR head simulation (16 MHz sub-tick model per VICE rotation.c)
 
+    /// Fire the byte-ready signal: SO pin + VIA2 CA1 level
+    func fireByteReady() {
+        byteReadyEdge = true
+        byteReadyLevel = true
+        byteReadyCount += 1
+        if gcrTraceLog < 200 {
+            gcrTraceLog += 1
+            C64Trace.log(.gcr, "[GCR-BYTE] @\(debugCycleCount) count=\(byteReadyCount) PA=$\(String(format:"%02X", via2.portAInput)) track=\(track) bit=\(headBitPosition)")
+        }
+        cpu.pulseSO()
+        via2.ca1 = true  // held high until VIA2 PA is read
+    }
+
+    /// Simulate disk head at 16 MHz granularity (16 sub-ticks per 1 MHz drive cycle).
+    ///
+    /// UE7 is a 4-bit counter clocked at 16 MHz that resets to the speed-zone value (0-3).
+    /// UF4 is a 4-bit counter clocked by UE7 carry. A bit is shifted from the disk
+    /// on the rising edge of UF4 bit 1 (transitions at counts 2, 6, 10, 14).
+    /// This gives 4 bits per 16 UF4 steps, yielding the correct byte rates:
+    ///   Zone 3: 26 cycles/byte, Zone 2: 28, Zone 1: 30, Zone 0: 32
     func tickGCRHead() {
-        let zone = GCRDisk.speedZone(for: track)
-        let cyclesNeeded = GCRDisk.cyclesPerByte[zone]
+        let viaSpeedZone = Int((via2.portB >> 5) & 0x03)
+        let trackInfo = disk.trackInfo(halfTrack: halfTrack)
+        let zone = trackInfo?.speedZone ?? viaSpeedZone
 
-        byteReadyCycles += 1
+        guard let trackData = trackInfo?.bytes ?? disk.tracks[halfTrack], !trackData.isEmpty else {
+            via2.portAInput = 0x00
+            syncDetected = false
+            return
+        }
 
-        if byteReadyCycles >= cyclesNeeded {
-            byteReadyCycles = 0
+        let totalBits = trackInfo?.bitLength ?? trackData.count * 8
 
-            // Read next byte from track
-            guard let trackData = disk.tracks[halfTrack], !trackData.isEmpty else {
-                via2.portAInput = 0x00
-                syncDetected = false
-                return
+        // Process 16 sub-ticks (one 1 MHz drive cycle = 16 × 16 MHz ticks)
+        for subTick in 0..<16 {
+            // SO delay countdown (16 MHz granularity per VICE)
+            if soDelay > 0 {
+                soDelay -= 1
+                if soDelay == 0 {
+                    fireByteReady()
+                }
             }
 
-            let byte = trackData[headPosition % trackData.count]
-            headPosition = (headPosition + 1) % trackData.count
+            // UE7 counter: counts 0-15, resets to zone value on carry
+            ue7Counter += 1
+            if ue7Counter >= 16 {
+                ue7Counter = zone
 
-            // SYNC detection: check for $FF bytes (in real hardware this is bit-level,
-            // but at the byte level, a run of $FF bytes = sync)
-            if byte == 0xFF {
-                consecutiveOnes += 8
-                if consecutiveOnes >= 10 {
-                    syncDetected = true
+                // UF4 counter: clocked by UE7 carry
+                let prevUF4 = uf4Counter
+                uf4Counter = (uf4Counter + 1) & 0x0F
+
+                // Shift a bit on rising edge of UF4 bit 1 (at counts 2, 6, 10, 14)
+                if (uf4Counter & 2) != 0 && (prevUF4 & 2) == 0 {
+                    // Read next bit from track
+                    if headBitPosition >= totalBits { headBitPosition = 0 }
+                    let byteIdx = headBitPosition / 8
+                    let bitIdx = 7 - (headBitPosition % 8)
+                    let bit = UInt16((trackData[byteIdx] >> bitIdx) & 1)
+                    headBitPosition += 1
+
+                    // 10-bit shift register (per VICE: last_read_data)
+                    shiftRegister = ((shiftRegister << 1) | bit) & 0x3FF
+
+                    // SYNC detection: 10 consecutive 1-bits in shift register
+                    if shiftRegister == 0x3FF {
+                        if !syncDetected {
+                            syncDetectionCount += 1
+                            if gcrTraceLog < 200 {
+                                gcrTraceLog += 1
+                                C64Trace.log(.gcr, "[GCR-SYNC] @\(debugCycleCount) count=\(syncDetectionCount) track=\(track) bit=\(headBitPosition)")
+                            }
+                        }
+                        syncDetected = true
+                        bitCounter = 0  // hold byte framing in reset during sync
+                    } else {
+                        syncDetected = false
+                        bitCounter += 1
+
+                        if bitCounter >= 8 {
+                            bitCounter = 0
+
+                            // Complete byte: present lower 8 bits to VIA2 PA
+                            via2.portAInput = UInt8(shiftRegister & 0xFF)
+
+                            // Schedule byte-ready with SO delay (aligned to 16-cycle boundary)
+                            if byteReadyActive {
+                                soDelay = 16 - subTick
+                                if soDelay < 10 { soDelay += 16 }
+                            }
+                        }
+                    }
                 }
-                // During sync, the byte is NOT loaded into the shift register
-                return
-            } else {
-                if syncDetected {
-                    // First non-$FF byte after sync — this is the first GCR byte
-                    syncDetected = false
-                    consecutiveOnes = 0
-                }
-                consecutiveOnes = 0
             }
-
-            // Load the GCR byte into VIA2 port A
-            via2.portAInput = byte
-
-            // Signal byte ready (VIA2 CA1 triggers interrupt)
-            via2.ca1 = true
-            // Pulse: CA1 goes high then low (edge-triggered)
-            via2.tick()  // Process the edge
-            via2.ca1 = false
         }
     }
 
@@ -359,17 +680,7 @@ public final class Drive1541 {
     }
 
     func driveLog(_ msg: String) {
-        let line = msg + "\n"
-        let path = "/tmp/c64_debug.log"
-        if let data = line.data(using: .utf8) {
-            if let fh = FileHandle(forWritingAtPath: path) {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                fh.closeFile()
-            } else {
-                FileManager.default.createFile(atPath: path, contents: data)
-            }
-        }
+        C64Trace.log(.drive, msg)
     }
 }
 
@@ -388,7 +699,13 @@ public final class DriveMemoryMap: Bus {
     weak var via1: VIA6522?
     weak var via2: VIA6522?
 
+    var via1WriteLog: Int = 0
+
     public init() {}
+
+    private func memLog(_ msg: String) {
+        C64Trace.log(.drive, msg)
+    }
 
     public func read(_ address: UInt16) -> UInt8 {
         let addr = Int(address)
@@ -431,7 +748,18 @@ public final class DriveMemoryMap: Bus {
             ram[addr & 0x07FF] = value  // RAM mirror
 
         case 0x1800...0x180F:
-            via1?.writeRegister(address & 0x0F, value: value)
+            let reg = address & 0x0F
+            // Log VIA1 PCR, IER, PB, DDRB writes (IEC bus configuration)
+            if via1WriteLog < 500 {
+                switch reg {
+                case 0x00: via1WriteLog += 1; memLog("[VIA1-WR] @$\(String(format:"%04X",address)) ORB=$\(String(format:"%02X",value))")
+                case 0x02: via1WriteLog += 1; memLog("[VIA1-WR] @$\(String(format:"%04X",address)) DDRB=$\(String(format:"%02X",value))")
+                case 0x0C: via1WriteLog += 1; memLog("[VIA1-WR] @$\(String(format:"%04X",address)) PCR=$\(String(format:"%02X",value)) → CA1edge=\(value & 0x01 != 0 ? "pos" : "neg") CA2mode=\((value >> 1) & 0x07)")
+                case 0x0E: via1WriteLog += 1; memLog("[VIA1-WR] @$\(String(format:"%04X",address)) IER=$\(String(format:"%02X",value)) \(value & 0x80 != 0 ? "SET" : "CLR") bits=$\(String(format:"%02X",value & 0x7F)) → CA1_int=\(value & 0x02 != 0)")
+                default: break
+                }
+            }
+            via1?.writeRegister(reg, value: value)
 
         case 0x1810...0x1BFF:
             via1?.writeRegister(address & 0x0F, value: value)

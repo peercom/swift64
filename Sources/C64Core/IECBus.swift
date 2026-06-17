@@ -41,12 +41,14 @@ public final class IECBus {
     }
 
     // MARK: - C64 reads (for CIA2 port A bits 6-7)
-    // Active-low sense: line high → bit reads as 1, line low → bit reads as 0
+    // The C64 serial bus inputs (PA6, PA7) do NOT go through an inverter.
+    // Bus LOW (asserted/false) -> CIA reads 0.
+    // Bus HIGH (released/true) -> CIA reads 1.
 
-    /// CLK IN for C64 (CIA2 PA bit 6): 1 when CLK line is high
+    /// CLK IN for C64 (CIA2 PA bit 6): 0 when CLK line is LOW, $40 when HIGH
     public var c64ReadClk: UInt8 { clockLine ? 0x40 : 0x00 }
 
-    /// DATA IN for C64 (CIA2 PA bit 7): 1 when DATA line is high
+    /// DATA IN for C64 (CIA2 PA bit 7): 0 when DATA line is LOW, $80 when HIGH
     public var c64ReadData: UInt8 { dataLine ? 0x80 : 0x00 }
 
     // MARK: - Drive reads (for VIA1 port B)
@@ -60,8 +62,8 @@ public final class IECBus {
         if !dataLine { pb |= 0x01 }
         // Bit 2: CLK IN (inverted: bus low → 1, bus high → 0)
         if !clockLine { pb |= 0x04 }
-        // Bits 5-6: Device address preset (device 8 = both high)
-        pb |= 0x60
+        // Bits 5-6: Device address jumpers. The 1541 ROM rotates these bits
+        // into the command address; both low maps to device 8.
         // Bit 7: ATN IN (inverted: bus low → 1, bus high → 0)
         if !atnLine { pb |= 0x80 }
         return pb
@@ -77,17 +79,14 @@ public final class IECBus {
     /// pull bus lines low. Input pins (DDR=0) float high and don't drive the bus.
     public func updateFromC64(_ portA: UInt8, ddra: UInt8) {
         let driven = portA & ddra  // Only output bits affect the bus
+        let oldAtn = c64Atn, oldClk = c64Clk, oldData = c64Data
         c64Atn = driven & 0x08 != 0
         c64Clk = driven & 0x10 != 0
         c64Data = driven & 0x20 != 0
         onBusUpdate?()
-        // Log state changes
-        if busLog < 60 {
+        if (c64Atn != oldAtn || c64Clk != oldClk || c64Data != oldData) && busLog < 500 {
             busLog += 1
-            let msg = "[IEC] PA=$\(String(format:"%02X",portA)) ATN=\(atnLine) CLK=\(clockLine) DATA=\(dataLine) drvAtn=\(driveAtn)\n"
-            if let d = msg.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
-                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
-            }
+            iecLog("[IEC-C64] PA=$\(h8(portA)) DDRA=$\(h8(ddra)) c64Atn=\(c64Atn) c64Clk=\(c64Clk) c64Data=\(c64Data) → bus ATN=\(atnLine) CLK=\(clockLine) DATA=\(dataLine) [drvClk=\(driveClk) drvData=\(driveData) drvAtn=\(driveAtn) xor=\(atnLine != driveAtn)]")
         }
     }
 
@@ -101,12 +100,9 @@ public final class IECBus {
         let newData = driven & 0x02 != 0
         let newClk = driven & 0x08 != 0
         let newAtn = driven & 0x10 != 0
-        if (newData != driveData || newAtn != driveAtn) && drvLog < 30 {
+        if (newData != driveData || newClk != driveClk || newAtn != driveAtn) && drvLog < 500 {
             drvLog += 1
-            let msg = "[DRV-BUS] PB=$\(String(format:"%02X",portB)) DDRB=$\(String(format:"%02X",ddrb)) driven=$\(String(format:"%02X",driven)) dData=\(newData) dAtn=\(newAtn) → dataLine=\(!c64Data && !newData && ((!c64Atn) != newAtn))\n"
-            if let d = msg.data(using: .utf8), let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
-                fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
-            }
+            iecLog("[IEC-DRV] PB=$\(h8(portB)) DDRB=$\(h8(ddrb)) drvData=\(newData) drvClk=\(newClk) drvAtn=\(newAtn) → bus ATN=\(atnLine) CLK=\(!c64Clk && !newClk) DATA=\(!c64Data && !newData && (atnLine != newAtn))")
         }
         driveData = newData
         driveClk = newClk
@@ -116,14 +112,46 @@ public final class IECBus {
 
     // MARK: - ATN edge detection for VIA1 CA1
 
-    private var prevAtnForCA1: Bool = true
-
     /// Check for ATN transitions. The 1541 has an inverter on the ATN line
     /// before CA1, so CA1 sees the INVERTED ATN: ATN low → CA1 high.
     /// Returns the current CA1 pin state (inverted ATN).
     public var ca1State: Bool { !atnLine }
 
+    public struct Snapshot: Equatable {
+        public let atnLine: Bool
+        public let clockLine: Bool
+        public let dataLine: Bool
+        public let c64Atn: Bool
+        public let c64Clock: Bool
+        public let c64Data: Bool
+        public let driveClock: Bool
+        public let driveData: Bool
+        public let driveAtn: Bool
+    }
+
+    public var snapshot: Snapshot {
+        Snapshot(
+            atnLine: atnLine,
+            clockLine: clockLine,
+            dataLine: dataLine,
+            c64Atn: c64Atn,
+            c64Clock: c64Clk,
+            c64Data: c64Data,
+            driveClock: driveClk,
+            driveData: driveData,
+            driveAtn: driveAtn
+        )
+    }
+
     // MARK: - Init
 
     public init() {}
+
+    // MARK: - Debug logging
+
+    private func h8(_ v: UInt8) -> String { String(format: "%02X", v) }
+
+    func iecLog(_ msg: String) {
+        C64Trace.log(.iec, msg)
+    }
 }

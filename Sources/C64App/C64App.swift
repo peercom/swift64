@@ -22,9 +22,7 @@ struct C64App: App {
             CommandGroup(after: .newItem) {
                 Button("Open Disk Image (D64/G64)...") {
                     openFile(types: ["d64", "g64"], title: "Open Disk Image") { url in
-                        if emulator.c64.mountDisk(url) {
-                            print("Disk mounted: \(url.lastPathComponent)")
-                        }
+                        emulator.mountDisk(url)
                     }
                 }
                 .keyboardShortcut("d", modifiers: [.command])
@@ -50,6 +48,7 @@ struct C64App: App {
 
                 Button("Reset C64") {
                     emulator.c64.reset()
+                    emulator.refreshStatus()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -67,7 +66,7 @@ struct C64App: App {
                 Toggle("True Drive Emulation (1541)", isOn: Binding(
                     get: { emulator.c64.trueDriveEmulation },
                     set: { enabled in
-                        emulator.c64.trueDriveEmulation = enabled
+                        emulator.c64.trueDriveEmulationMode = enabled ? .compat1541 : .off
                         if enabled {
                             // Sync IEC bus from current CIA2 state before powering on drive
                             emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portA, ddra: emulator.c64.cia2.ddra)
@@ -77,6 +76,7 @@ struct C64App: App {
                             emulator.c64.drive1541.enabled = false
                             print("True drive emulation disabled (using Kernal traps)")
                         }
+                        emulator.refreshStatus()
                     }
                 ))
             }

@@ -8,6 +8,15 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var emulator: EmulatorController
 
+    @Environment(\.openWindow) private var openWindow
+    @State private var showingDriveStatus = false
+
+    private let statusTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+
+    private var status: C64.EmulationStatus {
+        emulator.emulationStatus ?? emulator.c64.emulationStatus
+    }
+
     var body: some View {
         MetalView(emulator: emulator)
             .aspectRatio(CGSize(width: 403, height: 284), contentMode: .fit)
@@ -15,6 +24,110 @@ struct ContentView: View {
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 handleDrop(providers)
             }
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button(action: { openDisk() }) {
+                        Label("Load Disk", systemImage: "opticaldiscdrive")
+                    }
+                    .help("Mount D64/G64 Disk Image")
+
+                    Button(action: { openTape() }) {
+                        Label("Load Tape", systemImage: "cassette")
+                    }
+                    .help("Mount T64/TAP Tape Image")
+
+                    Button(action: { loadPRG() }) {
+                        Label("Load PRG", systemImage: "doc.badge.gearshape")
+                    }
+                    .help("Load PRG Program")
+
+                    Divider()
+
+                    Toggle(isOn: Binding(
+                        get: { emulator.c64.trueDriveEmulation },
+                        set: { enabled in
+                            emulator.c64.trueDriveEmulationMode = enabled ? .compat1541 : .off
+                            if enabled {
+                                emulator.c64.iecBus.updateFromC64(emulator.c64.cia2.portA, ddra: emulator.c64.cia2.ddra)
+                                emulator.c64.drive1541.powerOn()
+                                print("True drive emulation enabled")
+                            } else {
+                                emulator.c64.drive1541.enabled = false
+                                print("True drive emulation disabled (using Kernal traps)")
+                            }
+                            emulator.refreshStatus()
+                        }
+                    )) {
+                        Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+                    }
+                    .toggleStyle(.button)
+                    .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
+
+                    if emulator.hasMountedDisk {
+                        Label(status.mediaCapabilities?.isNativeLowLevel == true ? "Native G64" : "Synthetic GCR", systemImage: status.mediaCapabilities?.isNativeLowLevel == true ? "waveform.path" : "square.stack.3d.down.right")
+                            .help(status.mediaCapabilities?.isNativeLowLevel == true ? "Native low-level disk image mounted" : "Synthetic low-level GCR stream mounted")
+                    }
+
+                    Button(action: { showingDriveStatus.toggle() }) {
+                        Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
+                    }
+                    .help("Show compact drive and media status")
+                    .popover(isPresented: $showingDriveStatus, arrowEdge: .bottom) {
+                        DriveStatusPopover(status: status)
+                            .frame(width: 360)
+                    }
+
+                    Divider()
+
+                    Button(action: { openWindow(id: "debugger") }) {
+                        Label("Debugger", systemImage: "ladybug")
+                    }
+                    .help("Show Debugger")
+
+                    Button(action: { emulator.c64.reset() }) {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .help("Reset C64")
+                }
+            }
+            .onReceive(statusTimer) { _ in
+                emulator.refreshStatus()
+            }
+    }
+
+    func openDisk() {
+        openFile(types: ["d64", "g64"], title: "Open Disk Image") { url in
+            emulator.mountDisk(url)
+        }
+    }
+
+    func openTape() {
+        openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
+            if emulator.c64.mountTape(url) {
+                print("Tape mounted: \(url.lastPathComponent)")
+            }
+        }
+    }
+
+    func loadPRG() {
+        openFile(types: ["prg", "p00"], title: "Load PRG Program") { url in
+            emulator.c64.loadPRG(url, autoRun: true)
+            print("PRG loaded: \(url.lastPathComponent)")
+        }
+    }
+
+    func openFile(types: [String], title: String, handler: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.allowedContentTypes = types.compactMap { ext in
+            .init(filenameExtension: ext)
+        }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            handler(url)
+        }
     }
 
     func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -30,6 +143,113 @@ struct ContentView: View {
     }
 }
 
+private struct DriveStatusPopover: View {
+    let status: C64.EmulationStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Drive Status", systemImage: "externaldrive")
+                    .font(.headline)
+                Spacer()
+                Text(status.trueDriveMode.displayName)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let failure = status.lastFailureReason {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .font(.callout)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                StatusRow(label: "Image", value: status.mountedDiskName ?? "none")
+                StatusRow(label: "Media", value: mediaDescription)
+                StatusRow(label: "Capability", value: capabilityDescription)
+                StatusRow(label: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                StatusRow(label: "Drive CPU", value: "$\(hex16(status.drive.cpuPC))\(status.drive.cpuJammed ? " JAM" : "")")
+                StatusRow(label: "LED / Motor", value: "\(onOff(status.drive.ledOn)) / \(onOff(status.drive.motorOn))")
+                StatusRow(label: "Track", value: "\(status.drive.track)  half \(status.drive.halfTrack)")
+                StatusRow(label: "Sync", value: "\(onOff(status.drive.syncDetected))  count \(status.drive.syncDetectionCount)")
+                StatusRow(label: "Byte Ready", value: "\(onOff(status.drive.byteReady))  count \(status.drive.byteReadyCount)")
+                StatusRow(label: "Port A Reads", value: "\(status.drive.via2PortAReadCount)")
+                StatusRow(label: "IEC Bytes", value: status.drive.lastIECCommandSummary)
+                StatusRow(label: "No Progress", value: "\(status.drive.noProgressCycleCount) cycles")
+            }
+
+            if let iec = status.drive.iec {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    StatusRow(label: "IEC Lines", value: "ATN \(line(iec.atnLine))  CLK \(line(iec.clockLine))  DATA \(line(iec.dataLine))")
+                    StatusRow(label: "C64 Pulls", value: "ATN \(onOff(iec.c64Atn))  CLK \(onOff(iec.c64Clock))  DATA \(onOff(iec.c64Data))")
+                    StatusRow(label: "Drive Pulls", value: "CLK \(onOff(iec.driveClock))  DATA \(onOff(iec.driveData))  ATNA \(onOff(iec.driveAtn))")
+                }
+            }
+
+            if let unsupported = status.mediaCapabilities?.unsupportedFeatures, !unsupported.isEmpty {
+                Divider()
+                Text("Unsupported: \(unsupported.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+    }
+
+    private var mediaDescription: String {
+        guard let format = status.mountedDiskFormat else { return "none" }
+        return format.displayName
+    }
+
+    private var capabilityDescription: String {
+        guard let caps = status.mediaCapabilities else { return "none" }
+        if caps.isNativeLowLevel {
+            return "Native G64, \(caps.populatedHalfTrackCount) halftracks"
+        }
+        if caps.hasSyntheticGCR {
+            return "Synthetic GCR, \(caps.populatedHalfTrackCount) halftracks"
+        }
+        return "\(caps.populatedHalfTrackCount) halftracks"
+    }
+
+    private func onOff(_ value: Bool) -> String {
+        value ? "on" : "off"
+    }
+
+    private func line(_ high: Bool) -> String {
+        high ? "high" : "low"
+    }
+
+    private func hex16(_ value: UInt16) -> String {
+        String(format: "%04X", value)
+    }
+}
+
+private struct StatusRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 92, alignment: .leading)
+            Text(value)
+                .fontDesign(.monospaced)
+                .textSelection(.enabled)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+    }
+}
+
 /// Controls the emulator lifecycle: ROM loading, audio, keyboard events.
 final class EmulatorController: ObservableObject {
     let c64 = C64()
@@ -38,10 +258,18 @@ final class EmulatorController: ObservableObject {
     /// Exposed so the debugger bridge can access snapshots.
     weak var renderer: MetalRenderer?
 
+    @Published var hasMountedDisk = false
+    @Published var emulationStatus: C64.EmulationStatus?
+
     init() {
         loadROMs()
         c64.powerOn()
         setupAudio()
+        refreshStatus()
+    }
+
+    func refreshStatus() {
+        emulationStatus = c64.emulationStatus
     }
 
     /// Load a file by auto-detecting its type from extension.
@@ -49,28 +277,39 @@ final class EmulatorController: ObservableObject {
         let ext = url.pathExtension.lowercased()
         switch ext {
         case "d64", "g64":
-            if c64.mountDisk(url) {
-                print("Disk mounted: \(url.lastPathComponent)")
-            }
+            mountDisk(url)
         case "t64", "tap":
             if c64.mountTape(url) {
+                refreshStatus()
                 print("Tape mounted: \(url.lastPathComponent)")
             }
         case "prg", "p00":
             c64.loadPRG(url, autoRun: true)
+            refreshStatus()
             print("PRG loaded: \(url.lastPathComponent)")
         default:
             // Try to guess: if < 200K, probably PRG; if ~170K, probably D64
             if let data = try? Data(contentsOf: url) {
                 if data.count == 174848 || data.count == 175531 {
                     if c64.mountDisk(data) {
+                        hasMountedDisk = true
+                        refreshStatus()
                         print("Disk mounted (guessed): \(url.lastPathComponent)")
                     }
                 } else if data.count >= 3 {
                     c64.loadPRG(data, autoRun: true)
+                    refreshStatus()
                     print("PRG loaded (guessed): \(url.lastPathComponent)")
                 }
             }
+        }
+    }
+
+    func mountDisk(_ url: URL) {
+        if c64.mountDisk(url) {
+            hasMountedDisk = true
+            refreshStatus()
+            print("Disk mounted: \(url.lastPathComponent)")
         }
     }
 

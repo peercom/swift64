@@ -167,10 +167,21 @@ public final class CIA {
     }
 
     func checkInterrupt() {
-        if (interruptData & interruptMask) != 0 {
+        let wasActive = interruptActive
+        let isActive = (interruptData & interruptMask & 0x1F) != 0
+
+        if isActive {
             interruptData |= 0x80  // Set IR bit
             interruptActive = true
-            onInterrupt?(true)
+            if !wasActive {
+                onInterrupt?(true)
+            }
+        } else {
+            interruptData &= 0x7F
+            interruptActive = false
+            if wasActive {
+                onInterrupt?(false)
+            }
         }
     }
 
@@ -226,8 +237,11 @@ public final class CIA {
             // Interrupt control — reading clears
             let val = interruptData
             interruptData = 0
+            let wasActive = interruptActive
             interruptActive = false
-            onInterrupt?(false)
+            if wasActive {
+                onInterrupt?(false)
+            }
             return val
 
         case 0x0E: return timerAControl

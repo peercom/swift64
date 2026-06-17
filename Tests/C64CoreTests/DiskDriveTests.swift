@@ -97,6 +97,16 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(drive.directory.first?.typeName, "PRG")
     }
 
+    func testMountExtendedD64SizeWithStandardDirectory() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200704 - image.count))
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertTrue(drive.isMounted)
+        XCTAssertEqual(drive.directory.first?.filename, "hello")
+    }
+
     func testGenerateDirectoryListing() {
         let drive = DiskDrive()
         let d64 = makeMinimalD64()
@@ -130,7 +140,7 @@ final class DiskDriveTests: XCTestCase {
             let lineNum = lineNumLo | (lineNumHi << 8)
 
             // Find end of line (0x00 terminator)
-            var textStart = offset + 4
+            let textStart = offset + 4
             var textEnd = textStart
             while textEnd < prg.count && prg[textEnd] != 0 {
                 textEnd += 1

@@ -152,7 +152,7 @@ public final class SID {
         }
         voices[v].gate = gateOn
 
-        voices[v].rateCounter += 1
+        voices[v].rateCounter &+= 1
 
         let rate: UInt16
         switch voices[v].envelopeState {

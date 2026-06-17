@@ -111,32 +111,76 @@ final class DebuggerBridge: ObservableObject {
         }
     }
 }
-
 // MARK: - Main Debugger View
 
 struct DebuggerView: View {
     @StateObject private var bridge = DebuggerBridge()
     let emulator: EmulatorController
 
+    @State private var showInspector = true
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+
     var body: some View {
         let snap = bridge.snapshot
-        VStack(spacing: 0) {
-            DebugToolbar(bridge: bridge, snap: snap)
-            Divider()
-            HSplitView {
-                VSplitView {
-                    CPUStatePanel(snap: snap)
-                    MemoryPanel(bridge: bridge, snap: snap)
+
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            CPUStatePanel(snap: snap)
+                .navigationTitle("CPU Status")
+                .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 300)
+        } detail: {
+            DisassemblyPanel(bridge: bridge, snap: snap)
+                .navigationTitle("Disassembly")
+                .inspector(isPresented: $showInspector) {
+                    VStack(spacing: 0) {
+                        MemoryPanel(bridge: bridge, snap: snap)
+                        Divider()
+                        TracePanel(snap: snap)
+                    }
+                    .inspectorColumnWidth(min: 300, ideal: 350, max: 400)
                 }
-                .frame(minWidth: 360)
-                VSplitView {
-                    DisassemblyPanel(bridge: bridge, snap: snap)
-                    TracePanel(snap: snap)
+                .toolbar {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        if let reason = snap.lastBreak {
+                            Text(reason.description)
+                                .foregroundColor(.red)
+                                .font(.system(.caption, design: .monospaced))
+                                .padding(.trailing, 8)
+                        }
+
+                        Button(action: {
+                            if bridge.isPaused { bridge.resume() } else { bridge.pause() }
+                        }) {
+                            Label(bridge.isPaused ? "Resume" : "Pause",
+                                  systemImage: bridge.isPaused ? "play.fill" : "pause.fill")
+                        }
+
+                        Button(action: bridge.step) {
+                            Label("Step", systemImage: "arrow.right.to.line")
+                        }
+                        .disabled(!bridge.isPaused)
+
+                        Toggle(isOn: Binding(
+                            get: { bridge.traceEnabled },
+                            set: { bridge.setTraceEnabled($0) }
+                        )) {
+                            Label("Trace", systemImage: "ladybug")
+                        }
+                        .toggleStyle(.button)
+                        .help("Enable CPU Trace")
+
+                        Button(action: bridge.saveTrace) {
+                            Label("Save Trace", systemImage: "square.and.arrow.down")
+                        }
+                        .help("Save trace to file")
+
+                        Button(action: { showInspector.toggle() }) {
+                            Label("Inspector", systemImage: "sidebar.right")
+                        }
+                        .help("Toggle Inspector")
+                    }
                 }
-                .frame(minWidth: 400)
-            }
         }
-        .frame(minWidth: 800, minHeight: 520)
+        .frame(minWidth: 900, minHeight: 600)
         .monospaced()
         .onAppear {
             bridge.emulator = emulator
@@ -148,100 +192,67 @@ struct DebuggerView: View {
     }
 }
 
-// MARK: - Toolbar
-
-private struct DebugToolbar: View {
-    @ObservedObject var bridge: DebuggerBridge
-    let snap: Debugger.Snapshot
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: {
-                if bridge.isPaused { bridge.resume() } else { bridge.pause() }
-            }) {
-                Label(bridge.isPaused ? "Resume" : "Pause",
-                      systemImage: bridge.isPaused ? "play.fill" : "pause.fill")
-            }
-
-            Button(action: bridge.step) {
-                Label("Step", systemImage: "arrow.right")
-            }
-            .disabled(!bridge.isPaused)
-
-            Divider().frame(height: 20)
-
-            Toggle("Trace", isOn: Binding(
-                get: { bridge.traceEnabled },
-                set: { bridge.setTraceEnabled($0) }
-            ))
-            .toggleStyle(.button)
-
-            Button(action: bridge.saveTrace) {
-                Label("Save Trace", systemImage: "square.and.arrow.down")
-            }
-
-            Spacer()
-
-            if let reason = snap.lastBreak {
-                Text(reason.description)
-                    .foregroundColor(.red)
-                    .font(.system(.caption, design: .monospaced))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
-    }
-}
-
 // MARK: - CPU State
 
 private struct CPUStatePanel: View {
     let snap: Debugger.Snapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("CPU").font(.headline)
-
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                GridRow {
-                    regView("PC", String(format: "$%04X", snap.pc))
-                    regView("A",  String(format: "$%02X", snap.a))
-                    regView("X",  String(format: "$%02X", snap.x))
-                    regView("Y",  String(format: "$%02X", snap.y))
+        List {
+            Section("Registers") {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                    GridRow {
+                        regView("PC", String(format: "$%04X", snap.pc))
+                        regView("A",  String(format: "$%02X", snap.a))
+                    }
+                    GridRow {
+                        regView("X",  String(format: "$%02X", snap.x))
+                        regView("Y",  String(format: "$%02X", snap.y))
+                    }
+                    GridRow {
+                        regView("SP",  String(format: "$%02X", snap.sp))
+                    }
                 }
-                GridRow {
-                    regView("SP",  String(format: "$%02X", snap.sp))
-                    regView("CYC", "\(snap.totalCycles)")
-                    regView("LIN", "\(snap.rasterLine)")
-                    regView("COL", "\(snap.rasterCycle)")
-                }
+                .padding(.vertical, 4)
             }
 
-            FlagsRow(p: snap.p)
-
-            HStack(spacing: 16) {
-                indicator("IRQ", active: snap.irqLine, color: .red)
-                indicator("NMI", active: snap.nmiLine, color: .orange)
+            Section("Status Flags") {
+                FlagsRow(p: snap.p)
+                    .padding(.vertical, 4)
             }
-            .font(.system(.caption, design: .monospaced))
+
+            Section("Timing") {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                    GridRow { regView("CYC", "\(snap.totalCycles)") }
+                    GridRow { regView("LIN", "\(snap.rasterLine)") }
+                    GridRow { regView("COL", "\(snap.rasterCycle)") }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Interrupts") {
+                HStack(spacing: 16) {
+                    indicator("IRQ", active: snap.irqLine, color: .red)
+                    indicator("NMI", active: snap.nmiLine, color: .orange)
+                }
+                .padding(.vertical, 4)
+            }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .listStyle(.sidebar)
     }
 
     func regView(_ name: String, _ value: String) -> some View {
-        HStack(spacing: 4) {
-            Text(name).foregroundColor(.secondary).frame(width: 24, alignment: .trailing)
-            Text(value)
+        HStack(spacing: 6) {
+            Text(name).foregroundColor(.secondary).frame(width: 28, alignment: .trailing)
+            Text(value).bold()
         }
     }
 
     func indicator(_ name: String, active: Bool, color: Color) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(active ? color : Color.gray.opacity(0.3))
-                .frame(width: 8, height: 8)
+                .frame(width: 10, height: 10)
             Text(name)
         }
     }
@@ -256,18 +267,18 @@ private struct FlagsRow: View {
     ]
 
     var body: some View {
-        HStack(spacing: 2) {
-            Text("P").foregroundColor(.secondary)
-            Text(String(format: "$%02X", p)).padding(.trailing, 4)
-            ForEach(flags, id: \.0) { name, mask in
+        HStack(spacing: 4) {
+            Text("P").foregroundColor(.secondary).frame(width: 16, alignment: .leading)
+            Text(String(format: "$%02X", p)).padding(.trailing, 8).bold()
+
+            ForEach(flags, id: \ .0) { name, mask in
                 Text(name)
-                    .frame(width: 18, height: 18)
-                    .background(p & mask != 0 ? Color.accentColor.opacity(0.3) : Color.clear)
-                    .cornerRadius(3)
+                    .frame(width: 20, height: 20)
+                    .background(p & mask != 0 ? Color.accentColor.opacity(0.2) : Color.clear)
+                    .cornerRadius(4)
                     .foregroundColor(p & mask != 0 ? .primary : .secondary)
             }
         }
-        .font(.system(.caption, design: .monospaced))
     }
 }
 
@@ -278,27 +289,23 @@ private struct DisassemblyPanel: View {
     let snap: Debugger.Snapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Disassembly").font(.headline)
-                .padding(.horizontal, 10).padding(.top, 6)
-
-            ScrollViewReader { proxy in
-                List(snap.disassembly) { line in
-                    DisassemblyRow(line: line, onToggleBreakpoint: {
-                        bridge.toggleBreakpoint(line.address)
-                    })
-                    .id(line.address)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-                    .listRowBackground(
-                        line.isCurrent ? Color.accentColor.opacity(0.2) : Color.clear
-                    )
-                }
-                .listStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
-                .onChange(of: snap.pc) { _, newPC in
-                    withAnimation(.none) {
-                        proxy.scrollTo(newPC, anchor: .center)
-                    }
+        ScrollViewReader { proxy in
+            List(snap.disassembly) { line in
+                DisassemblyRow(line: line, onToggleBreakpoint: {
+                    bridge.toggleBreakpoint(line.address)
+                })
+                .id(line.address)
+                .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                .listRowBackground(
+                    line.isCurrent ? Color.accentColor.opacity(0.2) : Color.clear
+                )
+            }
+            .listStyle(.plain)
+            .background(Material.ultraThin)
+            .font(.system(size: 13, design: .monospaced))
+            .onChange(of: snap.pc) { _, newPC in
+                withAnimation {
+                    proxy.scrollTo(newPC, anchor: .center)
                 }
             }
         }
@@ -312,34 +319,34 @@ private struct DisassemblyRow: View {
     var body: some View {
         HStack(spacing: 0) {
             Button(action: onToggleBreakpoint) {
-                Circle()
-                    .fill(line.hasBreakpoint ? Color.red : Color.clear)
-                    .frame(width: 10, height: 10)
-                    .overlay(Circle().stroke(Color.gray.opacity(0.3), lineWidth: 1))
+                Image(systemName: line.hasBreakpoint ? "bookmark.fill" : "bookmark")
+                    .foregroundColor(line.hasBreakpoint ? .red : .gray.opacity(0.3))
             }
             .buttonStyle(.plain)
-            .frame(width: 18)
+            .frame(width: 24)
 
             Text(line.isCurrent ? ">" : " ")
                 .foregroundColor(.accentColor)
-                .frame(width: 12)
+                .bold()
+                .frame(width: 16)
 
             Text(String(format: "%04X", line.address))
                 .foregroundColor(.secondary)
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 44, alignment: .leading)
 
             Text(line.bytes.padding(toLength: 8, withPad: " ", startingAt: 0))
                 .foregroundColor(.secondary)
-                .frame(width: 72, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
 
             Text(line.mnemonic)
                 .foregroundColor(mnemonicColor(line.mnemonic))
-                .frame(width: 36, alignment: .leading)
+                .bold()
+                .frame(width: 44, alignment: .leading)
 
             Text(line.operand)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
     }
 
     func mnemonicColor(_ m: String) -> Color {
@@ -360,7 +367,7 @@ private struct MemoryPanel: View {
     let snap: Debugger.Snapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Memory").font(.headline)
                 Spacer()
@@ -369,26 +376,28 @@ private struct MemoryPanel: View {
                         Text(preset.rawValue).tag(preset)
                     }
                 }
-                .frame(width: 200)
+                .labelsHidden()
+                .frame(width: 180)
                 .onChange(of: bridge.memoryPreset) { _, preset in
                     if preset != .custom {
                         bridge.setMemoryPage(preset.address)
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding()
+            .background(Material.bar)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(0..<16, id: \.self) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(0..<16, id: \ .self) { row in
                         MemoryRow(snap: snap, row: row)
                     }
                 }
-                .padding(.horizontal, 10)
+                .padding()
             }
-            .font(.system(size: 11, design: .monospaced))
+            .background(Material.ultraThin)
         }
+        .frame(maxHeight: 400)
     }
 }
 
@@ -416,11 +425,14 @@ private struct MemoryRow: View {
         return HStack(spacing: 0) {
             Text(String(format: "%04X ", addr))
                 .foregroundColor(.secondary)
+                .frame(width: 44, alignment: .leading)
             Text(hex)
-            Text(" ")
+                .frame(width: 250, alignment: .leading)
             Text(ascii)
                 .foregroundColor(.orange)
+                .frame(alignment: .leading)
         }
+        .font(.system(size: 13, design: .monospaced))
     }
 }
 
@@ -438,22 +450,24 @@ private struct TracePanel: View {
                     .foregroundColor(.secondary)
                     .font(.caption)
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding()
+            .background(Material.bar)
 
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(snap.traceLines.enumerated()), id: \.offset) { idx, line in
+                        ForEach(Array(snap.traceLines.enumerated()), id: \ .offset) { idx, line in
                             Text(line)
                                 .id(idx)
                                 .textSelection(.enabled)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 1)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 2)
                         }
                     }
+                    .padding(.vertical, 8)
                 }
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
+                .background(Material.ultraThin)
                 .onChange(of: snap.traceLines.count) { _, count in
                     if count > 0 {
                         proxy.scrollTo(count - 1, anchor: .bottom)

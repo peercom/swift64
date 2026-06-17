@@ -37,6 +37,8 @@ public final class VIA6522 {
     public var timer1Latch: UInt16 = 0xFFFF
     /// Timer 1 has fired (one-shot mode: prevents re-interrupt)
     var timer1Fired: Bool = false
+    /// Pending Timer 1 IRQ (delayed by 1 cycle to match VICE)
+    var pendingT1IRQ: Bool = false
 
     /// Timer 2 counter
     public var timer2Counter: UInt16 = 0xFFFF
@@ -91,6 +93,15 @@ public final class VIA6522 {
     /// Callback when port B is written (used by Drive1541 to update bus immediately)
     public var onPortBWrite: (() -> Void)?
 
+    /// Callback when CA2 output state changes (used by Drive1541 for byte-ready gating)
+    public var onCA2Change: ((Bool) -> Void)?
+
+    /// Callback when port A is read (used by Drive1541 to clear byte-ready)
+    public var onPortARead: (() -> Void)?
+
+    /// CA2 output state (for output modes in PCR bits 1-3)
+    public var ca2OutputState: Bool = true
+
     // MARK: - Handshake lines
 
     /// CA1 input line state (directly sampled)
@@ -116,30 +127,34 @@ public final class VIA6522 {
     // MARK: - Tick
 
     public func tick() {
-        // Timer 1
-        if timer1Counter == 0 {
-            if !timer1Fired {
-                setIFR(IRQ.timer1)
-                timer1Fired = true
-            }
-            let t1FreeRun = acr & 0x40 != 0
-            if t1FreeRun {
-                timer1Counter = timer1Latch
-                timer1Fired = false  // Allow re-interrupt in free-run mode
-            }
-        } else {
-            timer1Counter &-= 1
+        // Resolve pending Timer 1 IRQ from previous cycle (1-cycle delay per VICE)
+        if pendingT1IRQ {
+            pendingT1IRQ = false
+            onInterrupt?(ifr & IRQ.any != 0)
         }
 
-        // Timer 2 (only counts system clocks when ACR bit 5 = 0)
-        if acr & 0x20 == 0 {
-            if timer2Counter == 0 {
-                if !timer2Fired {
-                    setIFR(IRQ.timer2)
-                    timer2Fired = true
+        // Timer 1: always counts down, IRQ on underflow (0 → FFFF)
+        // Period = latch + 1 ticks; IRQ line assertion delayed 1 additional cycle.
+        timer1Counter &-= 1
+        if timer1Counter == 0xFFFF {
+            if !timer1Fired {
+                ifr |= IRQ.timer1
+                updateIRQBit7()     // update bit 7 for correct IFR reads
+                pendingT1IRQ = true // delay IRQ line assertion by 1 cycle
+                if acr & 0x40 == 0 {
+                    timer1Fired = true  // one-shot: prevent further interrupts
                 }
-            } else {
-                timer2Counter &-= 1
+            }
+            // Always reload from latch (both one-shot and free-run per VICE)
+            timer1Counter = timer1Latch
+        }
+
+        // Timer 2: counts system clocks when ACR bit 5 = 0, IRQ on underflow (no delay)
+        if acr & 0x20 == 0 {
+            timer2Counter &-= 1
+            if timer2Counter == 0xFFFF && !timer2Fired {
+                setIFR(IRQ.timer2)  // T2: immediate, no delay
+                timer2Fired = true  // one-shot: only one IRQ per T2CH write
             }
         }
 
@@ -156,18 +171,21 @@ public final class VIA6522 {
     private func checkCA1Edge() {
         let positiveEdge = pcr & 0x01 != 0
         let triggered = positiveEdge ? (!ca1Prev && ca1) : (ca1Prev && !ca1)
-        if ca1 != ca1Prev && ca1DebugCount < 10 {
+        if ca1 != ca1Prev && ca1DebugCount < 200 {
             ca1DebugCount += 1
-            let msg = "[VIA] CA1 edge: prev=\(ca1Prev) cur=\(ca1) posEdge=\(positiveEdge) triggered=\(triggered) IFR=$\(String(format:"%02X",ifr)) IER=$\(String(format:"%02X",ier))\n"
-            if let data = msg.data(using: .utf8),
-               let fh = FileHandle(forWritingAtPath: "/tmp/c64_debug.log") {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                fh.closeFile()
-            }
+            viaLog("[VIA-CA1] edge: \(ca1Prev)→\(ca1) PCR=$\(String(format:"%02X",pcr)) posEdge=\(positiveEdge) triggered=\(triggered) IER=$\(String(format:"%02X",ier)) IFR=$\(String(format:"%02X",ifr)) ca1Enabled=\(ier & IRQ.ca1 != 0)")
         }
         if triggered {
             setIFR(IRQ.ca1)
+            if ca1DebugCount < 200 {
+                viaLog("[VIA-CA1] IRQ fired! IFR now=$\(String(format:"%02X",ifr)) any=\(ifr & IRQ.any != 0)")
+            }
+            // CA2 handshake/pulse output: set CA2 high on CA1 active edge
+            let ca2Mode = (pcr >> 1) & 0x07
+            if (ca2Mode == 4 || ca2Mode == 5) && !ca2OutputState {
+                ca2OutputState = true
+                onCA2Change?(true)
+            }
         }
         ca1Prev = ca1
     }
@@ -193,12 +211,17 @@ public final class VIA6522 {
         updateIRQ()
     }
 
-    func updateIRQ() {
+    /// Update IFR bit 7 without signaling CPU (for delayed IRQ sources like T1)
+    private func updateIRQBit7() {
         if ifr & ier & 0x7F != 0 {
             ifr |= IRQ.any
         } else {
             ifr &= ~IRQ.any
         }
+    }
+
+    func updateIRQ() {
+        updateIRQBit7()
         onInterrupt?(ifr & IRQ.any != 0)
     }
 
@@ -212,6 +235,20 @@ public final class VIA6522 {
 
         case 0x01:  // ORA/IRA - Port A (with handshake)
             clearIFR(IRQ.ca1 | IRQ.ca2)
+            // CA2 handshake output: set CA2 low on port A read
+            let ca2Mode01 = (pcr >> 1) & 0x07
+            if ca2Mode01 == 4 && ca2OutputState {  // handshake: go low
+                ca2OutputState = false
+                onCA2Change?(false)
+            } else if ca2Mode01 == 5 {  // pulse: briefly low then high
+                if ca2OutputState {
+                    ca2OutputState = false
+                    onCA2Change?(false)
+                }
+                ca2OutputState = true
+                onCA2Change?(true)
+            }
+            onPortARead?()
             return (portA & ddra) | (portAInput & ~ddra)
 
         case 0x02: return ddrb
@@ -238,6 +275,7 @@ public final class VIA6522 {
         case 0x0E: return ier | 0x80  // Bit 7 always reads as 1
 
         case 0x0F:  // ORA - Port A (no handshake)
+            onPortARead?()
             return (portA & ddra) | (portAInput & ~ddra)
 
         default: return 0
@@ -267,6 +305,7 @@ public final class VIA6522 {
             timer1Latch = (timer1Latch & 0x00FF) | (UInt16(value) << 8)
             timer1Counter = timer1Latch
             timer1Fired = false
+            pendingT1IRQ = false
             clearIFR(IRQ.timer1)
 
         case 0x06:  // T1L-L
@@ -274,6 +313,7 @@ public final class VIA6522 {
 
         case 0x07:  // T1L-H (write to latch high, no timer start)
             timer1Latch = (timer1Latch & 0x00FF) | (UInt16(value) << 8)
+            pendingT1IRQ = false
             clearIFR(IRQ.timer1)
 
         case 0x08:  // T2L-L (write to latch)
@@ -286,7 +326,21 @@ public final class VIA6522 {
 
         case 0x0A: shiftRegister = value
         case 0x0B: acr = value
-        case 0x0C: pcr = value
+        case 0x0C:
+            pcr = value
+            // Update CA2 output state based on new PCR mode
+            let ca2Mode0C = (value >> 1) & 0x07
+            switch ca2Mode0C {
+            case 6: // manual output low
+                if ca2OutputState { ca2OutputState = false; onCA2Change?(false) }
+            case 7: // manual output high
+                if !ca2OutputState { ca2OutputState = true; onCA2Change?(true) }
+            case 4: // handshake output: initially low
+                if ca2OutputState { ca2OutputState = false; onCA2Change?(false) }
+            case 5: // pulse output: normally high
+                if !ca2OutputState { ca2OutputState = true; onCA2Change?(true) }
+            default: break // input modes
+            }
 
         case 0x0D:  // IFR - write 1 to clear flags
             ifr &= ~(value & 0x7F)
@@ -305,5 +359,11 @@ public final class VIA6522 {
 
         default: break
         }
+    }
+
+    // MARK: - Debug logging
+
+    func viaLog(_ msg: String) {
+        C64Trace.log(.via, msg)
     }
 }

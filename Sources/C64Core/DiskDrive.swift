@@ -25,6 +25,19 @@ public final class DiskDrive {
         return offsets
     }()
 
+    /// D64 byte sizes accepted by this emulator.
+    ///
+    /// The 1541 emulation currently reads standard tracks 1-35, but many real
+    /// collections contain extended 40/41/42-track D64 images. Accepting them
+    /// lets the standard directory/BAM area mount while later work can preserve
+    /// the extra tracks in the low-level media layer.
+    static let supportedD64Sizes: Set<Int> = [
+        174848, 175531,  // 35 tracks: no error bytes / with error bytes
+        196608, 197376,  // 40 tracks
+        200704,          // 41 tracks
+        205312, 206114,  // 42 tracks
+    ]
+
     // MARK: - Directory entry
 
     public struct DirectoryEntry {
@@ -91,8 +104,7 @@ public final class DiskDrive {
 
     /// Mount a D64 image.
     public func mount(_ data: Data) -> Bool {
-        // Validate size: 174848 (no errors) or 175531 (with errors)
-        guard data.count == 174848 || data.count == 175531 || data.count == 196608 else {
+        guard Self.supportedD64Sizes.contains(data.count) else {
             return false
         }
         imageData = [UInt8](data)

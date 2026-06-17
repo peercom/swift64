@@ -105,6 +105,15 @@ public final class CPU6502 {
         nmiLine = true
     }
 
+    /// Pulse the NMOS 6502 SO input.
+    ///
+    /// The 1541 read hardware uses SO to set the overflow flag when a byte is
+    /// ready. Modeling this as a named CPU input keeps drive code from reaching
+    /// into status-register internals directly.
+    public func pulseSO() {
+        setFlag(Flags.overflow, true)
+    }
+
     /// Execute exactly one clock cycle.
     @discardableResult
     public func tick() -> Bool {

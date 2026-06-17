@@ -96,19 +96,7 @@ public final class KernalTraps {
     }
 
     func debugLog(_ msg: String) {
-        let line = msg + "\n"
-        let logPath = "/tmp/c64_debug.log"
-        if let data = line.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let fh = FileHandle(forWritingAtPath: logPath) {
-                    fh.seekToEndOfFile()
-                    fh.write(data)
-                    fh.closeFile()
-                }
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: data)
-            }
-        }
+        C64Trace.log(.kernal, msg)
     }
 
     // MARK: - LOAD trap
@@ -129,19 +117,7 @@ public final class KernalTraps {
             filename.append(Character(UnicodeScalar(ch)))
         }
 
-        let msg = "[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)\n"
-        if let data = msg.data(using: .utf8) {
-            let logPath = "/tmp/c64_debug.log"
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let fh = FileHandle(forWritingAtPath: logPath) {
-                    fh.seekToEndOfFile()
-                    fh.write(data)
-                    fh.closeFile()
-                }
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: data)
-            }
-        }
+        debugLog("[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)")
 
         if verifying {
             // VERIFY: just pretend it worked

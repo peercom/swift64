@@ -1,9 +1,38 @@
 import Foundation
 import Emu6502
 
+public enum TrueDriveEmulationMode: Equatable {
+    case off
+    case standard1541
+    case compat1541
+
+    public var displayName: String {
+        switch self {
+        case .off: return "Fast Load"
+        case .standard1541: return "True Drive 1541"
+        case .compat1541: return "True Drive 1541 Compat"
+        }
+    }
+}
+
+private let pal1541DriveClockRatio = 1_000_000.0 / 985_248.0
+
 /// Complete C64 machine emulation.
 /// Orchestrates CPU, VIC-II, SID, CIAs, and memory.
 public final class C64 {
+
+    public struct EmulationStatus: Equatable {
+        public let running: Bool
+        public let trueDriveMode: TrueDriveEmulationMode
+        public let cpuPC: UInt16
+        public let cpuJammed: Bool
+        public let totalCycles: UInt64
+        public let mountedDiskName: String?
+        public let mountedDiskFormat: DiskImage.Format?
+        public let mediaCapabilities: DiskImage.Capabilities?
+        public let drive: Drive1541.StatusSnapshot
+        public let lastFailureReason: String?
+    }
 
     // MARK: - Components
 
@@ -22,22 +51,49 @@ public final class C64 {
     public let drive1541: Drive1541
     public let iecBus: IECBus
 
-    /// Toggle between true drive emulation and Kernal trap mode.
-    /// When true, the 1541 CPU runs and serial bus communication is used.
-    /// When false, disk access is handled via Kernal traps (faster but less compatible).
-    public var trueDriveEmulation: Bool = false
+    /// Selects between Kernal traps and hardware-level 1541 emulation.
+    public var trueDriveEmulationMode: TrueDriveEmulationMode = .off {
+        didSet {
+            if trueDriveEmulationMode == .off {
+                drive1541.enabled = false
+            } else {
+                driveClockAccumulator = 0
+                drive1541.driveModel = trueDriveEmulationMode == .compat1541 ? .model1541C : .model1541
+                driveClockRatio = trueDriveEmulationMode == .compat1541 ? 1.0 : pal1541DriveClockRatio
+            }
+        }
+    }
 
-    /// Fractional clock accumulator for drive timing (1541 runs slightly faster than C64)
+    /// Compatibility wrapper for older UI/tests.
+    public var trueDriveEmulation: Bool {
+        get { trueDriveEmulationMode != .off }
+        set { trueDriveEmulationMode = newValue ? .compat1541 : .off }
+    }
+
+    /// Drive CPU clocks per C64 clock. PAL default: 1 MHz / 985248 Hz.
+    public var driveClockRatio: Double = pal1541DriveClockRatio
+
+    /// Fractional clock accumulator for drive timing.
     var driveClockAccumulator: Double = 0.0
     /// Debug counter for CIA2 PA reads
     var cia2ReadLog: Int = 0
-    /// Fraction of extra drive cycles per C64 cycle: (1000000 - 985248) / 985248
-    let driveClockFraction: Double = 14752.0 / 985248.0
 
     // MARK: - State
 
     /// Whether the machine is running
     public var running: Bool = false
+
+    /// Display name of the most recently mounted disk image, if any.
+    public private(set) var mountedDiskName: String?
+
+    /// Last detected emulator failure/hang reason for diagnostics.
+    public private(set) var lastFailureReason: String?
+
+    private var pcFFFFCycleCount: UInt64 = 0
+    private var loadNoProgressCycleCount: UInt64 = 0
+    private var lastProgressSignature: UInt64 = 0
+    private var lastFailureWasClearedAtCycle: UInt64 = 0
+    private var pendingTypedText: [Character] = []
 
     /// Cycle counter within the current rasterline
     var lineCycle: Int = 0
@@ -109,10 +165,14 @@ public final class C64 {
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
             let result = 0x3F | self.iecBus.c64ReadClk | self.iecBus.c64ReadData
-            // Log all reads in Kernal serial bus code ($ED00-$EE00)
-            if self.trueDriveEmulation && self.cpu.pc >= 0xED00 && self.cpu.pc <= 0xEEB5 && self.cia2ReadLog < 200 {
-                self.cia2ReadLog += 1
-                self.kernalTraps.debugLog("[C64-ACK] @\(self.cpu.totalCycles) PC=$\(String(format:"%04X",self.cpu.pc)) ext=$\(String(format:"%02X",result)) dataLine=\(self.iecBus.dataLine) drvData=\(self.iecBus.driveData) drvAtn=\(self.iecBus.driveAtn) c64Atn=\(self.iecBus.c64Atn)")
+            // Log reads in Kernal serial bus code regions
+            if self.trueDriveEmulationMode != .off && self.cia2ReadLog < 500 {
+                let pc = self.cpu.pc
+                // Kernal serial routines: $ED00-$EEFF, also $F4-$F7 (LOAD/SAVE/OPEN)
+                if (pc >= 0xED00 && pc <= 0xEEB5) || (pc >= 0xF49E && pc <= 0xF7FF) {
+                    self.cia2ReadLog += 1
+                    C64Trace.log(.iec, "[C64-RD] @\(self.cpu.totalCycles) PC=$\(String(format:"%04X",pc)) CIA2_PA=$\(String(format:"%02X",result)) ATN=\(self.iecBus.atnLine) CLK=\(self.iecBus.clockLine) DATA=\(self.iecBus.dataLine) [c64: atn=\(self.iecBus.c64Atn) clk=\(self.iecBus.c64Clk) data=\(self.iecBus.c64Data)] [drv: clk=\(self.iecBus.driveClk) data=\(self.iecBus.driveData) atn=\(self.iecBus.driveAtn)]")
+                }
             }
             return result
         }
@@ -147,30 +207,62 @@ public final class C64 {
         drive1541.loadROM(data)
     }
 
+    public var mountedDiskImage: DiskImage? {
+        drive1541.disk.image
+    }
+
+    public var mountedDiskIsLowLevelCapable: Bool {
+        drive1541.disk.hasNativeLowLevelImage
+    }
+
+    public var emulationStatus: EmulationStatus {
+        EmulationStatus(
+            running: running,
+            trueDriveMode: trueDriveEmulationMode,
+            cpuPC: cpu.pc,
+            cpuJammed: cpu.jammed,
+            totalCycles: cpu.totalCycles,
+            mountedDiskName: mountedDiskName,
+            mountedDiskFormat: mountedDiskImage?.format,
+            mediaCapabilities: mountedDiskImage?.capabilities,
+            drive: drive1541.statusSnapshot,
+            lastFailureReason: lastFailureReason ?? drive1541.lastFailureReason
+        )
+    }
+
     // MARK: - Media loading
 
     /// Mount a D64 disk image.
     public func mountDisk(_ url: URL) -> Bool {
-        let result = diskDrive.mountFromFile(url)
+        let highLevelResult = diskDrive.mountFromFile(url)
+        var lowLevelResult = false
 
         // Also load into the 1541's GCR disk for true drive emulation
         if let data = try? Data(contentsOf: url) {
             let ext = url.pathExtension.lowercased()
             if ext == "g64" {
-                _ = drive1541.insertDisk(data, isG64: true)
+                lowLevelResult = drive1541.insertDisk(data, isG64: true)
             } else {
-                _ = drive1541.insertDisk(data, isG64: false)
+                lowLevelResult = drive1541.insertDisk(data, isG64: false)
             }
         }
 
-        return result
+        if highLevelResult || lowLevelResult {
+            mountedDiskName = url.lastPathComponent
+            clearFailureStatus()
+        }
+        return highLevelResult || lowLevelResult
     }
 
     /// Mount a D64 disk image from data.
     public func mountDisk(_ data: Data) -> Bool {
         let result = diskDrive.mount(data)
-        _ = drive1541.insertDisk(data, isG64: false)
-        return result
+        let lowLevelResult = drive1541.insertDisk(data, isG64: false)
+        if result || lowLevelResult {
+            mountedDiskName = "memory.d64"
+            clearFailureStatus()
+        }
+        return result || lowLevelResult
     }
 
     /// Mount a T64/TAP tape image.
@@ -188,6 +280,7 @@ public final class C64 {
             // Type RUN\r into the keyboard buffer
             typeText("RUN\r")
         }
+        clearFailureStatus()
     }
 
     /// Load a PRG from data.
@@ -198,21 +291,31 @@ public final class C64 {
         if autoRun {
             typeText("RUN\r")
         }
+        clearFailureStatus()
     }
 
     /// Type text into the C64 keyboard buffer.
     public func typeText(_ text: String) {
+        pendingTypedText.append(contentsOf: text)
+        feedKeyboardBufferIfPossible()
+    }
+
+    private func feedKeyboardBufferIfPossible() {
+        guard !pendingTypedText.isEmpty else { return }
+        guard memory.ram[0x00C6] == 0 else { return }
+
         // The C64 keyboard buffer is at $0277-$0280 (10 bytes max)
         // Buffer length is at $00C6
         let bufferAddr = 0x0277
         let bufferLenAddr = 0x00C6
         let maxLen = 10
 
-        let chars = Array(text.prefix(maxLen))
+        let chars = Array(pendingTypedText.prefix(maxLen))
         for (i, char) in chars.enumerated() {
             memory.ram[bufferAddr + i] = charToPetscii(char)
         }
         memory.ram[bufferLenAddr] = UInt8(chars.count)
+        pendingTypedText.removeFirst(chars.count)
     }
 
     func charToPetscii(_ char: Character) -> UInt8 {
@@ -250,9 +353,10 @@ public final class C64 {
         // Reset CPU
         cpu.powerOn()
         running = true
+        clearFailureStatus()
 
         // Power on 1541 drive if ROM is loaded
-        if trueDriveEmulation {
+        if trueDriveEmulationMode != .off {
             // Sync bus state from current CIA2 output (respecting DDR)
             iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
             drive1541.powerOn()
@@ -261,6 +365,7 @@ public final class C64 {
 
     public func reset() {
         cpu.reset()
+        clearFailureStatus()
     }
 
     // MARK: - Execution
@@ -280,17 +385,23 @@ public final class C64 {
 
     /// Run a single system clock cycle.
     func tickOneCycle() {
+        let cpuStalledByVIC = vic.isStealingCPU
+
         // At instruction boundaries: trace, check traps and breakpoints
-        if cpu.cycle == 0 {
+        if !cpuStalledByVIC && cpu.cycle == 0 {
             debugger.traceInstruction()
             if !debugger.checkBreakpoint() { return }
-            if !trueDriveEmulation {
+            if trueDriveEmulationMode == .off {
                 _ = kernalTraps.checkTrap()
             }
         }
 
-        // C64 CPU tick
-        cpu.tick()
+        monitorCPUFailureState()
+        feedKeyboardBufferIfPossible()
+
+        if !cpuStalledByVIC {
+            cpu.tick()
+        }
 
         // VIC tick
         vic.tick()
@@ -308,14 +419,97 @@ public final class C64 {
 
         // 1541 drive ticks AFTER C64 — it sees the bus state the C64 just wrote.
         // The drive's VIA1 inputs are updated at the start of its tick().
-        if trueDriveEmulation && drive1541.enabled {
-            drive1541.tick()
-            driveClockAccumulator += driveClockFraction
+        if trueDriveEmulationMode != .off && drive1541.enabled {
+            driveClockAccumulator += driveClockRatio
             if driveClockAccumulator >= 1.0 {
-                driveClockAccumulator -= 1.0
-                drive1541.tick()
+                while driveClockAccumulator >= 1.0 {
+                    driveClockAccumulator -= 1.0
+                    drive1541.tick()
+                }
             }
         }
+
+        monitorEmulationProgress()
+    }
+
+    private func clearFailureStatus() {
+        lastFailureReason = nil
+        drive1541.lastFailureReason = nil
+        drive1541.noProgressCycleCount = 0
+        pcFFFFCycleCount = 0
+        loadNoProgressCycleCount = 0
+        lastProgressSignature = progressSignature
+        lastFailureWasClearedAtCycle = cpu.totalCycles
+    }
+
+    private func monitorEmulationProgress() {
+        monitorCPUFailureState()
+
+        guard trueDriveEmulationMode != .off, drive1541.enabled, isLoadActivityLikely else {
+            loadNoProgressCycleCount = 0
+            drive1541.noProgressCycleCount = 0
+            lastProgressSignature = progressSignature
+            return
+        }
+
+        let currentSignature = progressSignature
+        if currentSignature == lastProgressSignature {
+            loadNoProgressCycleCount += 1
+        } else {
+            loadNoProgressCycleCount = 0
+            lastProgressSignature = currentSignature
+        }
+
+        drive1541.noProgressCycleCount = loadNoProgressCycleCount
+        if loadNoProgressCycleCount > 1_500_000 {
+            recordFailure("No IEC/GCR progress during true-drive LOAD")
+        }
+    }
+
+    private func monitorCPUFailureState() {
+        if cpu.jammed {
+            recordFailure("C64 CPU JAM/KIL at $\(hex16(cpu.pc))")
+            return
+        }
+        if drive1541.cpu.jammed {
+            recordFailure("1541 CPU JAM/KIL at $\(hex16(drive1541.cpu.pc))")
+            return
+        }
+
+        if cpu.pc == 0xFFFF {
+            pcFFFFCycleCount += 1
+            if pcFFFFCycleCount > 20_000 {
+                recordFailure("C64 PC stuck at $FFFF")
+            }
+        }
+    }
+
+    private var isLoadActivityLikely: Bool {
+        let pc = cpu.pc
+        let inKernalSerial = (pc >= 0xED00 && pc <= 0xEEFF) || (pc >= 0xF49E && pc <= 0xF7FF)
+        return inKernalSerial || drive1541.motorOn || drive1541.ledOn
+    }
+
+    private var progressSignature: UInt64 {
+        var value = UInt64(cpu.pc)
+        value = value &* 1099511628211 &+ UInt64(cpu.cycle)
+        value = value &* 1099511628211 &+ drive1541.progressSignature
+        value = value &* 1099511628211 &+ UInt64(memory.ram[0x90])
+        value = value &* 1099511628211 &+ UInt64(memory.ram[0xAE])
+        value = value &* 1099511628211 &+ UInt64(memory.ram[0xAF])
+        return value
+    }
+
+    private func recordFailure(_ reason: String) {
+        guard cpu.totalCycles >= lastFailureWasClearedAtCycle else { return }
+        if lastFailureReason == nil {
+            lastFailureReason = reason
+            drive1541.lastFailureReason = reason
+        }
+    }
+
+    private func hex16(_ value: UInt16) -> String {
+        String(format: "%04X", value)
     }
 
     // MARK: - IRQ management

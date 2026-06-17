@@ -98,6 +98,11 @@ public final class VIC {
     /// Bad line condition
     var badLine: Bool = false
 
+    /// True when the VIC is stealing the bus from the CPU for bad-line character fetches.
+    var isStealingCPU: Bool {
+        badLine && rasterCycle >= 15 && rasterCycle < 55
+    }
+
     /// Row counter (RC) — 0 to 7, tracks which line within a char row
     var rowCounter: Int = 0
     /// Video counter (VC) — pointer into screen memory
@@ -144,13 +149,12 @@ public final class VIC {
     /// Advance one cycle. Returns true if this is a bad line (CPU should be stalled).
     @discardableResult
     public func tick() -> Bool {
-        var isBadLine = false
-
         // Check for bad line condition
         if rasterCycle == 0 {
             checkBadLine()
-            isBadLine = badLine
         }
+
+        let shouldStallCPU = isStealingCPU
 
         // Render pixels at specific cycles (raster beam)
         if rasterCycle >= 0 && rasterCycle < VIC.cyclesPerLine {
@@ -158,7 +162,7 @@ public final class VIC {
         }
 
         // Sprite data fetch at cycles 58-62 and 0-2
-        if rasterCycle >= 55 {
+        if rasterCycle >= 58 || rasterCycle <= 2 {
             fetchSpriteData()
         }
 
@@ -168,7 +172,7 @@ public final class VIC {
             endOfLine()
         }
 
-        return isBadLine
+        return shouldStallCPU
     }
 
     func checkBadLine() {
@@ -194,11 +198,7 @@ public final class VIC {
 
         // Raster IRQ check
         if rasterLine == rasterCompare {
-            interruptRegister |= 0x01  // IRST
-            if interruptEnable & 0x01 != 0 {
-                interruptRegister |= 0x80
-                onIRQ?(true)
-            }
+            raiseInterrupt(0x01)  // IRST
         }
 
         // Advance rasterline
@@ -227,6 +227,28 @@ public final class VIC {
             let col = rasterCycle - 15
             if col < 40 {
                 fetchCharData(column: col)
+            }
+        }
+    }
+
+    func raiseInterrupt(_ flag: UInt8) {
+        interruptRegister |= flag
+        updateIRQLine()
+    }
+
+    func updateIRQLine() {
+        let wasActive = interruptRegister & 0x80 != 0
+        let isActive = interruptRegister & interruptEnable & 0x0F != 0
+
+        if isActive {
+            interruptRegister |= 0x80
+            if !wasActive {
+                onIRQ?(true)
+            }
+        } else {
+            interruptRegister &= 0x7F
+            if wasActive {
+                onIRQ?(false)
             }
         }
     }
@@ -263,16 +285,23 @@ public final class VIC {
 
         // Render character/bitmap graphics for this line
         var graphicsLine = [UInt32](repeating: bgCol, count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
 
         if lineInDisplay && displayActive && displayEnabled {
             let charRow = displayY / 8
             let pixelRow = displayY % 8
 
-            renderGraphicsLine(&graphicsLine, charRow: charRow, pixelRow: pixelRow,
-                              leftBorder: leftBorder, rightBorder: rightBorder)
+            renderGraphicsLine(
+                &graphicsLine,
+                foregroundMask: &foregroundMask,
+                charRow: charRow,
+                pixelRow: pixelRow,
+                leftBorder: leftBorder,
+                rightBorder: rightBorder
+            )
 
             // Render sprites
-            renderSprites(&graphicsLine, fbY: fbY)
+            renderSprites(&graphicsLine, fbY: fbY, foregroundMask: foregroundMask)
         }
 
         // Compose final line with borders
@@ -294,7 +323,7 @@ public final class VIC {
         }
     }
 
-    func renderGraphicsLine(_ line: inout [UInt32], charRow: Int, pixelRow: Int,
+    func renderGraphicsLine(_ line: inout [UInt32], foregroundMask: inout [Bool], charRow: Int, pixelRow: Int,
                             leftBorder: Int, rightBorder: Int) {
         let readMem = readMemory ?? { _ in return 0 }
 
@@ -324,23 +353,45 @@ public final class VIC {
             let xPos = leftBorder + col * 8 + Int(xScroll)
 
             if bitmapMode {
-                renderBitmapChar(line: &line, xPos: xPos, pixelData: pixelData,
-                                screenByte: charCode, colorByte: colorData)
+                renderBitmapChar(
+                    line: &line,
+                    foregroundMask: &foregroundMask,
+                    xPos: xPos,
+                    pixelData: pixelData,
+                    screenByte: charCode,
+                    colorByte: colorData
+                )
             } else if extendedBGMode {
-                renderExtBGChar(line: &line, xPos: xPos, pixelData: pixelData,
-                               charCode: charCode, colorByte: colorData)
+                renderExtBGChar(
+                    line: &line,
+                    foregroundMask: &foregroundMask,
+                    xPos: xPos,
+                    pixelData: pixelData,
+                    charCode: charCode,
+                    colorByte: colorData
+                )
             } else if multicolorMode && (colorData & 0x08) != 0 {
-                renderMulticolorChar(line: &line, xPos: xPos, pixelData: pixelData,
-                                    colorByte: colorData)
+                renderMulticolorChar(
+                    line: &line,
+                    foregroundMask: &foregroundMask,
+                    xPos: xPos,
+                    pixelData: pixelData,
+                    colorByte: colorData
+                )
             } else {
-                renderStandardChar(line: &line, xPos: xPos, pixelData: pixelData,
-                                  colorByte: colorData)
+                renderStandardChar(
+                    line: &line,
+                    foregroundMask: &foregroundMask,
+                    xPos: xPos,
+                    pixelData: pixelData,
+                    colorByte: colorData
+                )
             }
         }
     }
 
     /// Standard text mode: 1 bit per pixel
-    func renderStandardChar(line: inout [UInt32], xPos: Int, pixelData: UInt8, colorByte: UInt8) {
+    func renderStandardChar(line: inout [UInt32], foregroundMask: inout [Bool], xPos: Int, pixelData: UInt8, colorByte: UInt8) {
         let fgColor = ColorPalette.rgba[Int(colorByte & 0x0F)]
         let bgColor = ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)]
 
@@ -349,6 +400,7 @@ public final class VIC {
             guard px >= 0 && px < VIC.screenWidth else { continue }
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
+                foregroundMask[px] = true
             } else {
                 line[px] = bgColor
             }
@@ -356,7 +408,7 @@ public final class VIC {
     }
 
     /// Multicolor text mode: 2 bits per pixel (double-wide pixels)
-    func renderMulticolorChar(line: inout [UInt32], xPos: Int, pixelData: UInt8, colorByte: UInt8) {
+    func renderMulticolorChar(line: inout [UInt32], foregroundMask: inout [Bool], xPos: Int, pixelData: UInt8, colorByte: UInt8) {
         let colors: [UInt32] = [
             ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)],
             ColorPalette.rgba[Int(backgroundColor[1] & 0x0F)],
@@ -371,11 +423,15 @@ public final class VIC {
             let px1 = px0 + 1
             if px0 >= 0 && px0 < VIC.screenWidth { line[px0] = color }
             if px1 >= 0 && px1 < VIC.screenWidth { line[px1] = color }
+            if bits != 0 {
+                if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
+                if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+            }
         }
     }
 
     /// Extended background color mode
-    func renderExtBGChar(line: inout [UInt32], xPos: Int, pixelData: UInt8,
+    func renderExtBGChar(line: inout [UInt32], foregroundMask: inout [Bool], xPos: Int, pixelData: UInt8,
                          charCode: UInt8, colorByte: UInt8) {
         let bgIndex = Int(charCode >> 6)
         let fgColor = ColorPalette.rgba[Int(colorByte & 0x0F)]
@@ -386,6 +442,7 @@ public final class VIC {
             guard px >= 0 && px < VIC.screenWidth else { continue }
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
+                foregroundMask[px] = true
             } else {
                 line[px] = bgColor
             }
@@ -393,7 +450,7 @@ public final class VIC {
     }
 
     /// Bitmap mode rendering
-    func renderBitmapChar(line: inout [UInt32], xPos: Int, pixelData: UInt8,
+    func renderBitmapChar(line: inout [UInt32], foregroundMask: inout [Bool], xPos: Int, pixelData: UInt8,
                          screenByte: UInt8, colorByte: UInt8) {
         let fgColor: UInt32
         let bgColor: UInt32
@@ -412,6 +469,10 @@ public final class VIC {
                 let px1 = px0 + 1
                 if px0 >= 0 && px0 < VIC.screenWidth { line[px0] = color }
                 if px1 >= 0 && px1 < VIC.screenWidth { line[px1] = color }
+                if bits != 0 {
+                    if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
+                    if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+                }
             }
             return
         }
@@ -424,6 +485,7 @@ public final class VIC {
             guard px >= 0 && px < VIC.screenWidth else { continue }
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
+                foregroundMask[px] = true
             } else {
                 line[px] = bgColor
             }
@@ -467,8 +529,33 @@ public final class VIC {
         }
     }
 
-    func renderSprites(_ line: inout [UInt32], fbY: Int) {
+    func renderSprites(_ line: inout [UInt32], fbY: Int, foregroundMask: [Bool]? = nil) {
         guard spriteEnabled != 0 else { return }
+
+        let graphicsLine = line
+        let background = ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)]
+        var spriteOccupancy = [UInt8](repeating: 0, count: VIC.screenWidth)
+
+        func plotSpritePixel(sprite: Int, x: Int, color: UInt32, behindBG: Bool) {
+            guard x >= 0 && x < VIC.screenWidth else { return }
+
+            let spriteMask = UInt8(1 << sprite)
+            if spriteOccupancy[x] != 0 {
+                spriteSpriteCollision |= spriteOccupancy[x] | spriteMask
+                raiseInterrupt(0x04)  // IMMC
+            }
+            spriteOccupancy[x] |= spriteMask
+
+            let hasForeground = foregroundMask?[x] ?? (graphicsLine[x] != background)
+            if hasForeground {
+                spriteDataCollision |= spriteMask
+                raiseInterrupt(0x02)  // IMBC
+            }
+
+            if !behindBG || !hasForeground {
+                line[x] = color
+            }
+        }
 
         // Render sprites from back to front (sprite 7 first, 0 last = highest priority)
         for i in stride(from: 7, through: 0, by: -1) {
@@ -501,11 +588,8 @@ public final class VIC {
 
                     let xWidth = expandX ? 4 : 2
                     for sub in 0..<xWidth {
-                        let px = sx + bit * xWidth + sub - VIC.firstVisibleLine + VIC.displayLeft
-                        guard px >= 0 && px < VIC.screenWidth else { continue }
-                        if !behindBG || line[px] == ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)] {
-                            line[px] = pixColor
-                        }
+                        let px = sx + bit * xWidth + sub
+                        plotSpritePixel(sprite: i, x: px, color: pixColor, behindBG: behindBG)
                     }
                 }
             } else {
@@ -513,11 +597,8 @@ public final class VIC {
                     guard fullData & (1 << (23 - bit)) != 0 else { continue }
                     let xWidth = expandX ? 2 : 1
                     for sub in 0..<xWidth {
-                        let px = sx + bit * xWidth + sub - VIC.firstVisibleLine + VIC.displayLeft
-                        guard px >= 0 && px < VIC.screenWidth else { continue }
-                        if !behindBG || line[px] == ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)] {
-                            line[px] = color
-                        }
+                        let px = sx + bit * xWidth + sub
+                        plotSpritePixel(sprite: i, x: px, color: color, behindBG: behindBG)
                     }
                 }
             }
@@ -613,18 +694,11 @@ public final class VIC {
         case 0x19:
             // Acknowledge interrupts (write 1 to clear)
             interruptRegister &= ~(value & 0x0F)
-            if interruptRegister & interruptEnable & 0x0F == 0 {
-                interruptRegister &= 0x7F
-                onIRQ?(false)
-            }
+            updateIRQLine()
 
         case 0x1A:
             interruptEnable = value & 0x0F
-            // Check if any pending interrupt should now fire
-            if interruptRegister & interruptEnable & 0x0F != 0 {
-                interruptRegister |= 0x80
-                onIRQ?(true)
-            }
+            updateIRQLine()
 
         case 0x1B: spritePriority = value
         case 0x1C: spriteMulticolor = value
