@@ -11,6 +11,48 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.read(0x0001), 0x37)
     }
 
+    func testCPUDataPortReflectsCassetteSenseInputLine() {
+        let memory = MemoryMap()
+        memory.write(0x0000, value: 0x00)
+        memory.write(0x0001, value: 0x00)
+
+        memory.cassetteSenseLineHigh = false
+
+        XCTAssertEqual(memory.read(0x0001), 0x27)
+
+        memory.cassetteSenseLineHigh = true
+
+        XCTAssertEqual(memory.read(0x0001), 0x37)
+    }
+
+    func testCPUDataPortOutputDirectionOverridesCassetteSenseInput() {
+        let memory = MemoryMap()
+        memory.cassetteSenseLineHigh = false
+
+        memory.write(0x0000, value: 0x10)
+        memory.write(0x0001, value: 0x10)
+
+        XCTAssertEqual(memory.read(0x0001) & 0x10, 0x10)
+
+        memory.write(0x0001, value: 0x00)
+
+        XCTAssertEqual(memory.read(0x0001) & 0x10, 0x00)
+    }
+
+    func testCPUDataPortExposesCassetteOutputLineLevels() {
+        let memory = MemoryMap()
+        memory.write(0x0000, value: 0x28)
+        memory.write(0x0001, value: 0x28)
+
+        XCTAssertTrue(memory.cassetteWriteLineHigh)
+        XCTAssertTrue(memory.cassetteMotorLineHigh)
+
+        memory.write(0x0001, value: 0x00)
+
+        XCTAssertFalse(memory.cassetteWriteLineHigh)
+        XCTAssertFalse(memory.cassetteMotorLineHigh)
+    }
+
     func testROMBankingReadsROMsAndWritesRAMUnderneath() {
         let memory = MemoryMap()
         memory.basicROM[0] = 0xBA

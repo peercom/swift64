@@ -34,13 +34,28 @@ public final class MemoryMap: Bus {
     /// Bits: 0=LORAM, 1=HIRAM, 2=CHAREN, 3=cassette write, 4=cassette sense, 5=cassette motor
     public var portData: UInt8 = 0x37
 
+    /// External cassette sense input. High means no datasette key is pressed.
+    public var cassetteSenseLineHigh: Bool = true
+
+    /// Raw cassette write output level driven by CPU port bit 3.
+    public var cassetteWriteLineHigh: Bool {
+        effectivePort & 0x08 != 0
+    }
+
+    /// Raw cassette motor-control output level driven by CPU port bit 5.
+    public var cassetteMotorLineHigh: Bool {
+        effectivePort & 0x20 != 0
+    }
+
     /// Last value driven on the CPU data bus, used for simple open-bus reads.
     var cpuDataBus: UInt8 = 0xFF
 
     /// Effective port value considering direction bits
     var effectivePort: UInt8 {
-        // For input bits (direction=0), read as 1 (pull-up)
-        return (portData & portDirection) | (~portDirection & 0x37)
+        // For input bits (direction=0), exposed lines read pulled high unless
+        // an external input such as cassette sense pulls them low.
+        let inputHighMask: UInt8 = cassetteSenseLineHigh ? 0x37 : 0x27
+        return (portData & portDirection) | (~portDirection & inputHighMask)
     }
 
     /// LORAM: BASIC ROM visible at $A000-$BFFF
