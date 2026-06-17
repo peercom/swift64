@@ -445,6 +445,51 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.interruptData, 0x10)
     }
 
+    func testSerialInputShiftsSPOnCNTPulsesAndRaisesInterrupt() {
+        let cia = CIA(isCIA1: true)
+
+        cia.writeRegister(0x0D, value: 0x88)
+
+        for bit in [true, false, true, false, false, true, false] {
+            cia.setSPLine(high: bit)
+            cia.pulseCNT()
+            XCTAssertFalse(cia.interruptActive)
+        }
+
+        cia.setSPLine(high: true)
+        cia.pulseCNT()
+
+        XCTAssertEqual(cia.readRegister(0x0C), 0b1010_0101)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x88)
+        XCTAssertFalse(cia.interruptActive)
+    }
+
+    func testSerialOutputShiftsMSBFirstOnTimerAUnderflowsAndRaisesInterrupt() {
+        let cia = CIA(isCIA1: true)
+
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x88)
+        cia.writeRegister(0x0E, value: 0x41)
+        cia.writeRegister(0x0C, value: 0b1010_0101)
+
+        var shiftedBits: [Bool] = []
+        for _ in 0..<7 {
+            tickTimerAUnderflow(cia)
+            shiftedBits.append(cia.spLineHigh)
+            XCTAssertFalse(cia.interruptActive)
+        }
+
+        tickTimerAUnderflow(cia)
+        shiftedBits.append(cia.spLineHigh)
+
+        XCTAssertEqual(shiftedBits, [true, false, true, false, false, true, false, true])
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x89)
+        XCTAssertFalse(cia.interruptActive)
+    }
+
     private func tickTODTenth(_ cia: CIA) {
         for _ in 0..<CIA.palCyclesPerTodTenth {
             cia.tick()

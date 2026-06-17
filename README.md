@@ -42,6 +42,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 ### Recent emulation work
 
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source
 - CIA timer output now drives PB6/PB7 pulse and toggle modes for software that observes user-port/timer pins
 - SID oscillator sync now resets voices on source MSB rising edges instead of source level, improving hard-sync behavior
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work

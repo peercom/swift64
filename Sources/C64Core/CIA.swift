@@ -122,8 +122,16 @@ public final class CIA {
     /// Callback when port A is written (used by CIA2 for IEC bus).
     public var onPortAWrite: ((UInt8) -> Void)?
 
-    // MARK: - Serial port register (stub)
+    // MARK: - Serial port
+
+    /// Serial data register ($DC0C/$DD0C).
     var serialData: UInt8 = 0
+    /// Current external/output SP pin level.
+    public private(set) var spLineHigh: Bool = true
+    var serialInputShift: UInt8 = 0
+    var serialInputBitsReceived: Int = 0
+    var serialOutputShift: UInt8 = 0
+    var serialOutputBitsRemaining: Int = 0
 
     // MARK: - Init
 
@@ -160,6 +168,7 @@ public final class CIA {
 
     func timerAUnderflow() {
         updateTimerAOutput()
+        shiftSerialOutputBit()
 
         // Set interrupt flag
         interruptData |= 0x01
@@ -234,6 +243,10 @@ public final class CIA {
         cntLineHigh = high
     }
 
+    public func setSPLine(high: Bool) {
+        spLineHigh = high
+    }
+
     public func pulseCNT() {
         if timerAControl & 0x01 != 0 && timerAControl & 0x20 != 0 {
             countTimerA()
@@ -242,6 +255,8 @@ public final class CIA {
         if timerBControl & 0x01 != 0 && timerBControl & 0x60 == 0x20 {
             countTimerB()
         }
+
+        shiftSerialInputBit()
     }
 
     func countTimerA() {
@@ -290,6 +305,38 @@ public final class CIA {
         }
         if timerBPulseCyclesRemaining > 0 {
             timerBPulseCyclesRemaining -= 1
+        }
+    }
+
+    var serialOutputMode: Bool {
+        timerAControl & 0x40 != 0
+    }
+
+    func shiftSerialInputBit() {
+        guard !serialOutputMode else { return }
+
+        serialInputShift = (serialInputShift << 1) | (spLineHigh ? 1 : 0)
+        serialInputBitsReceived += 1
+
+        if serialInputBitsReceived == 8 {
+            serialData = serialInputShift
+            serialInputShift = 0
+            serialInputBitsReceived = 0
+            interruptData |= 0x08
+            checkInterrupt()
+        }
+    }
+
+    func shiftSerialOutputBit() {
+        guard serialOutputMode, serialOutputBitsRemaining > 0 else { return }
+
+        spLineHigh = serialOutputShift & 0x80 != 0
+        serialOutputShift <<= 1
+        serialOutputBitsRemaining -= 1
+
+        if serialOutputBitsRemaining == 0 {
+            interruptData |= 0x08
+            checkInterrupt()
         }
     }
 
@@ -500,6 +547,8 @@ public final class CIA {
 
         case 0x0C:
             serialData = value
+            serialOutputShift = value
+            serialOutputBitsRemaining = serialOutputMode ? 8 : 0
 
         case 0x0D:
             // Interrupt control
