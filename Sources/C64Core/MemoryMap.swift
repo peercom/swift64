@@ -82,6 +82,10 @@ public final class MemoryMap: Bus {
             return finishRead(address, value: effectivePort)
         }
 
+        if cartridge?.usesUltimaxMemoryMap == true {
+            return finishRead(address, value: readUltimax(address))
+        }
+
         let value: UInt8
         switch addr {
         case 0x8000...0x9FFF:
@@ -146,6 +150,11 @@ public final class MemoryMap: Bus {
             return
         }
 
+        if cartridge?.usesUltimaxMemoryMap == true {
+            writeUltimax(UInt16(addr), value: value)
+            return
+        }
+
         // I/O area — writes go to chips if I/O is banked in
         if addr >= 0xD000 && addr <= 0xDFFF && (hiram || loram) && charen {
             writeIO(UInt16(addr), value: value)
@@ -162,6 +171,32 @@ public final class MemoryMap: Bus {
             dbg.notifyRead(address, value: value)
         }
         return value
+    }
+
+    func readUltimax(_ address: UInt16) -> UInt8 {
+        let addr = Int(address)
+        switch addr {
+        case 0x0000...0x0FFF, 0xC000...0xCFFF:
+            return ram[addr]
+        case 0x8000...0x9FFF, 0xE000...0xFFFF:
+            return cartridge?.read(address) ?? cpuDataBus
+        case 0xD000...0xDFFF:
+            return readIO(address)
+        default:
+            return cpuDataBus
+        }
+    }
+
+    func writeUltimax(_ address: UInt16, value: UInt8) {
+        let addr = Int(address)
+        switch addr {
+        case 0x0000...0x0FFF, 0xC000...0xCFFF:
+            ram[addr] = value
+        case 0xD000...0xDFFF:
+            writeIO(address, value: value)
+        default:
+            break
+        }
     }
 
     // MARK: - I/O dispatch

@@ -22,6 +22,10 @@ public struct Cartridge: Equatable {
     public let mappingMode: MappingMode
     public let chips: [Chip]
 
+    public var usesUltimaxMemoryMap: Bool {
+        mappingMode == .ultimax
+    }
+
     private let roml: [UInt8]?
     private let romh: [UInt8]?
 

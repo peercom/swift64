@@ -60,6 +60,59 @@ final class CartridgeTests: XCTestCase {
         XCTAssertEqual(memory.read(0xE000), 0xE0)
     }
 
+    func testUltimaxMemoryMapLeavesMiddleRangesOpenAndKeepsC000RAM() throws {
+        let roml = Array(repeating: UInt8(0x80), count: 0x2000)
+        let romh = Array(repeating: UInt8(0xE0), count: 0x2000)
+        let crt = makeCRT(exrom: 1, game: 0, chips: [
+            (address: 0x8000, data: roml),
+            (address: 0xE000, data: romh)
+        ])
+        let cartridge = try XCTUnwrap(Cartridge.parseCRT(crt))
+        let memory = MemoryMap()
+        memory.cartridge = cartridge
+        memory.ram[0x0FFF] = 0x0F
+        memory.ram[0x1000] = 0x11
+        memory.ram[0xA000] = 0xAA
+        memory.ram[0xC000] = 0xC0
+        memory.basicROM[0] = 0xBA
+        memory.kernalROM[0] = 0xFE
+
+        XCTAssertEqual(memory.read(0x0FFF), 0x0F)
+        XCTAssertEqual(memory.read(0xC000), 0xC0)
+        XCTAssertEqual(memory.read(0x8000), 0x80)
+        XCTAssertEqual(memory.read(0xE000), 0xE0)
+
+        XCTAssertEqual(memory.read(0x1000), 0xE0)
+        XCTAssertEqual(memory.read(0xA000), 0xE0)
+
+        memory.write(0x1000, value: 0x22)
+        memory.write(0xA000, value: 0x33)
+        memory.write(0xC000, value: 0x44)
+        memory.write(0xE000, value: 0x55)
+
+        XCTAssertEqual(memory.ram[0x1000], 0x11)
+        XCTAssertEqual(memory.ram[0xA000], 0xAA)
+        XCTAssertEqual(memory.ram[0xC000], 0x44)
+        XCTAssertEqual(memory.read(0xE000), 0xE0)
+    }
+
+    func testUltimaxMemoryMapKeepsIOVisibleRegardlessOfCPUROMPortBits() throws {
+        let crt = makeCRT(exrom: 1, game: 0, chips: [
+            (address: 0x8000, data: Array(repeating: 0x80, count: 0x2000)),
+            (address: 0xE000, data: Array(repeating: 0xE0, count: 0x2000))
+        ])
+        let cartridge = try XCTUnwrap(Cartridge.parseCRT(crt))
+        let memory = MemoryMap()
+        memory.cartridge = cartridge
+        memory.write(0x0001, value: 0x30)
+
+        memory.write(0xD800, value: 0x0B)
+        memory.ram[0xC000] = 0xA3
+
+        XCTAssertEqual(memory.read(0xC000), 0xA3)
+        XCTAssertEqual(memory.read(0xD800), 0xAB)
+    }
+
     func testRejectsUnsupportedCartridgeHardwareType() {
         var crt = makeCRT(exrom: 0, game: 1, chips: [
             (address: 0x8000, data: Array(repeating: 0x42, count: 0x2000))
