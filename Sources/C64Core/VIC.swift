@@ -24,6 +24,10 @@ public final class VIC {
     public static let displayLeft = 24     // in pixels from left edge of visible area
     public static let displayRight = 344
 
+    /// Raster range where bad lines can occur on PAL VIC-II.
+    static let firstBadLine = 0x30
+    static let lastBadLine = 0xF7
+
     // MARK: - Registers
 
     /// Sprite X coordinates (lower 8 bits)
@@ -97,6 +101,10 @@ public final class VIC {
 
     /// Bad line condition
     var badLine: Bool = false
+    /// Whether DEN was observed on raster $30, arming bad lines for this frame.
+    var badLineDENLatched: Bool = false
+    /// Prevents repeated raster IRQs after multiple compare writes on the same rasterline.
+    var rasterIRQTriggeredThisLine: Bool = false
 
     /// True when the VIC is stealing the bus from the CPU for bad-line character fetches.
     var isStealingCPU: Bool {
@@ -176,10 +184,14 @@ public final class VIC {
     }
 
     func checkBadLine() {
-        // Bad line when rasterline is in display area and lower 3 bits match YSCROLL
-        if rasterLine >= UInt16(VIC.displayTop) && rasterLine <= UInt16(VIC.displayBottom) {
+        if rasterLine == UInt16(VIC.firstBadLine) && displayEnabled {
+            badLineDENLatched = true
+        }
+
+        // Bad line when rasterline is in the VIC-II bad-line range and lower 3 bits match YSCROLL.
+        if rasterLine >= UInt16(VIC.firstBadLine) && rasterLine <= UInt16(VIC.lastBadLine) {
             let yMatch = (rasterLine & 0x07) == UInt16(yScroll)
-            if yMatch && displayEnabled {
+            if yMatch && badLineDENLatched {
                 badLine = true
                 rowCounter = 0
             } else {
@@ -192,14 +204,11 @@ public final class VIC {
 
     func endOfLine() {
         // Render this rasterline to framebuffer if visible
-        if rasterLine >= UInt16(VIC.firstVisibleLine) && rasterLine < UInt16(VIC.lastVisibleLine) {
+        if rasterLine >= UInt16(VIC.firstVisibleLine) && rasterLine <= UInt16(VIC.lastVisibleLine) {
             renderRasterline()
         }
 
-        // Raster IRQ check
-        if rasterLine == rasterCompare {
-            raiseInterrupt(0x01)  // IRST
-        }
+        checkRasterInterrupt()
 
         // Advance rasterline
         rasterCycle = 0
@@ -208,8 +217,10 @@ public final class VIC {
         if rasterLine >= UInt16(VIC.totalLines) {
             rasterLine = 0
             videoCounterBase = 0
+            badLineDENLatched = false
             frameReady = true
         }
+        rasterIRQTriggeredThisLine = false
 
         // Video counter management
         if rasterLine == UInt16(VIC.displayTop) && displayEnabled {
@@ -234,6 +245,12 @@ public final class VIC {
     func raiseInterrupt(_ flag: UInt8) {
         interruptRegister |= flag
         updateIRQLine()
+    }
+
+    func checkRasterInterrupt() {
+        guard rasterLine == rasterCompare && !rasterIRQTriggeredThisLine else { return }
+        rasterIRQTriggeredThisLine = true
+        raiseInterrupt(0x01)  // IRST
     }
 
     func updateIRQLine() {
@@ -281,42 +298,52 @@ public final class VIC {
         let rightBorder: Int = cols40 ? VIC.displayRight : VIC.displayRight - 9
 
         let lineInDisplay = Int(rasterLine) >= topBorder && Int(rasterLine) < bottomBorder
-        let displayY = Int(rasterLine) - topBorder
+        let graphicsY = Int(rasterLine) - VIC.displayTop
 
         // Render character/bitmap graphics for this line
         var graphicsLine = [UInt32](repeating: bgCol, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
 
-        if lineInDisplay && displayActive && displayEnabled {
-            let charRow = displayY / 8
-            let pixelRow = displayY % 8
+        if lineInDisplay && displayActive && displayEnabled && graphicsY >= 0 {
+            let charRow = graphicsY / 8
+            let pixelRow = graphicsY % 8
 
             renderGraphicsLine(
                 &graphicsLine,
                 foregroundMask: &foregroundMask,
                 charRow: charRow,
                 pixelRow: pixelRow,
-                leftBorder: leftBorder,
+                leftBorder: VIC.displayLeft,
                 rightBorder: rightBorder
             )
-
-            // Render sprites
-            renderSprites(&graphicsLine, fbY: fbY, foregroundMask: foregroundMask)
         }
 
-        // Compose final line with borders
+        // Compose final line with borders, then draw sprites over it. C64 sprites
+        // can appear in the border while still colliding with display graphics.
+        var finalLine = [UInt32](repeating: borderCol, count: VIC.screenWidth)
         for px in 0..<VIC.screenWidth {
             if !lineInDisplay || px < leftBorder || px >= rightBorder {
-                framebuffer[lineOffset + px] = borderCol
+                finalLine[px] = borderCol
             } else {
-                framebuffer[lineOffset + px] = graphicsLine[px]
+                finalLine[px] = graphicsLine[px]
             }
+        }
+
+        var spriteForegroundMask = foregroundMask
+        for px in 0..<VIC.screenWidth where !lineInDisplay || px < leftBorder || px >= rightBorder {
+            spriteForegroundMask[px] = false
+        }
+
+        renderSprites(&finalLine, fbY: fbY, foregroundMask: spriteForegroundMask)
+
+        for px in 0..<VIC.screenWidth {
+            framebuffer[lineOffset + px] = finalLine[px]
         }
 
         // Update video counter at end of display line
         if lineInDisplay && displayActive {
-            let charRow = displayY / 8
-            let pixelRow = displayY % 8
+            let charRow = graphicsY / 8
+            let pixelRow = graphicsY % 8
             if pixelRow == 7 {
                 videoCounterBase = (charRow + 1) * 40
             }
@@ -346,7 +373,8 @@ public final class VIC {
                 let bitmapAddr = charBase + UInt16(vc) * 8 + UInt16(pixelRow)
                 pixelData = readMem(bitmapAddr)
             } else {
-                let charAddr = charBase + UInt16(charCode) * 8 + UInt16(pixelRow)
+                let glyphCode = extendedBGMode ? (charCode & 0x3F) : charCode
+                let charAddr = charBase + UInt16(glyphCode) * 8 + UInt16(pixelRow)
                 pixelData = readMem(charAddr)
             }
 
@@ -633,7 +661,7 @@ public final class VIC {
         case 0x15: return spriteEnabled
         case 0x16: return controlReg2 | 0xC0
         case 0x17: return spriteExpandY
-        case 0x18: return memoryPointers
+        case 0x18: return memoryPointers | 0x01
         case 0x19: return interruptRegister | 0x70
         case 0x1A: return interruptEnable | 0xF0
         case 0x1B: return spritePriority
@@ -680,11 +708,17 @@ public final class VIC {
             }
 
         case 0x11:
-            controlReg1 = value
+            controlReg1 = value & 0x7F
             rasterCompare = (rasterCompare & 0x00FF) | (UInt16(value & 0x80) << 1)
+            if rasterLine == UInt16(VIC.firstBadLine) && displayEnabled {
+                badLineDENLatched = true
+            }
+            checkBadLine()
+            checkRasterInterrupt()
 
         case 0x12:
             rasterCompare = (rasterCompare & 0x100) | UInt16(value)
+            checkRasterInterrupt()
 
         case 0x15: spriteEnabled = value
         case 0x16: controlReg2 = value
