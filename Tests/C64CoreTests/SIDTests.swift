@@ -62,4 +62,30 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].rateCounter, 0)
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
     }
+
+    func testOscillatorSyncResetsOnSourceMSBRisingEdge() {
+        let sid = SID()
+        sid.voices[0].control = 0x02
+        sid.voices[0].accumulator = 0x123456
+        sid.voices[0].frequency = 0
+        sid.voices[2].accumulator = 0x7FFFFF
+        sid.voices[2].frequency = 1
+
+        sid.tick()
+
+        XCTAssertEqual(sid.voices[0].accumulator, 0)
+    }
+
+    func testOscillatorSyncDoesNotResetWhileSourceMSBStaysHigh() {
+        let sid = SID()
+        sid.voices[0].control = 0x02
+        sid.voices[0].accumulator = 0x123456
+        sid.voices[0].frequency = 0
+        sid.voices[2].accumulator = 0x800000
+        sid.voices[2].frequency = 1
+
+        sid.tick()
+
+        XCTAssertEqual(sid.voices[0].accumulator, 0x123456)
+    }
 }

@@ -83,6 +83,9 @@ public final class SID {
     /// Audio sample accumulator
     var sampleCycleCounter: Double = 0
 
+    /// Per-cycle oscillator MSB rising-edge flags used for hard sync.
+    var oscillatorMSBRose = [Bool](repeating: false, count: 3)
+
     /// Ring buffer for audio output
     public var sampleBuffer = [Float](repeating: 0, count: 8192)
     public var sampleWritePos: Int = 0
@@ -108,9 +111,14 @@ public final class SID {
 
     /// Advance one system clock cycle.
     public func tick() {
-        // Update oscillators and envelopes
+        // Update all oscillators before applying sync so source edges are
+        // independent of voice iteration order.
         for i in 0..<3 {
             clockOscillator(i)
+        }
+        applyOscillatorSync()
+
+        for i in 0..<3 {
             clockEnvelope(i)
         }
 
@@ -134,17 +142,19 @@ public final class SID {
 
         // Noise shift register clock on bit 19 transition
         let newMSB = voices[v].accumulator & 0x800000
+        oscillatorMSBRose[v] = prevMSB == 0 && newMSB != 0
         if prevMSB == 0 && newMSB != 0 {
             let bit22 = (voices[v].shiftRegister >> 22) & 1
             let bit17 = (voices[v].shiftRegister >> 17) & 1
             let newBit = bit22 ^ bit17
             voices[v].shiftRegister = ((voices[v].shiftRegister << 1) | newBit) & 0x7FFFFF
         }
+    }
 
-        // Sync: reset accumulator when sync source's MSB transitions
-        if voices[v].sync {
+    func applyOscillatorSync() {
+        for v in 0..<3 where voices[v].sync {
             let syncSource = (v + 2) % 3
-            if voices[syncSource].accumulator & 0x800000 != 0 {
+            if oscillatorMSBRose[syncSource] {
                 voices[v].accumulator = 0
             }
         }

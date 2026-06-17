@@ -9,7 +9,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 | 6510/6502 CPU | Partial-preservation | Cycle-stepped CPU with documented and many undocumented opcodes; remaining work includes conformance-suite closure for decimal flags, RDY/SO/interrupt edges, and unstable opcodes. |
 | Memory and I/O banking | Good baseline | BASIC/Kernal/Char ROM banking, I/O dispatch, color RAM nibbles, VIC bank selection, and open-bus behavior have focused tests. |
 | VIC-II | Partial | Rasterline rendering, bad-line CPU stalls, sprites, collision IRQs, light pen latch, and key readback quirks are covered; full per-cycle BA/AEC, sprite DMA, border tricks, and PAL/NTSC geometry remain open. |
-| SID | Early partial | Three voices, ADSR, waveforms, OSC3/ENV3, paddle reads, and a basic filter exist; 6581/8580 model differences, ADSR bugs, combined waveforms, and filter curves remain open. |
+| SID | Early partial | Three voices, ADSR, waveforms, edge-based oscillator sync, OSC3/ENV3, paddle reads, and a basic filter exist; 6581/8580 model differences, ADSR bugs, combined waveforms, and filter curves remain open. |
 | CIA 6526 | Partial | Timers, TOD, keyboard/joystick scanning, FLAG/CNT paths, PB6/PB7 timer outputs, interrupt masking, and timer read latches are covered; serial port, TOD 50/60 Hz profile closure, and deeper port interactions remain open. |
 | 1541 true drive | In progress | 1541 CPU/VIA/GCR/IEC read path exists with D64/G64 smoke coverage; custom loaders, weak bits, halftracks, variable track length, write-back, SAVE, and format support remain open. |
 | Tape | Container-level | T64/TAP mounting and trap loading exist; real datasette signal timing is not complete. |
