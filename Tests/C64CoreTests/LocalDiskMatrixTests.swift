@@ -81,9 +81,11 @@ final class LocalDiskMatrixTests: XCTestCase {
                 XCTAssertTrue(c64.runFrame())
             }
 
-            c64.typeText(milestone.command + "\r")
+            for command in milestone.commands {
+                c64.typeText(command + "\r")
+            }
             let result = runUntilMilestone(c64, milestone: milestone)
-            let summary = result.summary(name: milestone.url.lastPathComponent, command: milestone.command, c64: c64)
+            let summary = result.summary(name: milestone.url.lastPathComponent, command: milestone.commandSummary, c64: c64)
             summaries.append(summary)
             XCTAssertTrue(result.passed, summary)
         }
@@ -187,8 +189,12 @@ final class LocalDiskMatrixTests: XCTestCase {
             let driveStatus = c64.drive1541.statusSnapshot
             let gcrReads = driveStatus.via2PortAReadCount - baseline.via2PortAReadCount
             let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
+            let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
             let pcReached = milestone.pcRange?.contains(c64.cpu.pc) ?? true
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
+            let driveExpectationMatches = milestone.driveStatus.map {
+                driveStatusMatches($0, snapshot: driveStatus, gcrReads: gcrReads, byteReady: byteReady, syncDetections: syncDetections)
+            } ?? true
             let ramMatches = milestone.ramSignatures.allSatisfy { signature in
                 let start = signature.address
                 let end = start + signature.bytes.count
@@ -199,7 +205,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
 
-            if pcReached && driveProgress && ramMatches && screenMatches {
+            if pcReached && driveProgress && driveExpectationMatches && ramMatches && screenMatches {
                 return MatrixRunResult(passed: true, elapsedCycles: c64.cpu.totalCycles, reason: "named milestone reached")
             }
         }
@@ -225,11 +231,12 @@ final class LocalDiskMatrixTests: XCTestCase {
             LocalMilestone(
                 url: giana,
                 machineProfile: .palC64,
-                command: #"LOAD"*",8,1"#,
+                commands: [#"LOAD"*",8,1"#],
                 maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
                 pcRange: nil,
                 minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
                 minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
+                driveStatus: nil,
                 ramSignatures: [],
                 screenRAMHash: nil
             )
@@ -250,15 +257,50 @@ final class LocalDiskMatrixTests: XCTestCase {
             return LocalMilestone(
                 url: url,
                 machineProfile: entry.machineProfile ?? .palC64,
-                command: entry.command,
+                commands: entry.commands,
                 maxCycles: entry.maxCycles ?? 24_000_000,
                 pcRange: entry.pcRange,
-                minGCRReads: UInt64(entry.minGCRReads ?? 64),
-                minByteReady: UInt64(entry.minByteReady ?? 512),
+                minGCRReads: nonNegativeUInt64(entry.driveStatus?.minGCRReads ?? entry.minGCRReads ?? 64),
+                minByteReady: nonNegativeUInt64(entry.driveStatus?.minByteReady ?? entry.minByteReady ?? 512),
+                driveStatus: entry.driveStatus,
                 ramSignatures: entry.ramSignatures,
                 screenRAMHash: entry.screenRAMHash
             )
         }
+    }
+
+    private func driveStatusMatches(
+        _ expectation: CompatibilityDriveStatus,
+        snapshot: Drive1541.StatusSnapshot,
+        gcrReads: UInt64,
+        byteReady: UInt64,
+        syncDetections: UInt64
+    ) -> Bool {
+        if let minGCRReads = expectation.minGCRReads, gcrReads < nonNegativeUInt64(minGCRReads) { return false }
+        if let minByteReady = expectation.minByteReady, byteReady < nonNegativeUInt64(minByteReady) { return false }
+        if let minSyncDetections = expectation.minSyncDetections,
+           syncDetections < nonNegativeUInt64(minSyncDetections) {
+            return false
+        }
+        if let track = expectation.track, snapshot.track != track { return false }
+        if let halfTrack = expectation.halfTrack, snapshot.halfTrack != halfTrack { return false }
+        if let motorOn = expectation.motorOn, snapshot.motorOn != motorOn { return false }
+        if let ledOn = expectation.ledOn, snapshot.ledOn != ledOn { return false }
+        if let writeProtected = expectation.writeProtected, snapshot.writeProtected != writeProtected { return false }
+        if let hasDisk = expectation.hasDisk, snapshot.hasDisk != hasDisk { return false }
+        if let hasNativeLowLevelImage = expectation.hasNativeLowLevelImage,
+           snapshot.hasNativeLowLevelImage != hasNativeLowLevelImage {
+            return false
+        }
+        if let lastIECCommandContains = expectation.lastIECCommandContains,
+           !snapshot.lastIECCommandSummary.localizedCaseInsensitiveContains(lastIECCommandContains) {
+            return false
+        }
+        return true
+    }
+
+    private func nonNegativeUInt64(_ value: Int) -> UInt64 {
+        UInt64(max(0, value))
     }
 
     private func matrixSummary(_ message: String, url: URL, gcrDisk: GCRDisk) -> String {
@@ -298,11 +340,16 @@ private struct MatrixRunResult {
 private struct LocalMilestone {
     let url: URL
     let machineProfile: CompatibilityMachineProfile
-    let command: String
+    let commands: [String]
     let maxCycles: Int
     let pcRange: ClosedRange<UInt16>?
     let minGCRReads: UInt64
     let minByteReady: UInt64
+    let driveStatus: CompatibilityDriveStatus?
     let ramSignatures: [CompatibilityRAMSignature]
     let screenRAMHash: String?
+
+    var commandSummary: String {
+        commands.joined(separator: " | ")
+    }
 }

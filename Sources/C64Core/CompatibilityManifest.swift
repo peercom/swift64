@@ -33,12 +33,13 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let file: String
     public let mediaType: CompatibilityMediaType?
     public let machineProfile: CompatibilityMachineProfile?
-    public let command: String
+    public let commands: [String]
     public let maxCycles: Int?
     public let pcStart: Int?
     public let pcEnd: Int?
     public let minGCRReads: Int?
     public let minByteReady: Int?
+    public let driveStatus: CompatibilityDriveStatus?
     public let ramSignatures: [CompatibilityRAMSignature]
     public let screenRAMHash: String?
     public let screenshotName: String?
@@ -48,11 +49,13 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case mediaType
         case machineProfile
         case command
+        case commands
         case maxCycles
         case pcStart
         case pcEnd
         case minGCRReads
         case minByteReady
+        case driveStatus
         case ramSignatures
         case screenRAMHash
         case screenshotName
@@ -68,6 +71,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         pcEnd: Int? = nil,
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
+        driveStatus: CompatibilityDriveStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         screenRAMHash: String? = nil,
         screenshotName: String? = nil
@@ -75,12 +79,43 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.file = file
         self.mediaType = mediaType
         self.machineProfile = machineProfile
-        self.command = command
+        self.commands = [command]
         self.maxCycles = maxCycles
         self.pcStart = pcStart
         self.pcEnd = pcEnd
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
+        self.driveStatus = driveStatus
+        self.ramSignatures = ramSignatures
+        self.screenRAMHash = screenRAMHash
+        self.screenshotName = screenshotName
+    }
+
+    public init(
+        file: String,
+        mediaType: CompatibilityMediaType? = nil,
+        machineProfile: CompatibilityMachineProfile? = nil,
+        commands: [String],
+        maxCycles: Int? = nil,
+        pcStart: Int? = nil,
+        pcEnd: Int? = nil,
+        minGCRReads: Int? = nil,
+        minByteReady: Int? = nil,
+        driveStatus: CompatibilityDriveStatus? = nil,
+        ramSignatures: [CompatibilityRAMSignature] = [],
+        screenRAMHash: String? = nil,
+        screenshotName: String? = nil
+    ) {
+        self.file = file
+        self.mediaType = mediaType
+        self.machineProfile = machineProfile
+        self.commands = commands
+        self.maxCycles = maxCycles
+        self.pcStart = pcStart
+        self.pcEnd = pcEnd
+        self.minGCRReads = minGCRReads
+        self.minByteReady = minByteReady
+        self.driveStatus = driveStatus
         self.ramSignatures = ramSignatures
         self.screenRAMHash = screenRAMHash
         self.screenshotName = screenshotName
@@ -91,20 +126,76 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         file = try container.decode(String.self, forKey: .file)
         mediaType = try container.decodeIfPresent(CompatibilityMediaType.self, forKey: .mediaType)
         machineProfile = try container.decodeIfPresent(CompatibilityMachineProfile.self, forKey: .machineProfile)
-        command = try container.decode(String.self, forKey: .command)
+        if let commandSequence = try container.decodeIfPresent([String].self, forKey: .commands) {
+            guard !commandSequence.isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .commands,
+                    in: container,
+                    debugDescription: "Command sequence must not be empty"
+                )
+            }
+            commands = commandSequence
+        } else {
+            commands = [try container.decode(String.self, forKey: .command)]
+        }
         maxCycles = try container.decodeIfPresent(Int.self, forKey: .maxCycles)
         pcStart = try container.decodeIfPresent(Int.self, forKey: .pcStart)
         pcEnd = try container.decodeIfPresent(Int.self, forKey: .pcEnd)
         minGCRReads = try container.decodeIfPresent(Int.self, forKey: .minGCRReads)
         minByteReady = try container.decodeIfPresent(Int.self, forKey: .minByteReady)
+        driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
         screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
     }
 
+    public var command: String {
+        commands.first ?? ""
+    }
+
     public var pcRange: ClosedRange<UInt16>? {
         guard let pcStart, let pcEnd else { return nil }
         return UInt16(pcStart)...UInt16(pcEnd)
+    }
+}
+
+public struct CompatibilityDriveStatus: Decodable, Equatable {
+    public let minGCRReads: Int?
+    public let minByteReady: Int?
+    public let minSyncDetections: Int?
+    public let track: Int?
+    public let halfTrack: Int?
+    public let motorOn: Bool?
+    public let ledOn: Bool?
+    public let writeProtected: Bool?
+    public let hasDisk: Bool?
+    public let hasNativeLowLevelImage: Bool?
+    public let lastIECCommandContains: String?
+
+    public init(
+        minGCRReads: Int? = nil,
+        minByteReady: Int? = nil,
+        minSyncDetections: Int? = nil,
+        track: Int? = nil,
+        halfTrack: Int? = nil,
+        motorOn: Bool? = nil,
+        ledOn: Bool? = nil,
+        writeProtected: Bool? = nil,
+        hasDisk: Bool? = nil,
+        hasNativeLowLevelImage: Bool? = nil,
+        lastIECCommandContains: String? = nil
+    ) {
+        self.minGCRReads = minGCRReads
+        self.minByteReady = minByteReady
+        self.minSyncDetections = minSyncDetections
+        self.track = track
+        self.halfTrack = halfTrack
+        self.motorOn = motorOn
+        self.ledOn = ledOn
+        self.writeProtected = writeProtected
+        self.hasDisk = hasDisk
+        self.hasNativeLowLevelImage = hasNativeLowLevelImage
+        self.lastIECCommandContains = lastIECCommandContains
     }
 }
 

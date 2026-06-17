@@ -118,12 +118,16 @@ Example milestone manifest:
       "file": "great_giana_sisters[time_warp_1987](pal)(r1)(!).g64",
       "mediaType": "g64",
       "machineProfile": "palC64",
-      "command": "LOAD\"*\",8,1",
+      "commands": ["LOAD\"*\",8,1", "RUN"],
       "maxCycles": 24000000,
       "pcStart": 49152,
       "pcEnd": 53247,
-      "minGCRReads": 64,
-      "minByteReady": 512,
+      "driveStatus": {
+        "minGCRReads": 64,
+        "minByteReady": 512,
+        "minSyncDetections": 1,
+        "hasNativeLowLevelImage": true
+      },
       "ramSignatures": [
         { "address": 2049, "bytes": "01 08" }
       ],
