@@ -3,6 +3,7 @@ import Foundation
 /// MOS 6526 CIA (Complex Interface Adapter) emulation.
 /// Two instances: CIA1 ($DC00, IRQ) and CIA2 ($DD00, NMI).
 public final class CIA {
+    static let palCyclesPerTodTenth = 98_525
 
     // MARK: - Ports
 
@@ -67,6 +68,8 @@ public final class CIA {
     var todLatchMinutes: UInt8 = 0
     var todLatchHours: UInt8 = 0
     var todWriteAlarm: Bool = false
+    var todCycleCount: Int = 0
+    var todStoppedForWrite: Bool = false
 
     // MARK: - Keyboard matrix (CIA1 only)
 
@@ -74,11 +77,11 @@ public final class CIA {
     /// Bit = 0 means key pressed.
     public var keyboardMatrix = [UInt8](repeating: 0xFF, count: 8)
 
-    /// Joystick port 1 (directly on port A for CIA1)
+    /// Joystick port 1 (CIA1 port B, $DC01)
     /// Bits: 0=Up, 1=Down, 2=Left, 3=Right, 4=Fire (active low)
     public var joystickPort1: UInt8 = 0xFF
 
-    /// Joystick port 2 (on port B for CIA1)
+    /// Joystick port 2 (CIA1 port A, $DC00)
     public var joystickPort2: UInt8 = 0xFF
 
     /// Is this CIA1 (true) or CIA2 (false)?
@@ -132,6 +135,8 @@ public final class CIA {
             }
             // countSource == 0x40: count timer A underflows (handled in timerAUnderflow)
         }
+
+        tickTOD()
     }
 
     func timerAUnderflow() {
@@ -146,8 +151,7 @@ public final class CIA {
         }
         timerA = timerALatch
 
-        // If timer B counts timer A underflows
-        if timerBControl & 0x61 == 0x41 {
+        if timerBCountsTimerAUnderflows {
             if timerB == 0 {
                 timerBUnderflow()
             } else {
@@ -164,6 +168,10 @@ public final class CIA {
             timerBControl &= ~0x01
         }
         timerB = timerBLatch
+    }
+
+    var timerBCountsTimerAUnderflows: Bool {
+        timerBControl & 0x01 != 0 && timerBControl & 0x40 != 0
     }
 
     func checkInterrupt() {
@@ -185,13 +193,83 @@ public final class CIA {
         }
     }
 
+    func tickTOD() {
+        guard !todStoppedForWrite else { return }
+
+        todCycleCount += 1
+        guard todCycleCount >= Self.palCyclesPerTodTenth else { return }
+
+        todCycleCount -= Self.palCyclesPerTodTenth
+        incrementTODTenth()
+    }
+
+    func incrementTODTenth() {
+        todTenths &+= 1
+        if todTenths < 10 {
+            checkTODAlarm()
+            return
+        }
+
+        todTenths = 0
+        incrementTODSeconds()
+        checkTODAlarm()
+    }
+
+    func incrementTODSeconds() {
+        todSeconds = incrementBCD(todSeconds, wrappingAt: 0x60)
+        if todSeconds == 0 {
+            incrementTODMinutes()
+        }
+    }
+
+    func incrementTODMinutes() {
+        todMinutes = incrementBCD(todMinutes, wrappingAt: 0x60)
+        if todMinutes == 0 {
+            incrementTODHours()
+        }
+    }
+
+    func incrementTODHours() {
+        let pm = todHours & 0x80
+        let hour = todHours & 0x1F
+
+        switch hour {
+        case 0x00:
+            todHours = pm | 0x01
+        case 0x11:
+            todHours = (pm ^ 0x80) | 0x12
+        case 0x12:
+            todHours = pm | 0x01
+        default:
+            todHours = pm | incrementBCD(hour == 0 ? 1 : hour, wrappingAt: 0x13)
+        }
+    }
+
+    func incrementBCD(_ value: UInt8, wrappingAt limit: UInt8) -> UInt8 {
+        var next = value &+ 1
+        if next & 0x0F >= 0x0A {
+            next = (next & 0xF0) &+ 0x10
+        }
+        return next >= limit ? 0 : next
+    }
+
+    func checkTODAlarm() {
+        guard todTenths == todAlarmTenths,
+              todSeconds == todAlarmSeconds,
+              todMinutes == todAlarmMinutes,
+              todHours == todAlarmHours else { return }
+
+        interruptData |= 0x04
+        checkInterrupt()
+    }
+
     // MARK: - Register access
 
     public func readRegister(_ reg: UInt16) -> UInt8 {
         switch reg {
         case 0x00:  // Port A
             if isCIA1 {
-                return readKeyboard() & joystickPort1
+                return readKeyboardPortA() & joystickPort2
             }
             // CIA2: output bits from portA, input bits from external (IEC bus)
             let external = readPortAExternal?() ?? 0xFF
@@ -199,7 +277,7 @@ public final class CIA {
 
         case 0x01:  // Port B
             if isCIA1 {
-                return readKeyboardPortB() & joystickPort2
+                return readKeyboardPortB() & joystickPort1
             }
             return portBOut
 
@@ -222,6 +300,9 @@ public final class CIA {
         case 0x0A:
             return todLatched ? todLatchMinutes : todMinutes
         case 0x0B:
+            if todLatched {
+                return todLatchHours
+            }
             // Reading hours latches TOD
             todLatched = true
             todLatchTenths = todTenths
@@ -278,7 +359,11 @@ public final class CIA {
         // TOD
         case 0x08:
             if todWriteAlarm { todAlarmTenths = value & 0x0F }
-            else { todTenths = value & 0x0F }
+            else {
+                todTenths = value & 0x0F
+                todCycleCount = 0
+                todStoppedForWrite = false
+            }
         case 0x09:
             if todWriteAlarm { todAlarmSeconds = value & 0x7F }
             else { todSeconds = value & 0x7F }
@@ -287,7 +372,10 @@ public final class CIA {
             else { todMinutes = value & 0x7F }
         case 0x0B:
             if todWriteAlarm { todAlarmHours = value & 0x9F }
-            else { todHours = value & 0x9F }
+            else {
+                todHours = value & 0x9F
+                todStoppedForWrite = true
+            }
 
         case 0x0C:
             serialData = value
@@ -325,17 +413,28 @@ public final class CIA {
 
     // MARK: - Keyboard matrix scanning
 
-    /// Read keyboard: Port A drives rows, Port B reads columns.
-    /// When a row bit in Port A is 0, all pressed keys in that row show as 0 in Port B.
-    func readKeyboard() -> UInt8 {
-        // Port A is being read, but for keyboard CIA1 reads port B
-        // Actually for CIA1, Port A output selects which rows to scan
-        return joystickPort1 & 0xFF
+    /// Read keyboard from Port A. This supports the less common reverse scan:
+    /// Port B drives columns, Port A reads rows.
+    func readKeyboardPortA() -> UInt8 {
+        let columnSelect = portBOut
+        var result = portAOut
+
+        for row in 0..<8 {
+            for column in 0..<8 where columnSelect & (1 << column) == 0 {
+                if keyboardMatrix[row] & (1 << column) == 0 {
+                    result &= ~(1 << row)
+                }
+            }
+        }
+
+        return result
     }
 
+    /// Read keyboard from Port B. Port A drives rows, Port B reads columns.
+    /// When a row bit in Port A is 0, all pressed keys in that row show as 0 in Port B.
     func readKeyboardPortB() -> UInt8 {
         let rowSelect = portAOut
-        var result: UInt8 = 0xFF
+        var result = portBOut
 
         // For each row that is selected (driven low), OR in the pressed keys
         for row in 0..<8 {
