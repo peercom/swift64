@@ -122,6 +122,36 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(manifest.milestones[1].machineProfile?.profile.videoStandard, .ntsc)
     }
 
+    func testManifestDecodes1541IIProfiles() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "pal-1541ii.d64",
+              "mediaType": "d64",
+              "machineProfile": "palC64With1541II",
+              "command": "LOAD\\"*\\",8,1"
+            },
+            {
+              "file": "ntsc-c64c-1541ii.d64",
+              "mediaType": "d64",
+              "machineProfile": "ntscC64CWith1541II",
+              "command": "LOAD\\"*\\",8,1"
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones[0].machineProfile, .palC64With1541II)
+        XCTAssertEqual(manifest.milestones[0].machineProfile?.profile.sidModel, .mos6581)
+        XCTAssertEqual(manifest.milestones[0].machineProfile?.profile.driveModel, .model1541II)
+        XCTAssertEqual(manifest.milestones[1].machineProfile, .ntscC64CWith1541II)
+        XCTAssertEqual(manifest.milestones[1].machineProfile?.profile.sidModel, .mos8580)
+        XCTAssertEqual(manifest.milestones[1].machineProfile?.profile.driveModel, .model1541II)
+    }
+
     func testManifestRejectsEmptyCommandSequence() {
         let json = """
         {

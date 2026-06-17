@@ -61,6 +61,27 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(ntscC64C.drive1541.driveModel, .model1541C)
     }
 
+    func test1541IIProfilesSelectAlternateDriveModel() {
+        let palC64With1541II = C64(machineProfile: .palC64With1541II)
+        let ntscC64CWith1541II = C64(machineProfile: .ntscC64CWith1541II)
+
+        XCTAssertEqual(palC64With1541II.machineProfile.name, "PAL C64 + 1541-II")
+        XCTAssertEqual(palC64With1541II.sid.model, .mos6581)
+        XCTAssertEqual(palC64With1541II.machineProfile.driveModel, .model1541II)
+        palC64With1541II.trueDriveEmulationMode = .compat1541
+        XCTAssertEqual(palC64With1541II.drive1541.driveModel, .model1541II)
+        XCTAssertFalse(palC64With1541II.drive1541.is1541C)
+        XCTAssertEqual(palC64With1541II.driveClockRatio, 1.0)
+
+        XCTAssertEqual(ntscC64CWith1541II.machineProfile.name, "NTSC C64C + 1541-II")
+        XCTAssertEqual(ntscC64CWith1541II.sid.model, .mos8580)
+        XCTAssertEqual(ntscC64CWith1541II.machineProfile.driveModel, .model1541II)
+        ntscC64CWith1541II.trueDriveEmulationMode = .compat1541
+        XCTAssertEqual(ntscC64CWith1541II.drive1541.driveModel, .model1541II)
+        XCTAssertFalse(ntscC64CWith1541II.drive1541.is1541C)
+        XCTAssertEqual(ntscC64CWith1541II.driveClockRatio, 1.0)
+    }
+
     func testStandardTrueDriveUsesProfileClockRatio() {
         let c64 = C64(machineProfile: .ntscC64)
 

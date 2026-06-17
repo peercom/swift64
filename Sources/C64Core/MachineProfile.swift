@@ -93,6 +93,28 @@ public struct MachineProfile: Equatable {
         driveClockHz: 1_000_000
     )
 
+    public static let palC64With1541II = MachineProfile(
+        name: "PAL C64 + 1541-II",
+        videoStandard: .pal,
+        cpuClockHz: 985_248,
+        ciaTodCyclesPerTenth: 98_525,
+        sidModel: .mos6581,
+        sidClockHz: 985_248,
+        driveModel: .model1541II,
+        driveClockHz: 1_000_000
+    )
+
+    public static let palC64CWith1541II = MachineProfile(
+        name: "PAL C64C + 1541-II",
+        videoStandard: .pal,
+        cpuClockHz: 985_248,
+        ciaTodCyclesPerTenth: 98_525,
+        sidModel: .mos8580,
+        sidClockHz: 985_248,
+        driveModel: .model1541II,
+        driveClockHz: 1_000_000
+    )
+
     public static let ntscC64 = MachineProfile(
         name: "NTSC C64 + 1541C",
         videoStandard: .ntsc,
@@ -104,6 +126,17 @@ public struct MachineProfile: Equatable {
         driveClockHz: 1_000_000
     )
 
+    public static let ntscC64With1541II = MachineProfile(
+        name: "NTSC C64 + 1541-II",
+        videoStandard: .ntsc,
+        cpuClockHz: 1_022_727,
+        ciaTodCyclesPerTenth: 102_273,
+        sidModel: .mos6581,
+        sidClockHz: 1_022_727,
+        driveModel: .model1541II,
+        driveClockHz: 1_000_000
+    )
+
     public static let ntscC64C = MachineProfile(
         name: "NTSC C64C + 1541C",
         videoStandard: .ntsc,
@@ -112,6 +145,17 @@ public struct MachineProfile: Equatable {
         sidModel: .mos8580,
         sidClockHz: 1_022_727,
         driveModel: .model1541C,
+        driveClockHz: 1_000_000
+    )
+
+    public static let ntscC64CWith1541II = MachineProfile(
+        name: "NTSC C64C + 1541-II",
+        videoStandard: .ntsc,
+        cpuClockHz: 1_022_727,
+        ciaTodCyclesPerTenth: 102_273,
+        sidModel: .mos8580,
+        sidClockHz: 1_022_727,
+        driveModel: .model1541II,
         driveClockHz: 1_000_000
     )
 }

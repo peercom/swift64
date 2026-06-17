@@ -10,6 +10,7 @@ public final class Drive1541 {
     public enum DriveModel: Equatable {
         case model1541
         case model1541C
+        case model1541II
     }
 
     public struct StatusSnapshot: Equatable {
