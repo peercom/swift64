@@ -24,7 +24,14 @@ public final class CIA {
 
     /// The effective output value of port B
     public var portBOut: UInt8 {
-        return (portB & ddrb) | (~ddrb & 0xFF)
+        var value = (portB & ddrb) | (~ddrb & 0xFF)
+        if timerAControl & 0x02 != 0 {
+            value = setBit(value, bit: 6, high: timerAOutputPBHigh)
+        }
+        if timerBControl & 0x02 != 0 {
+            value = setBit(value, bit: 7, high: timerBOutputPBHigh)
+        }
+        return value
     }
 
     // MARK: - Timers
@@ -37,6 +44,10 @@ public final class CIA {
     public var timerAControl: UInt8 = 0x00
     /// Latched high byte captured by reading Timer A low.
     var timerAHighLatched: UInt8?
+    /// Timer A output state used when CRA routes timer output to PB6.
+    var timerAOutputHigh: Bool = false
+    /// Remaining visible cycles for Timer A pulse output on PB6.
+    var timerAPulseCyclesRemaining: Int = 0
 
     /// Timer B current value
     public var timerB: UInt16 = 0xFFFF
@@ -46,6 +57,10 @@ public final class CIA {
     public var timerBControl: UInt8 = 0x00
     /// Latched high byte captured by reading Timer B low.
     var timerBHighLatched: UInt8?
+    /// Timer B output state used when CRB routes timer output to PB7.
+    var timerBOutputHigh: Bool = false
+    /// Remaining visible cycles for Timer B pulse output on PB7.
+    var timerBPulseCyclesRemaining: Int = 0
 
     // MARK: - Interrupt
 
@@ -120,6 +135,8 @@ public final class CIA {
 
     /// Advance one system clock cycle.
     public func tick() {
+        expireTimerOutputPulses()
+
         // Timer A
         if timerAControl & 0x01 != 0 {
             let countSource = timerAControl & 0x20  // bit 5: 0=system clock, 1=CNT pin
@@ -142,6 +159,8 @@ public final class CIA {
     }
 
     func timerAUnderflow() {
+        updateTimerAOutput()
+
         // Set interrupt flag
         interruptData |= 0x01
         checkInterrupt()
@@ -163,6 +182,8 @@ public final class CIA {
     }
 
     func timerBUnderflow() {
+        updateTimerBOutput()
+
         interruptData |= 0x02
         checkInterrupt()
 
@@ -237,6 +258,44 @@ public final class CIA {
         } else {
             timerB &-= 1
         }
+    }
+
+    var timerAOutputPBHigh: Bool {
+        timerAControl & 0x04 != 0 ? timerAOutputHigh : timerAPulseCyclesRemaining > 0
+    }
+
+    var timerBOutputPBHigh: Bool {
+        timerBControl & 0x04 != 0 ? timerBOutputHigh : timerBPulseCyclesRemaining > 0
+    }
+
+    func updateTimerAOutput() {
+        if timerAControl & 0x04 != 0 {
+            timerAOutputHigh.toggle()
+        } else {
+            timerAPulseCyclesRemaining = 1
+        }
+    }
+
+    func updateTimerBOutput() {
+        if timerBControl & 0x04 != 0 {
+            timerBOutputHigh.toggle()
+        } else {
+            timerBPulseCyclesRemaining = 1
+        }
+    }
+
+    func expireTimerOutputPulses() {
+        if timerAPulseCyclesRemaining > 0 {
+            timerAPulseCyclesRemaining -= 1
+        }
+        if timerBPulseCyclesRemaining > 0 {
+            timerBPulseCyclesRemaining -= 1
+        }
+    }
+
+    func setBit(_ value: UInt8, bit: Int, high: Bool) -> UInt8 {
+        let mask = UInt8(1 << bit)
+        return high ? (value | mask) : (value & ~mask)
     }
 
     func tickTOD() {
@@ -456,7 +515,12 @@ public final class CIA {
         case 0x0E:
             // Timer A control
             let forceLoad = value & 0x10 != 0
+            let startRisingEdge = timerAControl & 0x01 == 0 && value & 0x01 != 0
             timerAControl = value & ~0x10  // bit 4 is strobe only
+            if startRisingEdge {
+                timerAOutputHigh = true
+                timerAPulseCyclesRemaining = 0
+            }
             if forceLoad {
                 timerA = timerALatch
                 timerAHighLatched = nil
@@ -464,8 +528,13 @@ public final class CIA {
 
         case 0x0F:
             let forceLoad = value & 0x10 != 0
+            let startRisingEdge = timerBControl & 0x01 == 0 && value & 0x01 != 0
             todWriteAlarm = (value & 0x80) != 0
             timerBControl = value & ~0x10
+            if startRisingEdge {
+                timerBOutputHigh = true
+                timerBPulseCyclesRemaining = 0
+            }
             if forceLoad {
                 timerB = timerBLatch
                 timerBHighLatched = nil

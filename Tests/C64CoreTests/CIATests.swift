@@ -140,6 +140,57 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.interruptData & 0x02, 0x02)
     }
 
+    func testTimerAPulseOutputAppearsOnPB6ForOneCycle() {
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0E, value: 0x03)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x00)
+
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x40)
+
+        cia.tick()
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x00)
+    }
+
+    func testTimerAToggleOutputFlipsPB6OnUnderflow() {
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0E, value: 0x07)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x40)
+
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x00)
+
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x40, 0x40)
+    }
+
+    func testTimerBToggleOutputFlipsPB7OnUnderflow() {
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x06, value: 0x01)
+        cia.writeRegister(0x07, value: 0x00)
+        cia.writeRegister(0x0F, value: 0x07)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x80, 0x80)
+
+        tickTimerBUnderflow(cia)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x80, 0x00)
+
+        tickTimerBUnderflow(cia)
+
+        XCTAssertEqual(cia.readRegister(0x01) & 0x80, 0x80)
+    }
+
     func testTimerALowReadLatchesHighByteUntilHighRead() {
         let cia = CIA(isCIA1: true)
         cia.timerA = 0x12FF
