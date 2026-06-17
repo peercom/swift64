@@ -5,3 +5,8 @@
 DerivedData/
 *.rom
 *.bin
+.codex/
+.vscode/
+C64/
+dist/
+script/
