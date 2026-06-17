@@ -34,6 +34,8 @@ public final class CIA {
     public var timerALatch: UInt16 = 0xFFFF
     /// Timer A control register
     public var timerAControl: UInt8 = 0x00
+    /// Latched high byte captured by reading Timer A low.
+    var timerAHighLatched: UInt8?
 
     /// Timer B current value
     public var timerB: UInt16 = 0xFFFF
@@ -41,6 +43,8 @@ public final class CIA {
     public var timerBLatch: UInt16 = 0xFFFF
     /// Timer B control register
     public var timerBControl: UInt8 = 0x00
+    /// Latched high byte captured by reading Timer B low.
+    var timerBHighLatched: UInt8?
 
     // MARK: - Interrupt
 
@@ -324,10 +328,24 @@ public final class CIA {
 
         case 0x02: return ddra
         case 0x03: return ddrb
-        case 0x04: return UInt8(timerA & 0xFF)
-        case 0x05: return UInt8(timerA >> 8)
-        case 0x06: return UInt8(timerB & 0xFF)
-        case 0x07: return UInt8(timerB >> 8)
+        case 0x04:
+            timerAHighLatched = UInt8(timerA >> 8)
+            return UInt8(timerA & 0xFF)
+        case 0x05:
+            if let latched = timerAHighLatched {
+                timerAHighLatched = nil
+                return latched
+            }
+            return UInt8(timerA >> 8)
+        case 0x06:
+            timerBHighLatched = UInt8(timerB >> 8)
+            return UInt8(timerB & 0xFF)
+        case 0x07:
+            if let latched = timerBHighLatched {
+                timerBHighLatched = nil
+                return latched
+            }
+            return UInt8(timerB >> 8)
 
         // TOD
         case 0x08:
@@ -386,6 +404,7 @@ public final class CIA {
         case 0x04: timerALatch = (timerALatch & 0xFF00) | UInt16(value)
         case 0x05:
             timerALatch = (timerALatch & 0x00FF) | (UInt16(value) << 8)
+            timerAHighLatched = nil
             // If timer stopped, load latch into timer
             if timerAControl & 0x01 == 0 {
                 timerA = timerALatch
@@ -393,6 +412,7 @@ public final class CIA {
         case 0x06: timerBLatch = (timerBLatch & 0xFF00) | UInt16(value)
         case 0x07:
             timerBLatch = (timerBLatch & 0x00FF) | (UInt16(value) << 8)
+            timerBHighLatched = nil
             if timerBControl & 0x01 == 0 {
                 timerB = timerBLatch
             }
@@ -438,6 +458,7 @@ public final class CIA {
             timerAControl = value & ~0x10  // bit 4 is strobe only
             if forceLoad {
                 timerA = timerALatch
+                timerAHighLatched = nil
             }
 
         case 0x0F:
@@ -446,6 +467,7 @@ public final class CIA {
             timerBControl = value & ~0x10
             if forceLoad {
                 timerB = timerBLatch
+                timerBHighLatched = nil
             }
 
         default: break

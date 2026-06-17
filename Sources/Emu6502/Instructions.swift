@@ -237,6 +237,9 @@ extension CPU6502 {
         // XAA (ANE)
         t[0x8B] = .immediate
 
+        // AXS (SBX)
+        t[0xCB] = .immediate
+
         // AHX (SHA)
         t[0x9F] = .absyWrite; t[0x93] = .indyWrite
 
@@ -344,8 +347,12 @@ extension CPU6502 {
         case 0x24, 0x2C:
             bit(value)
         // LAX
-        case 0xA7, 0xB7, 0xAF, 0xBF, 0xA3, 0xB3, 0xAB:
+        case 0xA7, 0xB7, 0xAF, 0xBF, 0xA3, 0xB3:
             a = value; x = value; setZN(value)
+        // LXA/LAX immediate is unstable; use the common NMOS magic constant model.
+        case 0xAB:
+            let result = (a | 0xEE) & value
+            a = result; x = result; setZN(result)
         // ANC
         case 0x0B, 0x2B:
             a &= value; setZN(a); setFlag(Flags.carry, a & 0x80 != 0)
@@ -366,6 +373,13 @@ extension CPU6502 {
         // XAA (ANE)
         case 0x8B:
             a = (a | 0xEE) & x & value; setZN(a)
+        // AXS (SBX): X = (A & X) - immediate, flags like CMP.
+        case 0xCB:
+            let anded = a & x
+            let result = anded &- value
+            setFlag(Flags.carry, anded >= value)
+            x = result
+            setZN(x)
         // LAS (LAR)
         case 0xBB:
             let v = value & sp; a = v; x = v; sp = v; setZN(v)

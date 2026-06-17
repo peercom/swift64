@@ -36,6 +36,35 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
     }
 
+    func testPortALatchCapturesInputOnCA1ActiveEdgeUntilHandshakeRead() {
+        let via = VIA6522()
+        via.writeRegister(0x0B, value: 0x01) // enable Port A input latch
+        via.writeRegister(0x0C, value: 0x01) // CA1 positive edge
+        via.portAInput = 0xA5
+
+        via.ca1 = true
+        via.tick()
+
+        via.portAInput = 0x5A
+
+        XCTAssertEqual(via.readRegister(0x0F), 0xA5)
+        XCTAssertEqual(via.readRegister(0x01), 0xA5)
+        XCTAssertEqual(via.readRegister(0x01), 0x5A)
+    }
+
+    func testPortALatchDisabledReadsLiveInput() {
+        let via = VIA6522()
+        via.writeRegister(0x0C, value: 0x01) // CA1 positive edge
+        via.portAInput = 0xA5
+
+        via.ca1 = true
+        via.tick()
+
+        via.portAInput = 0x5A
+
+        XCTAssertEqual(via.readRegister(0x01), 0x5A)
+    }
+
     func testCA2InputPositiveEdgeSetsIFRAndIRQWhenEnabled() {
         let via = VIA6522()
         var irqStates: [Bool] = []
@@ -73,6 +102,21 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
     }
 
+    func testPortBLatchCapturesInputOnCB1ActiveEdgeUntilPortBRead() {
+        let via = VIA6522()
+        via.writeRegister(0x0B, value: 0x02) // enable Port B input latch
+        via.writeRegister(0x0C, value: 0x10) // CB1 positive edge
+        via.portBInput = 0x3C
+
+        via.cb1 = true
+        via.tick()
+
+        via.portBInput = 0xC3
+
+        XCTAssertEqual(via.readRegister(0x00), 0x3C)
+        XCTAssertEqual(via.readRegister(0x00), 0xC3)
+    }
+
     func testCA2AndCB2OutputModesDoNotLatchInputEdges() {
         let via = VIA6522()
         via.writeRegister(0x0C, value: 0xCE) // CA2 manual high, CB2 manual low
@@ -108,6 +152,29 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(irqStates.last, true)
     }
 
+    func testTimer1LowReadLatchesHighByteUntilHighRead() {
+        let via = VIA6522()
+        via.timer1Counter = 0x12FF
+
+        XCTAssertEqual(via.readRegister(0x04), 0xFF)
+
+        via.timer1Counter = 0x1100
+
+        XCTAssertEqual(via.readRegister(0x05), 0x12)
+        XCTAssertEqual(via.readRegister(0x05), 0x11)
+    }
+
+    func testTimer1StartClearsLatchedHighByte() {
+        let via = VIA6522()
+        via.timer1Counter = 0x12FF
+        XCTAssertEqual(via.readRegister(0x04), 0xFF)
+
+        via.writeRegister(0x04, value: 0x00)
+        via.writeRegister(0x05, value: 0x34)
+
+        XCTAssertEqual(via.readRegister(0x05), 0x34)
+    }
+
     func testTimer2CountsPB6FallingEdgesWhenPulseModeIsSelected() {
         let via = VIA6522()
         var irqStates: [Bool] = []
@@ -131,6 +198,29 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.timer2, VIA6522.IRQ.timer2)
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
         XCTAssertEqual(irqStates.last, true)
+    }
+
+    func testTimer2LowReadLatchesHighByteUntilHighRead() {
+        let via = VIA6522()
+        via.timer2Counter = 0x34FE
+
+        XCTAssertEqual(via.readRegister(0x08), 0xFE)
+
+        via.timer2Counter = 0x3301
+
+        XCTAssertEqual(via.readRegister(0x09), 0x34)
+        XCTAssertEqual(via.readRegister(0x09), 0x33)
+    }
+
+    func testTimer2StartClearsLatchedHighByte() {
+        let via = VIA6522()
+        via.timer2Counter = 0x34FE
+        XCTAssertEqual(via.readRegister(0x08), 0xFE)
+
+        via.writeRegister(0x08, value: 0x00)
+        via.writeRegister(0x09, value: 0x56)
+
+        XCTAssertEqual(via.readRegister(0x09), 0x56)
     }
 
     func testCA2HandshakeModeTransitionsOnPortARead() {

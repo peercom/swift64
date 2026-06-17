@@ -48,4 +48,16 @@ final class C64InterruptTests: XCTestCase {
 
         XCTAssertFalse(c64.cpu.irqLine)
     }
+
+    func testCIA2InterruptAssertAndClearDrivesCPUNMILine() {
+        let c64 = C64()
+
+        c64.cia2.interruptData = 0x01
+        c64.cia2.writeRegister(0x0D, value: 0x81)
+
+        XCTAssertTrue(c64.cpu.nmiLine)
+
+        XCTAssertEqual(c64.cia2.readRegister(0x0D), 0x81)
+        XCTAssertFalse(c64.cpu.nmiLine)
+    }
 }

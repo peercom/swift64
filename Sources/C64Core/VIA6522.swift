@@ -18,6 +18,9 @@ public final class VIA6522 {
     /// External input lines for ports (bits where DDR=0 read from here)
     public var portAInput: UInt8 = 0xFF
     public var portBInput: UInt8 = 0xFF
+    /// Optional input latches captured by CA1/CB1 active edges when enabled in ACR.
+    var portAInputLatch: UInt8?
+    var portBInputLatch: UInt8?
 
     /// Effective output of port A (output bits from register, input bits from external)
     public var portAOut: UInt8 {
@@ -27,6 +30,14 @@ public final class VIA6522 {
     /// Effective output of port B
     public var portBOut: UInt8 {
         (portB & ddrb) | (portBInput & ~ddrb)
+    }
+
+    private var portAReadValue: UInt8 {
+        (portA & ddra) | ((portAInputLatch ?? portAInput) & ~ddra)
+    }
+
+    private var portBReadValue: UInt8 {
+        (portB & ddrb) | ((portBInputLatch ?? portBInput) & ~ddrb)
     }
 
     // MARK: - Timers
@@ -39,6 +50,8 @@ public final class VIA6522 {
     var timer1Fired: Bool = false
     /// Pending Timer 1 IRQ (delayed by 1 cycle to match VICE)
     var pendingT1IRQ: Bool = false
+    /// Latched high byte captured by reading Timer 1 low.
+    var timer1HighLatched: UInt8?
 
     /// Timer 2 counter
     public var timer2Counter: UInt16 = 0xFFFF
@@ -46,6 +59,8 @@ public final class VIA6522 {
     var timer2LatchLow: UInt8 = 0xFF
     /// Timer 2 has fired
     var timer2Fired: Bool = false
+    /// Latched high byte captured by reading Timer 2 low.
+    var timer2HighLatched: UInt8?
     /// Current PB6 pulse input level for Timer 2 pulse-count mode.
     var pb6LineHigh: Bool = true
 
@@ -191,6 +206,9 @@ public final class VIA6522 {
             viaLog("[VIA-CA1] edge: \(ca1Prev)→\(ca1) PCR=$\(String(format:"%02X",pcr)) posEdge=\(positiveEdge) triggered=\(triggered) IER=$\(String(format:"%02X",ier)) IFR=$\(String(format:"%02X",ifr)) ca1Enabled=\(ier & IRQ.ca1 != 0)")
         }
         if triggered {
+            if acr & 0x01 != 0 {
+                portAInputLatch = portAInput
+            }
             setIFR(IRQ.ca1)
             if ca1DebugCount < 200 {
                 viaLog("[VIA-CA1] IRQ fired! IFR now=$\(String(format:"%02X",ifr)) any=\(ifr & IRQ.any != 0)")
@@ -209,6 +227,9 @@ public final class VIA6522 {
         let positiveEdge = pcr & 0x10 != 0
         let triggered = positiveEdge ? (!cb1Prev && cb1) : (cb1Prev && !cb1)
         if triggered {
+            if acr & 0x02 != 0 {
+                portBInputLatch = portBInput
+            }
             setIFR(IRQ.cb1)
         }
         cb1Prev = cb1
@@ -276,10 +297,13 @@ public final class VIA6522 {
         switch reg & 0x0F {
         case 0x00:  // ORB/IRB - Port B
             clearIFR(IRQ.cb1 | IRQ.cb2)
-            return (portB & ddrb) | (portBInput & ~ddrb)
+            let value = portBReadValue
+            portBInputLatch = nil
+            return value
 
         case 0x01:  // ORA/IRA - Port A (with handshake)
             clearIFR(IRQ.ca1 | IRQ.ca2)
+            let value = portAReadValue
             // CA2 handshake output: set CA2 low on port A read
             let ca2Mode01 = (pcr >> 1) & 0x07
             if ca2Mode01 == 4 && ca2OutputState {  // handshake: go low
@@ -294,24 +318,37 @@ public final class VIA6522 {
                 onCA2Change?(true)
             }
             onPortARead?()
-            return (portA & ddra) | (portAInput & ~ddra)
+            portAInputLatch = nil
+            return value
 
         case 0x02: return ddrb
         case 0x03: return ddra
 
         case 0x04:  // T1C-L (reading clears T1 interrupt)
+            timer1HighLatched = UInt8(timer1Counter >> 8)
             clearIFR(IRQ.timer1)
             return UInt8(timer1Counter & 0xFF)
 
-        case 0x05: return UInt8(timer1Counter >> 8)
+        case 0x05:
+            if let latched = timer1HighLatched {
+                timer1HighLatched = nil
+                return latched
+            }
+            return UInt8(timer1Counter >> 8)
         case 0x06: return UInt8(timer1Latch & 0xFF)
         case 0x07: return UInt8(timer1Latch >> 8)
 
         case 0x08:  // T2C-L (reading clears T2 interrupt)
+            timer2HighLatched = UInt8(timer2Counter >> 8)
             clearIFR(IRQ.timer2)
             return UInt8(timer2Counter & 0xFF)
 
-        case 0x09: return UInt8(timer2Counter >> 8)
+        case 0x09:
+            if let latched = timer2HighLatched {
+                timer2HighLatched = nil
+                return latched
+            }
+            return UInt8(timer2Counter >> 8)
 
         case 0x0A: return shiftRegister
         case 0x0B: return acr
@@ -321,7 +358,7 @@ public final class VIA6522 {
 
         case 0x0F:  // ORA - Port A (no handshake)
             onPortARead?()
-            return (portA & ddra) | (portAInput & ~ddra)
+            return portAReadValue
 
         default: return 0
         }
@@ -351,6 +388,7 @@ public final class VIA6522 {
             timer1Counter = timer1Latch
             timer1Fired = false
             pendingT1IRQ = false
+            timer1HighLatched = nil
             clearIFR(IRQ.timer1)
 
         case 0x06:  // T1L-L
@@ -359,6 +397,7 @@ public final class VIA6522 {
         case 0x07:  // T1L-H (write to latch high, no timer start)
             timer1Latch = (timer1Latch & 0x00FF) | (UInt16(value) << 8)
             pendingT1IRQ = false
+            timer1HighLatched = nil
             clearIFR(IRQ.timer1)
 
         case 0x08:  // T2L-L (write to latch)
@@ -367,10 +406,14 @@ public final class VIA6522 {
         case 0x09:  // T2C-H (write starts timer)
             timer2Counter = UInt16(timer2LatchLow) | (UInt16(value) << 8)
             timer2Fired = false
+            timer2HighLatched = nil
             clearIFR(IRQ.timer2)
 
         case 0x0A: shiftRegister = value
-        case 0x0B: acr = value
+        case 0x0B:
+            acr = value
+            if value & 0x01 == 0 { portAInputLatch = nil }
+            if value & 0x02 == 0 { portBInputLatch = nil }
         case 0x0C:
             pcr = value
             // Update CA2 output state based on new PCR mode

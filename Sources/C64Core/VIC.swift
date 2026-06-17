@@ -694,7 +694,7 @@ public final class VIC {
         case 0x13: return lightPenX
         case 0x14: return lightPenY
         case 0x15: return spriteEnabled
-        case 0x16: return controlReg2 | 0xC0
+        case 0x16: return controlReg2 | 0xE0
         case 0x17: return spriteExpandY
         case 0x18: return memoryPointers | 0x01
         case 0x19: return interruptRegister | 0x70

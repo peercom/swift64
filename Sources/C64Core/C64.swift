@@ -147,9 +147,7 @@ public final class C64 {
 
         // CIA2 → CPU NMI
         cia2.onInterrupt = { [weak self] active in
-            if active {
-                self?.cpu.triggerNMI()
-            }
+            self?.cpu.setNMILine(high: active)
         }
 
         // VIC → CPU IRQ

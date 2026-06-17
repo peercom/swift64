@@ -140,6 +140,52 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.interruptData & 0x02, 0x02)
     }
 
+    func testTimerALowReadLatchesHighByteUntilHighRead() {
+        let cia = CIA(isCIA1: true)
+        cia.timerA = 0x12FF
+
+        XCTAssertEqual(cia.readRegister(0x04), 0xFF)
+
+        cia.timerA = 0x1100
+
+        XCTAssertEqual(cia.readRegister(0x05), 0x12)
+        XCTAssertEqual(cia.readRegister(0x05), 0x11)
+    }
+
+    func testTimerAReloadClearsLatchedHighByte() {
+        let cia = CIA(isCIA1: true)
+        cia.timerA = 0x12FF
+        XCTAssertEqual(cia.readRegister(0x04), 0xFF)
+
+        cia.writeRegister(0x04, value: 0x00)
+        cia.writeRegister(0x05, value: 0x34)
+
+        XCTAssertEqual(cia.readRegister(0x05), 0x34)
+    }
+
+    func testTimerBLowReadLatchesHighByteUntilHighRead() {
+        let cia = CIA(isCIA1: true)
+        cia.timerB = 0x34FE
+
+        XCTAssertEqual(cia.readRegister(0x06), 0xFE)
+
+        cia.timerB = 0x3301
+
+        XCTAssertEqual(cia.readRegister(0x07), 0x34)
+        XCTAssertEqual(cia.readRegister(0x07), 0x33)
+    }
+
+    func testTimerBForceLoadClearsLatchedHighByte() {
+        let cia = CIA(isCIA1: true)
+        cia.timerB = 0x34FE
+        cia.timerBLatch = 0x5600
+        XCTAssertEqual(cia.readRegister(0x06), 0xFE)
+
+        cia.writeRegister(0x0F, value: 0x10)
+
+        XCTAssertEqual(cia.readRegister(0x07), 0x56)
+    }
+
     func testTODAdvancesTenthsAndRollsSeconds() {
         let cia = CIA(isCIA1: true)
         cia.writeRegister(0x0B, value: 0x01)

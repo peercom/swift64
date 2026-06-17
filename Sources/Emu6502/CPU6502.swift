@@ -102,7 +102,17 @@ public final class CPU6502 {
 
     /// Trigger an NMI. Edge-detected: only triggers on low→high transition.
     public func triggerNMI() {
-        nmiLine = true
+        setNMILine(high: true)
+        setNMILine(high: false)
+    }
+
+    /// Set the NMI input line level. A low→high transition is latched and
+    /// serviced at the next instruction boundary.
+    public func setNMILine(high: Bool) {
+        if high && !nmiLine {
+            nmiPending = true
+        }
+        nmiLine = high
     }
 
     /// Pulse the NMOS 6502 SO input.
@@ -201,7 +211,6 @@ public final class CPU6502 {
             nmiPending = true
         }
         nmiLinePrev = nmiLine
-        nmiLine = false
     }
 
     /// Begin an interrupt sequence. This consumes the current cycle (cycle 0)

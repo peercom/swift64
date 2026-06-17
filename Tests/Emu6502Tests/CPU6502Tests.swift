@@ -486,6 +486,32 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertEqual(cpu.a, 0x42)
     }
 
+    func testNMIHeldHighTriggersOnlyOnceUntilLineFallsAndRisesAgain() {
+        let (cpu, bus) = makeCPU([0xEA, 0xEA, 0xEA, 0xEA, 0xEA])  // NOPs
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0x0700] = 0xE8  // INX
+        bus.memory[0x0701] = 0x40  // RTI
+
+        runInstructions(cpu, count: 1)
+
+        cpu.setNMILine(high: true)
+        cpu.run(cycles: 30)
+
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertTrue(cpu.nmiLine)
+
+        cpu.run(cycles: 60)
+
+        XCTAssertEqual(cpu.x, 0x01)
+
+        cpu.setNMILine(high: false)
+        cpu.setNMILine(high: true)
+        cpu.run(cycles: 30)
+
+        XCTAssertEqual(cpu.x, 0x02)
+    }
+
     // MARK: - IRQ
 
     func testIRQ() {
@@ -510,6 +536,34 @@ final class CPU6502Tests: XCTestCase {
         runInstructions(cpu, count: 1)
         XCTAssertEqual(cpu.a, 0x42)
         XCTAssertEqual(cpu.x, 0x42)
+    }
+
+    func testLXAImmediateUsesAccumulatorMagicConstantModel() {
+        let (cpu, _) = makeCPU([
+            0xA9, 0x11,  // LDA #$11
+            0xAB, 0xF0   // LXA #$F0
+        ])
+
+        runInstructions(cpu, count: 2)
+
+        XCTAssertEqual(cpu.a, 0xF0)
+        XCTAssertEqual(cpu.x, 0xF0)
+        XCTAssertTrue(cpu.getFlag(Flags.negative))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+    }
+
+    func testLXAImmediateCanMaskBitsThatPlainLAXWouldLoad() {
+        let (cpu, _) = makeCPU([
+            0xA9, 0x00,  // LDA #$00
+            0xAB, 0x11   // LXA #$11
+        ])
+
+        runInstructions(cpu, count: 2)
+
+        XCTAssertEqual(cpu.a, 0x00)
+        XCTAssertEqual(cpu.x, 0x00)
+        XCTAssertTrue(cpu.getFlag(Flags.zero))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
     }
 
     func testSAX() {
@@ -579,6 +633,37 @@ final class CPU6502Tests: XCTestCase {
         runInstructions(cpu, count: 2)
         XCTAssertEqual(cpu.a, 0x80)
         XCTAssertTrue(cpu.getFlag(Flags.carry))
+    }
+
+    func testAXSImmediateSubtractsFromAAndXAndSetsCarry() {
+        let (cpu, _) = makeCPU([
+            0xA9, 0xF0,  // LDA #$F0
+            0xA2, 0x3C,  // LDX #$3C
+            0xCB, 0x10   // AXS #$10
+        ])
+
+        runInstructions(cpu, count: 3)
+
+        XCTAssertEqual(cpu.a, 0xF0)
+        XCTAssertEqual(cpu.x, 0x20)
+        XCTAssertTrue(cpu.getFlag(Flags.carry))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
+    }
+
+    func testAXSImmediateBorrowClearsCarryAndSetsNegative() {
+        let (cpu, _) = makeCPU([
+            0xA9, 0x0F,  // LDA #$0F
+            0xA2, 0x03,  // LDX #$03
+            0xCB, 0x04   // AXS #$04
+        ])
+
+        runInstructions(cpu, count: 3)
+
+        XCTAssertEqual(cpu.x, 0xFF)
+        XCTAssertFalse(cpu.getFlag(Flags.carry))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertTrue(cpu.getFlag(Flags.negative))
     }
 
     func testKILJam() {

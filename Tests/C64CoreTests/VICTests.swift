@@ -448,6 +448,14 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[7])
     }
 
+    func testControlRegister2UnusedBitsReadHigh() {
+        let vic = VIC()
+
+        vic.writeRegister(0x16, value: 0x1B)
+
+        XCTAssertEqual(vic.readRegister(0x16), 0xFB)
+    }
+
     func testSpriteXPositionUsesHorizontalCoordinateOnly() {
         let vic = VIC()
         let background = ColorPalette.rgba[0]

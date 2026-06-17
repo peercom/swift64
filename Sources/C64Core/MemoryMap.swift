@@ -74,8 +74,9 @@ public final class MemoryMap: Bus {
         // CPU port registers
         if addr == 0x0000 { return finishRead(address, value: portDirection) }
         if addr == 0x0001 {
-            // Bit 4 (cassette sense) reads as 1 (no cassette)
-            return finishRead(address, value: (portData & portDirection) | (~portDirection & 0x17))
+            // Input bits are pulled high for the lines this model exposes;
+            // bit 4 represents no cassette key pressed.
+            return finishRead(address, value: effectivePort)
         }
 
         let value: UInt8

@@ -200,9 +200,8 @@ public final class SID {
 
     // MARK: - Waveform generation
 
-    func waveformOutput(_ v: Int) -> Int16 {
+    func oscillatorOutput(_ v: Int) -> UInt16 {
         let acc = voices[v].accumulator
-        var output: UInt16 = 0
 
         if voices[v].waveNoise {
             let sr = voices[v].shiftRegister
@@ -215,48 +214,47 @@ public final class SID {
             noiseBits |= (sr >> 5)  & 0x040
             noiseBits |= (sr >> 3)  & 0x020
             noiseBits |= (sr >> 2)  & 0x010
-            output = UInt16(noiseBits) << 4
-        } else {
-            var triangle: UInt16 = 0
-            var sawtooth: UInt16 = 0
-            var pulse: UInt16 = 0
-
-            if voices[v].waveTriangle {
-                let msb = acc >> 23
-                if msb != 0 {
-                    triangle = UInt16(~acc >> 11) & 0xFFF
-                } else {
-                    triangle = UInt16(acc >> 11) & 0xFFF
-                }
-                // Ring modulation
-                if voices[v].ringMod {
-                    let syncSource = (v + 2) % 3
-                    if voices[syncSource].accumulator & 0x800000 != 0 {
-                        triangle ^= 0xFFF
-                    }
-                }
-                output = triangle << 4
-            }
-
-            if voices[v].waveSawtooth {
-                sawtooth = UInt16(acc >> 12)
-                if output != 0 {
-                    output &= sawtooth << 4
-                } else {
-                    output = sawtooth << 4
-                }
-            }
-
-            if voices[v].wavePulse {
-                let threshold = UInt32(voices[v].pulseWidth) << 12
-                pulse = (acc >= threshold) ? 0xFFF : 0
-                if output != 0 {
-                    output &= pulse << 4
-                } else {
-                    output = pulse << 4
-                }
-            }
+            return UInt16(noiseBits)
         }
+
+        var output: UInt16 = 0
+        var hasOutput = false
+
+        if voices[v].waveTriangle {
+            let msb = acc >> 23
+            var triangle: UInt16
+            if msb != 0 {
+                triangle = UInt16(~acc >> 11) & 0xFFF
+            } else {
+                triangle = UInt16(acc >> 11) & 0xFFF
+            }
+            if voices[v].ringMod {
+                let syncSource = (v + 2) % 3
+                if voices[syncSource].accumulator & 0x800000 != 0 {
+                    triangle ^= 0xFFF
+                }
+            }
+            output = triangle
+            hasOutput = true
+        }
+
+        if voices[v].waveSawtooth {
+            let sawtooth = UInt16(acc >> 12)
+            output = hasOutput ? output & sawtooth : sawtooth
+            hasOutput = true
+        }
+
+        if voices[v].wavePulse {
+            let threshold = UInt32(voices[v].pulseWidth) << 12
+            let pulse: UInt16 = (acc >= threshold) ? 0xFFF : 0
+            output = hasOutput ? output & pulse : pulse
+        }
+
+        return output
+    }
+
+    func waveformOutput(_ v: Int) -> Int16 {
+        let output = oscillatorOutput(v) << 4
 
         // Apply envelope (output is 0..65520, envelope is 0..255)
         // mixed range: 0..65265 → center around 0 by subtracting half range
@@ -306,7 +304,7 @@ public final class SID {
         switch reg {
         case 0x19: return paddleX
         case 0x1A: return paddleY
-        case 0x1B: return UInt8((voices[2].accumulator >> 16) & 0xFF)  // OSC3
+        case 0x1B: return UInt8((oscillatorOutput(2) >> 4) & 0xFF)  // OSC3
         case 0x1C: return voices[2].envelopeLevel  // ENV3
         default: return 0
         }
