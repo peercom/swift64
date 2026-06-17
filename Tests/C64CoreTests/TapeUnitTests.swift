@@ -42,12 +42,78 @@ final class TapeUnitTests: XCTestCase {
 
         XCTAssertTrue(tape.mount(makeTAP(version: 0, payload: [0x2C])))
         XCTAssertFalse(tape.tapPulses.isEmpty)
+        XCTAssertTrue(tape.startRawPlayback())
 
         tape.unmount()
 
         XCTAssertFalse(tape.isMounted)
         XCTAssertTrue(tape.tapPulses.isEmpty)
         XCTAssertNil(tape.format)
+        XCTAssertFalse(tape.rawPlaybackActive)
+        XCTAssertTrue(tape.readSignalHigh)
+    }
+
+    func testRawPlaybackTicksPulseCountdownAndTogglesReadSignal() {
+        let tape = TapeUnit()
+
+        XCTAssertTrue(tape.mount(makeTAP(version: 0, payload: [0x02, 0x03])))
+        XCTAssertTrue(tape.startRawPlayback())
+        XCTAssertTrue(tape.rawPlaybackActive)
+        XCTAssertTrue(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 0)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 16)
+
+        tape.tickRawPlayback(cycles: 15)
+
+        XCTAssertTrue(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 0)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 1)
+
+        tape.tickRawPlayback()
+
+        XCTAssertFalse(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 1)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 24)
+    }
+
+    func testRawPlaybackCanAdvanceAcrossMultiplePulsesInOneTick() {
+        let tape = TapeUnit()
+
+        XCTAssertTrue(tape.mount(makeTAP(version: 0, payload: [0x01, 0x02, 0x01])))
+        XCTAssertTrue(tape.startRawPlayback())
+
+        tape.tickRawPlayback(cycles: 8 + 16 + 4)
+
+        XCTAssertTrue(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 2)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 4)
+
+        tape.tickRawPlayback(cycles: 4)
+
+        XCTAssertFalse(tape.rawPlaybackActive)
+        XCTAssertFalse(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 3)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 0)
+    }
+
+    func testRawPlaybackStartFailsWithoutPulseDataAndStopResetsIdleState() {
+        let tape = TapeUnit()
+
+        XCTAssertFalse(tape.startRawPlayback())
+
+        XCTAssertTrue(tape.mount(makeTAP(version: 0, payload: [0x01])))
+        XCTAssertTrue(tape.startRawPlayback())
+        tape.tickRawPlayback(cycles: 8)
+
+        XCTAssertFalse(tape.rawPlaybackActive)
+        XCTAssertFalse(tape.readSignalHigh)
+
+        tape.stopRawPlayback()
+
+        XCTAssertFalse(tape.rawPlaybackActive)
+        XCTAssertTrue(tape.readSignalHigh)
+        XCTAssertEqual(tape.currentPulseIndex, 0)
+        XCTAssertEqual(tape.cyclesUntilNextPulse, 0)
     }
 
     private func makeTAP(version: UInt8, declaredSize: Int? = nil, payload: [UInt8]) -> Data {

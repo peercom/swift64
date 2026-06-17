@@ -44,6 +44,15 @@ public final class TapeUnit {
     /// TAP: raw pulse durations in C64 CPU cycles.
     public private(set) var tapPulses: [TAPPulse] = []
 
+    /// Current datasette read signal level produced by raw TAP playback.
+    public private(set) var readSignalHigh: Bool = true
+
+    /// True while the raw TAP playback cursor is consuming pulse durations.
+    public private(set) var rawPlaybackActive: Bool = false
+
+    public private(set) var currentPulseIndex: Int = 0
+    public private(set) var cyclesUntilNextPulse: Int = 0
+
     // MARK: - Init
 
     public init() {}
@@ -79,6 +88,7 @@ public final class TapeUnit {
         format = nil
         tapPRGData = nil
         tapPulses = []
+        stopRawPlayback()
     }
 
     public var isMounted: Bool { imageData != nil }
@@ -190,6 +200,51 @@ public final class TapeUnit {
         }
 
         return true
+    }
+
+    @discardableResult
+    public func startRawPlayback() -> Bool {
+        guard !tapPulses.isEmpty else { return false }
+        readSignalHigh = true
+        rawPlaybackActive = true
+        currentPulseIndex = 0
+        cyclesUntilNextPulse = tapPulses[0].cycles
+        return true
+    }
+
+    public func stopRawPlayback() {
+        rawPlaybackActive = false
+        readSignalHigh = true
+        currentPulseIndex = 0
+        cyclesUntilNextPulse = 0
+    }
+
+    public func tickRawPlayback(cycles: Int = 1) {
+        guard rawPlaybackActive, cycles > 0 else { return }
+
+        var remaining = cycles
+        while rawPlaybackActive && remaining > 0 {
+            if cyclesUntilNextPulse > remaining {
+                cyclesUntilNextPulse -= remaining
+                remaining = 0
+            } else {
+                remaining -= cyclesUntilNextPulse
+                advanceRawPulse()
+            }
+        }
+    }
+
+    func advanceRawPulse() {
+        readSignalHigh.toggle()
+        currentPulseIndex += 1
+
+        if currentPulseIndex >= tapPulses.count {
+            rawPlaybackActive = false
+            cyclesUntilNextPulse = 0
+            return
+        }
+
+        cyclesUntilNextPulse = tapPulses[currentPulseIndex].cycles
     }
 
     func decodeTAPPulses(_ bytes: [UInt8], headerSize: Int, dataSize: Int, version: UInt8) -> [TAPPulse]? {
