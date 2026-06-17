@@ -11,6 +11,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var showingDriveStatus = false
     @State private var isDropTargeted = false
+    @State private var isFullScreen = false
 
     private let statusTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -19,85 +20,105 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            C64SidebarView(
-                status: status,
-                romStatusMessage: emulator.romStatusMessage,
-                openDisk: openDisk,
-                openTape: openTape,
-                loadPRG: loadPRG,
-                openCartridge: openCartridge,
-                openDebugger: { openWindow(id: "debugger") },
-                reset: reset
-            )
-            .navigationTitle("C64")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-        } detail: {
-            C64DisplayWorkspace(
-                emulator: emulator,
-                status: status,
-                isDropTargeted: isDropTargeted,
-                openDisk: openDisk,
-                loadPRG: loadPRG
-            )
-            .navigationTitle(status.mountedDiskName ?? "Commodore 64")
-            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-                handleDrop(providers)
-            }
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Menu {
-                        Button("Open Disk Image...") { openDisk() }
-                        Button("Open Tape Image...") { openTape() }
-                        Button("Load Program...") { loadPRG() }
-                        Button("Open Cartridge Image...") { openCartridge() }
-                    } label: {
-                        Label("Open", systemImage: "folder.badge.plus")
+        Group {
+            if isFullScreen {
+                C64DisplayWorkspace(
+                    emulator: emulator,
+                    status: status,
+                    isDropTargeted: isDropTargeted,
+                    showsStatusBar: false,
+                    openDisk: openDisk,
+                    loadPRG: loadPRG
+                )
+                .ignoresSafeArea()
+                .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                    handleDrop(providers)
+                }
+            } else {
+                NavigationSplitView {
+                    C64SidebarView(
+                        status: status,
+                        romStatusMessage: emulator.romStatusMessage,
+                        openDisk: openDisk,
+                        openTape: openTape,
+                        loadPRG: loadPRG,
+                        openCartridge: openCartridge,
+                        openDebugger: { openWindow(id: "debugger") },
+                        reset: reset
+                    )
+                    .navigationTitle("C64")
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+                } detail: {
+                    C64DisplayWorkspace(
+                        emulator: emulator,
+                        status: status,
+                        isDropTargeted: isDropTargeted,
+                        showsStatusBar: true,
+                        openDisk: openDisk,
+                        loadPRG: loadPRG
+                    )
+                    .navigationTitle(status.mountedDiskName ?? "Commodore 64")
+                    .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                        handleDrop(providers)
                     }
-                    .help("Open C64 software or media")
+                    .toolbar {
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            Menu {
+                                Button("Open Disk Image...") { openDisk() }
+                                Button("Open Tape Image...") { openTape() }
+                                Button("Load Program...") { loadPRG() }
+                                Button("Open Cartridge Image...") { openCartridge() }
+                            } label: {
+                                Label("Open", systemImage: "folder.badge.plus")
+                            }
+                            .help("Open C64 software or media")
 
-                    Divider()
+                            Divider()
 
-                    Toggle(isOn: Binding(
-                        get: { emulator.c64.trueDriveEmulation },
-                        set: { enabled in
-                            emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
+                            Toggle(isOn: Binding(
+                                get: { emulator.c64.trueDriveEmulation },
+                                set: { enabled in
+                                    emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
+                                }
+                            )) {
+                                Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+                            }
+                            .toggleStyle(.button)
+                            .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
+
+                            Button(action: { showingDriveStatus.toggle() }) {
+                                Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
+                            }
+                            .help("Show compact drive and media status")
+                            .popover(isPresented: $showingDriveStatus, arrowEdge: .bottom) {
+                                DriveStatusPopover(status: status)
+                                    .frame(width: 360)
+                            }
+
+                            Divider()
+
+                            Button(action: { openWindow(id: "debugger") }) {
+                                Label("Debugger", systemImage: "ladybug")
+                            }
+                            .help("Show Debugger")
+
+                            Button(action: reset) {
+                                Label("Reset", systemImage: "arrow.counterclockwise")
+                            }
+                            .help("Reset C64")
+
+                            SettingsLink {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                            .help("Open emulator settings")
                         }
-                    )) {
-                        Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
                     }
-                    .toggleStyle(.button)
-                    .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
-
-                    Button(action: { showingDriveStatus.toggle() }) {
-                        Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
-                    }
-                    .help("Show compact drive and media status")
-                    .popover(isPresented: $showingDriveStatus, arrowEdge: .bottom) {
-                        DriveStatusPopover(status: status)
-                            .frame(width: 360)
-                    }
-
-                    Divider()
-
-                    Button(action: { openWindow(id: "debugger") }) {
-                        Label("Debugger", systemImage: "ladybug")
-                    }
-                    .help("Show Debugger")
-
-                    Button(action: reset) {
-                        Label("Reset", systemImage: "arrow.counterclockwise")
-                    }
-                    .help("Reset C64")
-
-                    SettingsLink {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .help("Open emulator settings")
                 }
             }
         }
         .frame(minWidth: 1040, minHeight: 680)
+        .toolbar(isFullScreen ? .hidden : .visible, for: .windowToolbar)
+        .background(WindowFullScreenObserver(isFullScreen: $isFullScreen).frame(width: 0, height: 0))
         .onReceive(statusTimer) { _ in
             emulator.refreshStatus()
         }
@@ -311,6 +332,7 @@ private struct C64DisplayWorkspace: View {
     @ObservedObject var emulator: EmulatorController
     let status: C64.EmulationStatus
     let isDropTargeted: Bool
+    let showsStatusBar: Bool
     let openDisk: () -> Void
     let loadPRG: () -> Void
 
@@ -335,7 +357,9 @@ private struct C64DisplayWorkspace: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage)
+                if showsStatusBar {
+                    C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage)
+                }
             }
         }
         .background(.black)
@@ -356,6 +380,65 @@ private struct C64DisplayWorkspace: View {
         }
 
         return CGSize(width: availableWidth, height: availableWidth / ratio)
+    }
+}
+
+private struct WindowFullScreenObserver: NSViewRepresentable {
+    @Binding var isFullScreen: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            context.coordinator.attach(to: view.window, isFullScreen: $isFullScreen)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            context.coordinator.attach(to: nsView.window, isFullScreen: $isFullScreen)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        private weak var observedWindow: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+
+        func attach(to window: NSWindow?, isFullScreen: Binding<Bool>) {
+            guard let window, observedWindow !== window else {
+                if let window {
+                    isFullScreen.wrappedValue = window.styleMask.contains(.fullScreen)
+                }
+                return
+            }
+
+            removeObservers()
+            observedWindow = window
+            isFullScreen.wrappedValue = window.styleMask.contains(.fullScreen)
+
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main) { _ in
+                isFullScreen.wrappedValue = true
+            })
+            observers.append(center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { _ in
+                isFullScreen.wrappedValue = false
+            })
+        }
+
+        deinit {
+            removeObservers()
+        }
+
+        private func removeObservers() {
+            for observer in observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            observers.removeAll()
+        }
     }
 }
 
