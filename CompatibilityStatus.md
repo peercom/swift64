@@ -14,7 +14,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 | 1541 true drive | In progress | 1541 CPU/VIA/GCR/IEC read path exists with D64/G64 smoke coverage; custom loaders, weak bits, halftracks, variable track length, write-back, SAVE, and format support remain open. |
 | Tape | Container-level | T64/TAP mounting and trap loading exist; real datasette signal timing is not complete. |
 | Cartridges/expansion | Not started | CRT parsing, EXROM/GAME mapping, Ultimax, freezer/fastload cartridges, EasyFlash, and REU are roadmap items. |
-| Compatibility harness | Early | Local disk matrix manifests exist; preservation corpus support for PRG/D64/G64/T64/TAP/CRT, screen/RAM signatures, and resumable results remains open. |
+| Compatibility harness | Early partial | Local manifests now parse media/profile/run settings plus RAM signatures and screen RAM hashes; full PRG/D64/G64/T64/TAP/CRT execution, screenshots, and resumable result logs remain open. |
 
 ## Validation Policy
 

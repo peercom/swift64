@@ -107,12 +107,18 @@ Example milestone manifest:
   "milestones": [
     {
       "file": "great_giana_sisters[time_warp_1987](pal)(r1)(!).g64",
+      "mediaType": "g64",
+      "machineProfile": "palC64",
       "command": "LOAD\"*\",8,1",
       "maxCycles": 24000000,
       "pcStart": 49152,
       "pcEnd": 53247,
       "minGCRReads": 64,
-      "minByteReady": 512
+      "minByteReady": 512,
+      "ramSignatures": [
+        { "address": 2049, "bytes": "01 08" }
+      ],
+      "screenRAMHash": "optional-fnv1a64-screen-ram-hash"
     }
   ]
 }

@@ -71,7 +71,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         var summaries: [String] = []
         for milestone in milestones {
-            let c64 = C64()
+            let c64 = C64(machineProfile: milestone.machineProfile.profile)
             try loadBundledROMs(into: c64)
             c64.trueDriveEmulationMode = .compat1541
             XCTAssertTrue(c64.mountDisk(milestone.url), "Failed to mount \(milestone.url.path)")
@@ -189,8 +189,17 @@ final class LocalDiskMatrixTests: XCTestCase {
             let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
             let pcReached = milestone.pcRange?.contains(c64.cpu.pc) ?? true
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
+            let ramMatches = milestone.ramSignatures.allSatisfy { signature in
+                let start = signature.address
+                let end = start + signature.bytes.count
+                guard start >= 0 && end <= c64.memory.ram.count else { return false }
+                return Array(c64.memory.ram[start..<end]) == signature.bytes
+            }
+            let screenMatches = milestone.screenRAMHash.map {
+                CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
+            } ?? true
 
-            if pcReached && driveProgress {
+            if pcReached && driveProgress && ramMatches && screenMatches {
                 return MatrixRunResult(passed: true, elapsedCycles: c64.cpu.totalCycles, reason: "named milestone reached")
             }
         }
@@ -215,11 +224,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         return [
             LocalMilestone(
                 url: giana,
+                machineProfile: .palC64,
                 command: #"LOAD"*",8,1"#,
                 maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
                 pcRange: nil,
                 minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
-                minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256)
+                minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
+                ramSignatures: [],
+                screenRAMHash: nil
             )
         ]
     }
@@ -230,20 +242,21 @@ final class LocalDiskMatrixTests: XCTestCase {
             return []
         }
 
-        let manifest = try JSONDecoder().decode(LocalMilestoneManifest.self, from: Data(contentsOf: manifestURL))
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
         return manifest.milestones.compactMap { entry in
             guard let url = urls.first(where: { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }) else {
                 return nil
             }
             return LocalMilestone(
                 url: url,
+                machineProfile: entry.machineProfile ?? .palC64,
                 command: entry.command,
                 maxCycles: entry.maxCycles ?? 24_000_000,
-                pcRange: entry.pcStart.flatMap { start in
-                    entry.pcEnd.map { UInt16(start)...UInt16($0) }
-                },
+                pcRange: entry.pcRange,
                 minGCRReads: UInt64(entry.minGCRReads ?? 64),
-                minByteReady: UInt64(entry.minByteReady ?? 512)
+                minByteReady: UInt64(entry.minByteReady ?? 512),
+                ramSignatures: entry.ramSignatures,
+                screenRAMHash: entry.screenRAMHash
             )
         }
     }
@@ -284,23 +297,12 @@ private struct MatrixRunResult {
 
 private struct LocalMilestone {
     let url: URL
+    let machineProfile: CompatibilityMachineProfile
     let command: String
     let maxCycles: Int
     let pcRange: ClosedRange<UInt16>?
     let minGCRReads: UInt64
     let minByteReady: UInt64
-}
-
-private struct LocalMilestoneManifest: Decodable {
-    let milestones: [Entry]
-
-    struct Entry: Decodable {
-        let file: String
-        let command: String
-        let maxCycles: Int?
-        let pcStart: Int?
-        let pcEnd: Int?
-        let minGCRReads: Int?
-        let minByteReady: Int?
-    }
+    let ramSignatures: [CompatibilityRAMSignature]
+    let screenRAMHash: String?
 }
