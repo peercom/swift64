@@ -15,8 +15,6 @@ public enum TrueDriveEmulationMode: Equatable {
     }
 }
 
-private let pal1541DriveClockRatio = 1_000_000.0 / 985_248.0
-
 /// Complete C64 machine emulation.
 /// Orchestrates CPU, VIC-II, SID, CIAs, and memory.
 public final class C64 {
@@ -51,16 +49,17 @@ public final class C64 {
     public let drive1541: Drive1541
     public let iecBus: IECBus
 
+    /// Machine/chip timing profile. PAL C64 + 1541C is the default compatibility target.
+    public var machineProfile: MachineProfile = .palC64 {
+        didSet {
+            applyMachineProfile()
+        }
+    }
+
     /// Selects between Kernal traps and hardware-level 1541 emulation.
     public var trueDriveEmulationMode: TrueDriveEmulationMode = .off {
         didSet {
-            if trueDriveEmulationMode == .off {
-                drive1541.enabled = false
-            } else {
-                driveClockAccumulator = 0
-                drive1541.driveModel = trueDriveEmulationMode == .compat1541 ? .model1541C : .model1541
-                driveClockRatio = trueDriveEmulationMode == .compat1541 ? 1.0 : pal1541DriveClockRatio
-            }
+            configureDriveForCurrentMode()
         }
     }
 
@@ -71,7 +70,7 @@ public final class C64 {
     }
 
     /// Drive CPU clocks per C64 clock. PAL default: 1 MHz / 985248 Hz.
-    public var driveClockRatio: Double = pal1541DriveClockRatio
+    public var driveClockRatio: Double = MachineProfile.palC64.standardDriveClockRatio
 
     /// Fractional clock accumulator for drive timing.
     var driveClockAccumulator: Double = 0.0
@@ -100,7 +99,7 @@ public final class C64 {
 
     // MARK: - Init
 
-    public init() {
+    public init(machineProfile: MachineProfile = .palC64) {
         memory = MemoryMap()
         cpu = CPU6502(bus: memory)
         vic = VIC()
@@ -183,6 +182,33 @@ public final class C64 {
         kernalTraps.memory = memory
         kernalTraps.diskDrive = diskDrive
         kernalTraps.tapeUnit = tapeUnit
+
+        self.machineProfile = machineProfile
+        applyMachineProfile()
+    }
+
+    func applyMachineProfile() {
+        vic.videoStandard = machineProfile.videoStandard
+        sid.model = machineProfile.sidModel
+        sid.clockRate = machineProfile.sidClockHz
+        cia1.cyclesPerTodTenth = machineProfile.ciaTodCyclesPerTenth
+        cia2.cyclesPerTodTenth = machineProfile.ciaTodCyclesPerTenth
+        configureDriveForCurrentMode()
+    }
+
+    func configureDriveForCurrentMode() {
+        switch trueDriveEmulationMode {
+        case .off:
+            drive1541.enabled = false
+        case .standard1541:
+            driveClockAccumulator = 0
+            drive1541.driveModel = .model1541
+            driveClockRatio = machineProfile.standardDriveClockRatio
+        case .compat1541:
+            driveClockAccumulator = 0
+            drive1541.driveModel = machineProfile.driveModel
+            driveClockRatio = 1.0
+        }
     }
 
     // MARK: - ROM loading

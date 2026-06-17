@@ -4,6 +4,8 @@ import Foundation
 /// Renders one rasterline at a time. The host calls `tick()` 63 times per rasterline.
 public final class VIC {
 
+    public var videoStandard: C64VideoStandard = .pal
+
     // MARK: - Constants (PAL)
 
     public static let cyclesPerLine = 63

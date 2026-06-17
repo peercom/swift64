@@ -4,11 +4,17 @@ import Foundation
 /// Simplified but functional: 3 voices with waveforms, ADSR, and filter.
 public final class SID {
 
+    public enum Model: String, Equatable {
+        case mos6581
+        case mos8580
+    }
+
     // MARK: - Constants
 
-    static let clockRate: Double = 985248.0  // PAL
+    public var model: Model = .mos6581
+    public var clockRate: Double = 985_248.0  // PAL
     public static let sampleRate: Double = 44100.0
-    static let cyclesPerSample = clockRate / sampleRate
+    var cyclesPerSample: Double { clockRate / Self.sampleRate }
 
     // MARK: - Voice
 
@@ -110,8 +116,8 @@ public final class SID {
 
         // Generate audio sample at the right rate
         sampleCycleCounter += 1
-        if sampleCycleCounter >= SID.cyclesPerSample {
-            sampleCycleCounter -= SID.cyclesPerSample
+        if sampleCycleCounter >= cyclesPerSample {
+            sampleCycleCounter -= cyclesPerSample
             generateSample()
         }
     }

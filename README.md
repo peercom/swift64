@@ -36,6 +36,8 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - SID filter is simplified
 - No REU, cartridge, or expansion port support
 
+See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
+
 ### Recent emulation work
 
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks

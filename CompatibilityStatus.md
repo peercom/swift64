@@ -1,0 +1,31 @@
+# C64 Compatibility Status
+
+This project is targeting preservation-grade Commodore 64 compatibility: stock PAL/NTSC C64 timing, SID model differences, 1541-family true-drive behavior, low-level/protected media, cartridges, and opt-in corpus validation.
+
+## Current Baseline
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| 6510/6502 CPU | Partial-preservation | Cycle-stepped CPU with documented and many undocumented opcodes; remaining work includes conformance-suite closure for decimal flags, RDY/SO/interrupt edges, and unstable opcodes. |
+| Memory and I/O banking | Good baseline | BASIC/Kernal/Char ROM banking, I/O dispatch, color RAM nibbles, VIC bank selection, and open-bus behavior have focused tests. |
+| VIC-II | Partial | Rasterline rendering, bad-line CPU stalls, sprites, collision IRQs, light pen latch, and key readback quirks are covered; full per-cycle BA/AEC, sprite DMA, border tricks, and PAL/NTSC geometry remain open. |
+| SID | Early partial | Three voices, ADSR, waveforms, OSC3/ENV3, paddle reads, and a basic filter exist; 6581/8580 model differences, ADSR bugs, combined waveforms, and filter curves remain open. |
+| CIA 6526 | Partial | Timers, TOD, keyboard/joystick scanning, FLAG/CNT paths, interrupt masking, and timer read latches are covered; serial port, PB6/PB7 outputs, TOD 50/60 Hz profile closure, and deeper port interactions remain open. |
+| 1541 true drive | In progress | 1541 CPU/VIA/GCR/IEC read path exists with D64/G64 smoke coverage; custom loaders, weak bits, halftracks, variable track length, write-back, SAVE, and format support remain open. |
+| Tape | Container-level | T64/TAP mounting and trap loading exist; real datasette signal timing is not complete. |
+| Cartridges/expansion | Not started | CRT parsing, EXROM/GAME mapping, Ultimax, freezer/fastload cartridges, EasyFlash, and REU are roadmap items. |
+| Compatibility harness | Early | Local disk matrix manifests exist; preservation corpus support for PRG/D64/G64/T64/TAP/CRT, screen/RAM signatures, and resumable results remains open. |
+
+## Validation Policy
+
+- Fast checks stay sequential: build, focused unit test classes, and selected smoke tests.
+- Heavy compatibility media runs stay opt-in through environment variables and local untracked manifests under `C64/DISKS`.
+- ROMs, commercial media, protected images, screenshots, and generated binary artifacts must remain untracked unless explicitly approved.
+
+## Near-Term Milestones
+
+1. Complete machine/chip profiles for PAL/NTSC, SID 6581/8580, and 1541-family timing.
+2. Convert the local compatibility manifest into a reusable corpus runner with deterministic pass/fail reasons.
+3. Close VIC-II timing gaps that block raster splits, sprite multiplexing, and protected loaders.
+4. Expand 1541 low-level media support for protected G64 behavior before adding write-back.
+5. Add a cartridge framework with standard 8K/16K and common fastload/freezer formats first.

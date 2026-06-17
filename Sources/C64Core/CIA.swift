@@ -4,6 +4,7 @@ import Foundation
 /// Two instances: CIA1 ($DC00, IRQ) and CIA2 ($DD00, NMI).
 public final class CIA {
     static let palCyclesPerTodTenth = 98_525
+    public var cyclesPerTodTenth = CIA.palCyclesPerTodTenth
 
     // MARK: - Ports
 
@@ -242,9 +243,9 @@ public final class CIA {
         guard !todStoppedForWrite else { return }
 
         todCycleCount += 1
-        guard todCycleCount >= Self.palCyclesPerTodTenth else { return }
+        guard todCycleCount >= cyclesPerTodTenth else { return }
 
-        todCycleCount -= Self.palCyclesPerTodTenth
+        todCycleCount -= cyclesPerTodTenth
         incrementTODTenth()
     }
 
