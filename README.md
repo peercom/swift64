@@ -45,6 +45,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - CIA timer output now drives PB6/PB7 pulse and toggle modes for software that observes user-port/timer pins
 - SID oscillator sync now resets voices on source MSB rising edges instead of source level, improving hard-sync behavior
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
+- TAP v0/v1 images now mount as raw pulse streams even when they are not decoded into trap-loadable PRG data
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
 - VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
 - VIC-II bad-line character fetches now stall the C64 CPU during the fetch window while VIC/CIA/SID/drive timing continues

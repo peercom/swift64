@@ -15,6 +15,11 @@ public final class TapeUnit {
         public let dataSize: Int
     }
 
+    public struct TAPPulse: Equatable {
+        public let cycles: Int
+        public let isOverflow: Bool
+    }
+
     // MARK: - State
 
     /// Raw image data
@@ -27,7 +32,7 @@ public final class TapeUnit {
     public private(set) var containerName: String = ""
 
     /// Format type
-    public enum Format {
+    public enum Format: Equatable {
         case t64
         case tap
     }
@@ -35,6 +40,9 @@ public final class TapeUnit {
 
     /// TAP: decoded PRG data (header + payload)
     var tapPRGData: [UInt8]?
+
+    /// TAP: raw pulse durations in C64 CPU cycles.
+    public private(set) var tapPulses: [TAPPulse] = []
 
     // MARK: - Init
 
@@ -44,7 +52,7 @@ public final class TapeUnit {
 
     public func mount(_ data: Data) -> Bool {
         let bytes = [UInt8](data)
-        guard bytes.count >= 64 else { return false }
+        guard bytes.count >= 20 else { return false }
 
         // Try T64 first
         if isT64(bytes) {
@@ -70,6 +78,7 @@ public final class TapeUnit {
         containerName = ""
         format = nil
         tapPRGData = nil
+        tapPulses = []
     }
 
     public var isMounted: Bool { imageData != nil }
@@ -140,9 +149,6 @@ public final class TapeUnit {
     }
 
     func mountTAP(_ bytes: [UInt8]) -> Bool {
-        imageData = bytes
-        format = .tap
-
         // TAP files contain raw pulse data. For Kernal trap loading,
         // we decode the tape data to extract the PRG payload.
         // TAP header: 20 bytes
@@ -154,8 +160,15 @@ public final class TapeUnit {
         let version = bytes[0x0C]
         let dataSize = Int(bytes[0x10]) | (Int(bytes[0x11]) << 8) |
                         (Int(bytes[0x12]) << 16) | (Int(bytes[0x13]) << 24)
+        guard dataSize >= 0, 20 + dataSize <= bytes.count else { return false }
+        guard let pulses = decodeTAPPulses(bytes, headerSize: 20, dataSize: dataSize, version: version),
+              !pulses.isEmpty else { return false }
 
+        imageData = bytes
+        format = .tap
+        entries = []
         containerName = "TAP IMAGE"
+        tapPulses = pulses
 
         // For TAP files, we attempt to decode the CBM tape encoding.
         // This is complex (pilot tones, sync, data blocks) — for now we
@@ -176,8 +189,38 @@ public final class TapeUnit {
             return true
         }
 
-        // If we can't decode, treat as empty
-        return false
+        return true
+    }
+
+    func decodeTAPPulses(_ bytes: [UInt8], headerSize: Int, dataSize: Int, version: UInt8) -> [TAPPulse]? {
+        guard version == 0 || version == 1 else { return nil }
+        guard headerSize >= 0, dataSize >= 0, headerSize + dataSize <= bytes.count else { return nil }
+
+        var pulses: [TAPPulse] = []
+        var offset = headerSize
+        let end = headerSize + dataSize
+
+        while offset < end {
+            let value = bytes[offset]
+            offset += 1
+
+            if value == 0 {
+                if version == 0 {
+                    pulses.append(TAPPulse(cycles: 256 * 8, isOverflow: true))
+                } else {
+                    guard offset + 3 <= end else { return nil }
+                    let cycles = Int(bytes[offset])
+                        | (Int(bytes[offset + 1]) << 8)
+                        | (Int(bytes[offset + 2]) << 16)
+                    offset += 3
+                    pulses.append(TAPPulse(cycles: cycles, isOverflow: true))
+                }
+            } else {
+                pulses.append(TAPPulse(cycles: Int(value) * 8, isOverflow: false))
+            }
+        }
+
+        return pulses
     }
 
     /// Simplified TAP decoder: extract first PRG block from CBM tape encoding.
