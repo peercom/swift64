@@ -3,11 +3,19 @@ import C64Core
 
 /// Metal-based renderer that displays the C64 VIC-II framebuffer.
 final class MetalRenderer: NSObject, MTKViewDelegate {
+    private struct FragmentUniforms {
+        var crtEnabled: UInt32
+        var intensity: Float
+        var sourceWidth: Float
+        var sourceHeight: Float
+    }
 
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
     var texture: MTLTexture
+    var crtShaderEnabled = false
+    var crtShaderIntensity: Float = 0.65
 
     weak var c64: C64?
 
@@ -24,6 +32,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         float4 position [[position]];
         float2 texCoord;
     };
+    struct FragmentUniforms {
+        uint crtEnabled;
+        float intensity;
+        float sourceWidth;
+        float sourceHeight;
+    };
     vertex VertexOut vertexShader(uint vertexID [[vertex_id]]) {
         float2 positions[6] = {
             float2(-1, -1), float2( 1, -1), float2(-1,  1),
@@ -39,9 +53,33 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return out;
     }
     fragment float4 fragmentShader(VertexOut in [[stage_in]],
-                                    texture2d<float> tex [[texture(0)]]) {
+                                    texture2d<float> tex [[texture(0)]],
+                                    constant FragmentUniforms &uniforms [[buffer(0)]]) {
         constexpr sampler s(mag_filter::nearest, min_filter::nearest);
-        return tex.sample(s, in.texCoord);
+        float4 color = tex.sample(s, in.texCoord);
+        if (uniforms.crtEnabled == 0) {
+            return color;
+        }
+
+        float2 texel = 1.0 / float2(uniforms.sourceWidth, uniforms.sourceHeight);
+        float3 glow = (
+            tex.sample(s, in.texCoord + float2(texel.x, 0)).rgb +
+            tex.sample(s, in.texCoord - float2(texel.x, 0)).rgb +
+            tex.sample(s, in.texCoord + float2(0, texel.y)).rgb +
+            tex.sample(s, in.texCoord - float2(0, texel.y)).rgb
+        ) * 0.25;
+
+        float intensity = clamp(uniforms.intensity, 0.0, 1.0);
+        float scanline = 1.0 - intensity * 0.18 * (0.5 + 0.5 * cos(in.texCoord.y * uniforms.sourceHeight * 6.2831853));
+        float maskPhase = fmod(floor(in.texCoord.x * uniforms.sourceWidth * 3.0), 3.0);
+        float3 mask = maskPhase < 1.0 ? float3(1.08, 0.96, 0.96) : (maskPhase < 2.0 ? float3(0.96, 1.07, 0.96) : float3(0.96, 0.96, 1.08));
+        float2 centered = in.texCoord * 2.0 - 1.0;
+        float vignette = 1.0 - intensity * 0.16 * dot(centered, centered);
+
+        color.rgb = mix(color.rgb, glow, intensity * 0.12);
+        color.rgb *= scanline * mask * vignette;
+        color.rgb = pow(max(color.rgb, 0.0), float3(0.96));
+        return float4(clamp(color.rgb, 0.0, 1.0), color.a);
     }
     """
 
@@ -173,6 +211,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setFragmentTexture(texture, index: 0)
+        var uniforms = FragmentUniforms(
+            crtEnabled: crtShaderEnabled ? 1 : 0,
+            intensity: crtShaderIntensity,
+            sourceWidth: Float(VIC.screenWidth),
+            sourceHeight: Float(VIC.screenHeight)
+        )
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FragmentUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         encoder.endEncoding()
 

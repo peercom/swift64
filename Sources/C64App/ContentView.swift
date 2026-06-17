@@ -541,9 +541,12 @@ final class EmulatorController: ObservableObject {
     @Published var emulationStatus: C64.EmulationStatus?
     @Published var romStatusMessage = "ROM paths are not configured."
     @Published var displayFramesPerSecond = MachineProfile.palC64.displayFramesPerSecond
+    @Published var crtShaderEnabled = false
+    @Published var crtShaderIntensity: Float = 0.65
 
     init() {
         applyEmulationPreferences(reset: false, powerDrive: false)
+        applyDisplayPreferences()
         reloadROMs(reset: false)
         c64.powerOn()
         setupAudio()
@@ -633,6 +636,15 @@ final class EmulatorController: ObservableObject {
         }
         refreshStatus()
         print("Applied emulation settings: \(profile.title), \(mode.title)")
+    }
+
+    func applyDisplayPreferences() {
+        let defaults = UserDefaults.standard
+        crtShaderEnabled = defaults.bool(forKey: PreferenceKey.crtShaderEnabled)
+        let storedIntensity = defaults.object(forKey: PreferenceKey.crtShaderIntensity) as? Double ?? 0.65
+        crtShaderIntensity = Float(min(max(storedIntensity, 0.0), 1.0))
+        renderer?.crtShaderEnabled = crtShaderEnabled
+        renderer?.crtShaderIntensity = crtShaderIntensity
     }
 
     func powerDriveIfNeeded() {
@@ -833,6 +845,8 @@ struct MetalView: NSViewRepresentable {
         view.delegate = renderer
         context.coordinator.renderer = renderer
         emulator.renderer = renderer
+        renderer?.crtShaderEnabled = emulator.crtShaderEnabled
+        renderer?.crtShaderIntensity = emulator.crtShaderIntensity
 
         // Set up keyboard event monitoring
         NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
@@ -846,6 +860,8 @@ struct MetalView: NSViewRepresentable {
         if nsView.preferredFramesPerSecond != emulator.displayFramesPerSecond {
             nsView.preferredFramesPerSecond = emulator.displayFramesPerSecond
         }
+        context.coordinator.renderer?.crtShaderEnabled = emulator.crtShaderEnabled
+        context.coordinator.renderer?.crtShaderIntensity = emulator.crtShaderIntensity
     }
 
     func makeCoordinator() -> Coordinator {

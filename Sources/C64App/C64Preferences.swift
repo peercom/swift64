@@ -8,6 +8,8 @@ enum PreferenceKey {
     static let kernalROMPath = "c64.rom.kernalPath"
     static let characterROMPath = "c64.rom.characterPath"
     static let driveROMPath = "c64.rom.drive1541Path"
+    static let crtShaderEnabled = "c64.display.crtShaderEnabled"
+    static let crtShaderIntensity = "c64.display.crtShaderIntensity"
 }
 
 enum MachineProfilePreference: String, CaseIterable, Identifiable {
@@ -72,4 +74,3 @@ enum TrueDriveModePreference: String, CaseIterable, Identifiable {
         }
     }
 }
-

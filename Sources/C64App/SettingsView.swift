@@ -3,6 +3,7 @@ import AppKit
 
 struct SettingsView: View {
     @ObservedObject var emulator: EmulatorController
+    @Environment(\.dismiss) private var dismiss
 
     @AppStorage(PreferenceKey.machineProfile) private var machineProfile = MachineProfilePreference.palC64.rawValue
     @AppStorage(PreferenceKey.trueDriveMode) private var trueDriveMode = TrueDriveModePreference.off.rawValue
@@ -10,6 +11,8 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.kernalROMPath) private var kernalROMPath = ""
     @AppStorage(PreferenceKey.characterROMPath) private var characterROMPath = ""
     @AppStorage(PreferenceKey.driveROMPath) private var driveROMPath = ""
+    @AppStorage(PreferenceKey.crtShaderEnabled) private var crtShaderEnabled = false
+    @AppStorage(PreferenceKey.crtShaderIntensity) private var crtShaderIntensity = 0.65
 
     var body: some View {
         TabView {
@@ -63,17 +66,55 @@ struct SettingsView: View {
                             .lineLimit(2)
                         Spacer()
                         Button {
-                            emulator.reloadROMs(reset: true)
+                            applyROMSettings()
                         } label: {
-                            Label("Reload", systemImage: "arrow.clockwise")
+                            Label("Apply", systemImage: "checkmark")
                         }
-                        .keyboardShortcut("r", modifiers: [.command])
+
+                        Button {
+                            applyROMSettings()
+                            dismiss()
+                        } label: {
+                            Text("OK")
+                        }
+                        .keyboardShortcut(.defaultAction)
                     }
                 }
             }
             .formStyle(.grouped)
             .tabItem {
                 Label("ROMs", systemImage: "folder")
+            }
+
+            Form {
+                Section("CRT") {
+                    Toggle("CRT Shader", isOn: $crtShaderEnabled)
+
+                    HStack {
+                        Text("Intensity")
+                        Slider(value: $crtShaderIntensity, in: 0.0...1.0)
+                        Text(crtIntensityLabel)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                    .disabled(!crtShaderEnabled)
+                }
+
+                Section {
+                    HStack {
+                        Spacer()
+                        Button {
+                            emulator.applyDisplayPreferences()
+                        } label: {
+                            Label("Apply", systemImage: "checkmark")
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Display", systemImage: "display")
             }
         }
         .frame(width: 700, height: 390)
@@ -86,6 +127,14 @@ struct SettingsView: View {
 
     private var romStatusColor: Color {
         romStatusIcon == "checkmark.circle" ? .secondary : .orange
+    }
+
+    private var crtIntensityLabel: String {
+        "\(Int((crtShaderIntensity * 100).rounded()))%"
+    }
+
+    private func applyROMSettings() {
+        emulator.reloadROMs(reset: true)
     }
 }
 

@@ -36,13 +36,14 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
 - SID filter is simplified
 - Banked/freezer/fastload cartridges, EasyFlash, REU, and expansion-port DMA/I/O are not implemented
-- Selectable CRT display shaders are planned for the macOS app to recreate scanlines, phosphor mask, and composite softness on modern LCD screens
+- Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
 
 See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
 
 ### Recent emulation work
 
 - The macOS app now has Settings for machine/drive profile selection and local ROM file paths instead of relying on distributable bundled ROMs
+- The macOS app now includes an opt-in CRT display shader with adjustable intensity
 - ROM loading now validates expected stock ROM sizes before applying Settings-selected files
 - PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
