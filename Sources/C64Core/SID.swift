@@ -70,6 +70,12 @@ public final class SID {
     var filterBP: Bool { volumeFilter & 0x20 != 0 }
     var filterHP: Bool { volumeFilter & 0x40 != 0 }
     var voice3Off: Bool { volumeFilter & 0x80 != 0 }
+    var voiceOutputScale: Double {
+        model == .mos6581 ? 1.0 : 0.82
+    }
+    var volumeDACOffset: Int32 {
+        Int32(volume) * (model == .mos6581 ? 220 : 20)
+    }
 
     /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
     var paddleX: UInt8 = 0xFF
@@ -270,14 +276,14 @@ public final class SID {
     }
 
     func waveformOutput(_ v: Int) -> Int16 {
-        let output = oscillatorOutput(v) << 4
+        let centeredOutput = Int32(oscillatorOutput(v)) - 2048
 
-        // Apply envelope (output is 0..65520, envelope is 0..255)
-        // mixed range: 0..65265 → center around 0 by subtracting half range
+        // Apply envelope after centering the 12-bit waveform. With a zero
+        // envelope the voice contributes silence, not a DC offset.
         let envelope = UInt32(voices[v].envelopeLevel)
-        let mixed = Int32(UInt32(output) * envelope) >> 8
+        let mixed = centeredOutput * Int32(envelope) * 16 / 255
 
-        return Int16(clamping: mixed - 32632)
+        return Int16(clamping: mixed)
     }
 
     func generateSample() {
@@ -296,6 +302,9 @@ public final class SID {
                 output += voiceOut
             }
         }
+
+        output = Int32(Double(output) * voiceOutputScale)
+        output += volumeDACOffset
 
         // Apply master volume (0-15)
         output = (output * Int32(volume)) / 15

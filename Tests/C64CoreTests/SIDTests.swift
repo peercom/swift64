@@ -63,6 +63,34 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
     }
 
+    func testZeroEnvelopeVoiceContributesSilenceToWaveformOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0x20
+        sid.voices[0].accumulator = 0xFFFFFF
+        sid.voices[0].envelopeLevel = 0
+
+        XCTAssertEqual(sid.waveformOutput(0), 0)
+    }
+
+    func testSIDModelsUseDifferentVolumeDACOffsets() {
+        let sid6581 = SID()
+        sid6581.model = .mos6581
+        sid6581.writeRegister(0x18, value: 0x0F)
+
+        let sid8580 = SID()
+        sid8580.model = .mos8580
+        sid8580.writeRegister(0x18, value: 0x0F)
+
+        sid6581.generateSample()
+        sid8580.generateSample()
+
+        let sample6581 = sid6581.sampleBuffer[0]
+        let sample8580 = sid8580.sampleBuffer[0]
+        XCTAssertGreaterThan(sample6581, 0)
+        XCTAssertGreaterThan(sample8580, 0)
+        XCTAssertGreaterThan(sample6581, sample8580 * 5)
+    }
+
     func testOscillatorSyncResetsOnSourceMSBRisingEdge() {
         let sid = SID()
         sid.voices[0].control = 0x02

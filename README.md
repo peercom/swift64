@@ -42,6 +42,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 ### Recent emulation work
 
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
 - CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
 - CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source
