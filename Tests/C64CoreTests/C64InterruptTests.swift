@@ -64,8 +64,9 @@ final class C64InterruptTests: XCTestCase {
     func testRawTAPFallingEdgeDrivesCIA1FlagOnlyWhenCassetteMotorRuns() {
         let c64 = C64()
 
-        XCTAssertTrue(c64.tapeUnit.mount(makeTAP(payload: [0x01])))
-        XCTAssertTrue(c64.tapeUnit.startRawPlayback())
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01])))
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
         c64.cia1.writeRegister(0x0D, value: 0x90)
 
         for _ in 0..<8 {
@@ -88,6 +89,21 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertTrue(c64.cpu.irqLine)
         XCTAssertEqual(c64.cia1.readRegister(0x0D), 0x90)
         XCTAssertFalse(c64.cpu.irqLine)
+    }
+
+    func testUnmountTapeClearsRawPlaybackAndRestoresSenseAndFlagLines() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01])))
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+
+        c64.unmountTape()
+
+        XCTAssertFalse(c64.tapeUnit.isMounted)
+        XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertTrue(c64.memory.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
     }
 
     private func makeTAP(payload: [UInt8]) -> Data {

@@ -296,7 +296,33 @@ public final class C64 {
 
     /// Mount a T64/TAP tape image.
     public func mountTape(_ url: URL) -> Bool {
-        return tapeUnit.mountFromFile(url)
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return mountTape(data)
+    }
+
+    /// Mount a T64/TAP tape image from data.
+    @discardableResult
+    public func mountTape(_ data: Data) -> Bool {
+        guard tapeUnit.mount(data) else { return false }
+        prepareMountedTape()
+        clearFailureStatus()
+        return true
+    }
+
+    public func unmountTape() {
+        tapeUnit.unmount()
+        memory.cassetteSenseLineHigh = true
+        cia1.setFlagLine(high: true)
+        clearFailureStatus()
+    }
+
+    func prepareMountedTape() {
+        memory.cassetteSenseLineHigh = true
+        cia1.setFlagLine(high: true)
+
+        if tapeUnit.format == .tap && tapeUnit.startRawPlayback() {
+            memory.cassetteSenseLineHigh = false
+        }
     }
 
     /// Mount a CRT cartridge image.
