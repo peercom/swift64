@@ -700,6 +700,7 @@ public final class DriveMemoryMap: Bus {
     weak var via2: VIA6522?
 
     var via1WriteLog: Int = 0
+    var driveDataBus: UInt8 = 0xFF
 
     public init() {}
 
@@ -710,35 +711,40 @@ public final class DriveMemoryMap: Bus {
     public func read(_ address: UInt16) -> UInt8 {
         let addr = Int(address)
 
+        let value: UInt8
         switch addr {
         case 0x0000...0x07FF:
-            return ram[addr]
+            value = ram[addr]
 
         case 0x0800...0x0FFF:
-            return ram[addr & 0x07FF]  // RAM mirror
+            value = ram[addr & 0x07FF]  // RAM mirror
 
         case 0x1800...0x180F:
-            return via1?.readRegister(address & 0x0F) ?? 0
+            value = via1?.readRegister(address & 0x0F) ?? driveDataBus
 
         case 0x1810...0x1BFF:
-            return via1?.readRegister(address & 0x0F) ?? 0  // VIA1 mirrors
+            value = via1?.readRegister(address & 0x0F) ?? driveDataBus  // VIA1 mirrors
 
         case 0x1C00...0x1C0F:
-            return via2?.readRegister(address & 0x0F) ?? 0
+            value = via2?.readRegister(address & 0x0F) ?? driveDataBus
 
         case 0x1C10...0x1FFF:
-            return via2?.readRegister(address & 0x0F) ?? 0  // VIA2 mirrors
+            value = via2?.readRegister(address & 0x0F) ?? driveDataBus  // VIA2 mirrors
 
         case 0xC000...0xFFFF:
-            return rom[addr - 0xC000]
+            value = rom[addr - 0xC000]
 
         default:
-            return 0  // Unmapped regions
+            value = driveDataBus
         }
+
+        driveDataBus = value
+        return value
     }
 
     public func write(_ address: UInt16, value: UInt8) {
         let addr = Int(address)
+        driveDataBus = value
 
         switch addr {
         case 0x0000...0x07FF:

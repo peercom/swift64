@@ -45,6 +45,75 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.interruptData & 0x02, 0x02)
     }
 
+    func testTimerBCountsTimerAUnderflowsOnlyWhileCNTIsHighInGatedMode() {
+        let cia = CIA(isCIA1: true)
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x06, value: 0x01)
+        cia.writeRegister(0x07, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x82)
+        cia.writeRegister(0x0F, value: 0x61)
+        cia.writeRegister(0x0E, value: 0x01)
+
+        cia.setCNTLine(high: false)
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.timerB, 0x0001)
+        XCTAssertFalse(cia.interruptActive)
+
+        cia.setCNTLine(high: true)
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.timerB, 0x0000)
+        XCTAssertFalse(cia.interruptActive)
+
+        tickTimerAUnderflow(cia)
+
+        XCTAssertEqual(cia.timerB, 0x0001)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData & 0x02, 0x02)
+    }
+
+    func testTimerACountsCNTPulsesWhenCNTModeIsSelected() {
+        let cia = CIA(isCIA1: true)
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x81)
+        cia.writeRegister(0x0E, value: 0x21)
+
+        cia.tick()
+        XCTAssertEqual(cia.timerA, 0x0001)
+
+        cia.pulseCNT()
+        XCTAssertEqual(cia.timerA, 0x0000)
+        XCTAssertFalse(cia.interruptActive)
+
+        cia.pulseCNT()
+        XCTAssertEqual(cia.timerA, 0x0001)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData & 0x01, 0x01)
+    }
+
+    func testTimerBCountsCNTPulsesWhenCNTModeIsSelected() {
+        let cia = CIA(isCIA1: true)
+        cia.writeRegister(0x06, value: 0x01)
+        cia.writeRegister(0x07, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x82)
+        cia.writeRegister(0x0F, value: 0x21)
+
+        cia.tick()
+        XCTAssertEqual(cia.timerB, 0x0001)
+
+        cia.pulseCNT()
+        XCTAssertEqual(cia.timerB, 0x0000)
+        XCTAssertFalse(cia.interruptActive)
+
+        cia.pulseCNT()
+        XCTAssertEqual(cia.timerB, 0x0001)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData & 0x02, 0x02)
+    }
+
     func testTimerOneShotStopsAfterUnderflow() {
         let cia = CIA(isCIA1: true)
         cia.writeRegister(0x04, value: 0x01)
@@ -242,6 +311,41 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.readRegister(0x0D), 0x00)
         XCTAssertFalse(cia.interruptActive)
         XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testFlagFallingEdgeSetsInterruptAndAcknowledges() {
+        let cia = CIA(isCIA1: true)
+        var irqStates: [Bool] = []
+        cia.onInterrupt = { irqStates.append($0) }
+
+        cia.writeRegister(0x0D, value: 0x90)
+        cia.setFlagLine(high: false)
+
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x90)
+        XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testFlagInterruptRequiresFallingEdge() {
+        let cia = CIA(isCIA1: true)
+
+        cia.setFlagLine(high: false)
+        cia.setFlagLine(high: false)
+
+        XCTAssertEqual(cia.interruptData, 0x10)
+
+        cia.writeRegister(0x0D, value: 0x10)
+        XCTAssertEqual(cia.interruptData, 0x10)
+
+        _ = cia.readRegister(0x0D)
+        cia.setFlagLine(high: false)
+
+        XCTAssertEqual(cia.interruptData, 0x00)
+
+        cia.setFlagLine(high: true)
+        cia.setFlagLine(high: false)
+
+        XCTAssertEqual(cia.interruptData, 0x10)
     }
 
     private func tickTODTenth(_ cia: CIA) {

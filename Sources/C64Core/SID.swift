@@ -65,6 +65,10 @@ public final class SID {
     var filterHP: Bool { volumeFilter & 0x40 != 0 }
     var voice3Off: Bool { volumeFilter & 0x80 != 0 }
 
+    /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
+    var paddleX: UInt8 = 0xFF
+    var paddleY: UInt8 = 0xFF
+
     // Filter state
     var filterLow: Double = 0
     var filterBand: Double = 0
@@ -293,10 +297,15 @@ public final class SID {
 
     // MARK: - Register access
 
+    public func setPaddle(x: UInt8, y: UInt8) {
+        paddleX = x
+        paddleY = y
+    }
+
     public func readRegister(_ reg: UInt16) -> UInt8 {
         switch reg {
-        case 0x19: return 0  // Paddle X
-        case 0x1A: return 0  // Paddle Y
+        case 0x19: return paddleX
+        case 0x1A: return paddleY
         case 0x1B: return UInt8((voices[2].accumulator >> 16) & 0xFF)  // OSC3
         case 0x1C: return voices[2].envelopeLevel  // ENV3
         default: return 0

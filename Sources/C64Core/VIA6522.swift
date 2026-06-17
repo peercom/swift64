@@ -46,6 +46,8 @@ public final class VIA6522 {
     var timer2LatchLow: UInt8 = 0xFF
     /// Timer 2 has fired
     var timer2Fired: Bool = false
+    /// Current PB6 pulse input level for Timer 2 pulse-count mode.
+    var pb6LineHigh: Bool = true
 
     // MARK: - Shift register
 
@@ -151,16 +153,29 @@ public final class VIA6522 {
 
         // Timer 2: counts system clocks when ACR bit 5 = 0, IRQ on underflow (no delay)
         if acr & 0x20 == 0 {
-            timer2Counter &-= 1
-            if timer2Counter == 0xFFFF && !timer2Fired {
-                setIFR(IRQ.timer2)  // T2: immediate, no delay
-                timer2Fired = true  // one-shot: only one IRQ per T2CH write
-            }
+            countTimer2()
         }
 
         // Check handshake line edges
         checkCA1Edge()
+        checkCA2Edge()
         checkCB1Edge()
+        checkCB2Edge()
+    }
+
+    public func setPB6Line(high: Bool) {
+        if pb6LineHigh && !high && acr & 0x20 != 0 {
+            countTimer2()
+        }
+        pb6LineHigh = high
+    }
+
+    func countTimer2() {
+        timer2Counter &-= 1
+        if timer2Counter == 0xFFFF && !timer2Fired {
+            setIFR(IRQ.timer2)  // T2: immediate, no delay
+            timer2Fired = true  // one-shot: only one IRQ per T2CH write
+        }
     }
 
     // MARK: - Handshake edge detection
@@ -197,6 +212,36 @@ public final class VIA6522 {
             setIFR(IRQ.cb1)
         }
         cb1Prev = cb1
+    }
+
+    private func checkCA2Edge() {
+        let mode = (pcr >> 1) & 0x07
+        guard mode <= 3 else {
+            ca2Prev = ca2
+            return
+        }
+
+        let positiveEdge = mode & 0x02 != 0
+        let triggered = positiveEdge ? (!ca2Prev && ca2) : (ca2Prev && !ca2)
+        if triggered {
+            setIFR(IRQ.ca2)
+        }
+        ca2Prev = ca2
+    }
+
+    private func checkCB2Edge() {
+        let mode = (pcr >> 5) & 0x07
+        guard mode <= 3 else {
+            cb2Prev = cb2
+            return
+        }
+
+        let positiveEdge = mode & 0x02 != 0
+        let triggered = positiveEdge ? (!cb2Prev && cb2) : (cb2Prev && !cb2)
+        if triggered {
+            setIFR(IRQ.cb2)
+        }
+        cb2Prev = cb2
     }
 
     // MARK: - Interrupt management

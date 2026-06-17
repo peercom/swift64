@@ -254,6 +254,68 @@ final class VICTests: XCTestCase {
         XCTAssertFalse(foregroundMask[VIC.displayLeft + 1])
     }
 
+    func testInvalidECMMulticolorTextModeRendersBlackButKeepsForegroundMask() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[1], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.controlReg1 = 0x5B
+        vic.controlReg2 = 0xD8
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x80
+            default: return 0
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
+        XCTAssertEqual(line[VIC.displayLeft + 1], ColorPalette.rgba[0])
+        XCTAssertTrue(foregroundMask[VIC.displayLeft])
+        XCTAssertFalse(foregroundMask[VIC.displayLeft + 1])
+    }
+
+    func testInvalidECMBitmapModeRendersBlackButKeepsForegroundMask() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[1], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.controlReg1 = 0x7B
+        vic.controlReg2 = 0xC8
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0xF2
+            case 0x0000: return 0x80
+            default: return 0
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
+        XCTAssertEqual(line[VIC.displayLeft + 1], ColorPalette.rgba[0])
+        XCTAssertTrue(foregroundMask[VIC.displayLeft])
+        XCTAssertFalse(foregroundMask[VIC.displayLeft + 1])
+    }
+
     func testControlRegisterRasterHighBitUpdatesCompareButReadbackUsesCurrentRaster() {
         let vic = VIC()
         vic.rasterLine = 42
@@ -299,6 +361,42 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF1)
         XCTAssertEqual(irqStates, [true])
+    }
+
+    func testLightPenLatchReadsCoordinatesAndRaisesIRQ() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+
+        vic.writeRegister(0x1A, value: 0x08)
+        vic.triggerLightPen(x: 101, y: 251)
+
+        XCTAssertEqual(vic.readRegister(0x13), 50)
+        XCTAssertEqual(vic.readRegister(0x14), 251)
+        XCTAssertEqual(vic.readRegister(0x19), 0xF8)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x08)
+
+        XCTAssertEqual(vic.readRegister(0x19), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testLightPenLatchCapturesOnlyFirstTriggerUntilNextFrame() {
+        let vic = VIC()
+
+        vic.triggerLightPen(x: 100, y: 50)
+        vic.triggerLightPen(x: 300, y: 60)
+
+        XCTAssertEqual(vic.readRegister(0x13), 50)
+        XCTAssertEqual(vic.readRegister(0x14), 50)
+
+        vic.rasterLine = UInt16(VIC.totalLines - 1)
+        vic.endOfLine()
+        vic.triggerLightPen(x: 300, y: 316)
+
+        XCTAssertEqual(vic.readRegister(0x13), 150)
+        XCTAssertEqual(vic.readRegister(0x14), 60)
     }
 
     func testRasterCompareWriteDoesNotRetriggerOnSameRasterline() {

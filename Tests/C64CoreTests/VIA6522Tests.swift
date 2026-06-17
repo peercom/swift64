@@ -36,6 +36,59 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
     }
 
+    func testCA2InputPositiveEdgeSetsIFRAndIRQWhenEnabled() {
+        let via = VIA6522()
+        var irqStates: [Bool] = []
+        via.onInterrupt = { irqStates.append($0) }
+
+        via.writeRegister(0x0C, value: 0x04) // CA2 positive-edge input
+        via.writeRegister(0x0E, value: 0x81) // enable CA2
+
+        via.ca2 = false
+        via.tick()
+        via.ca2 = true
+        via.tick()
+
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.ca2, VIA6522.IRQ.ca2)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
+        XCTAssertEqual(irqStates.last, true)
+    }
+
+    func testCB2InputNegativeEdgeSetsIFRAndClearsOnPortBRead() {
+        let via = VIA6522()
+        via.writeRegister(0x0C, value: 0x00) // CB2 negative-edge input
+        via.writeRegister(0x0E, value: 0x88) // enable CB2
+
+        via.cb2 = true
+        via.tick()
+        via.cb2 = false
+        via.tick()
+
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.cb2, VIA6522.IRQ.cb2)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
+
+        _ = via.readRegister(0x00)
+
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.cb2, 0)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
+    }
+
+    func testCA2AndCB2OutputModesDoNotLatchInputEdges() {
+        let via = VIA6522()
+        via.writeRegister(0x0C, value: 0xCE) // CA2 manual high, CB2 manual low
+        via.writeRegister(0x0E, value: 0x89) // enable CA2 and CB2
+
+        via.ca2 = false
+        via.cb2 = true
+        via.tick()
+        via.ca2 = true
+        via.cb2 = false
+        via.tick()
+
+        XCTAssertEqual(via.ifr & (VIA6522.IRQ.ca2 | VIA6522.IRQ.cb2), 0)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
+    }
+
     func testTimer1UnderflowSetsIFRAndDelayedIRQ() {
         let via = VIA6522()
         var irqStates: [Bool] = []
@@ -52,6 +105,31 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
 
         via.tick()
+        XCTAssertEqual(irqStates.last, true)
+    }
+
+    func testTimer2CountsPB6FallingEdgesWhenPulseModeIsSelected() {
+        let via = VIA6522()
+        var irqStates: [Bool] = []
+        via.onInterrupt = { irqStates.append($0) }
+        via.writeRegister(0x0E, value: 0xA0) // enable T2
+        via.writeRegister(0x0B, value: 0x20) // T2 counts PB6 pulses
+        via.writeRegister(0x08, value: 0x01)
+        via.writeRegister(0x09, value: 0x00)
+
+        via.tick()
+        XCTAssertEqual(via.timer2Counter, 0x0001)
+
+        via.setPB6Line(high: false)
+        XCTAssertEqual(via.timer2Counter, 0x0000)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.timer2, 0)
+
+        via.setPB6Line(high: true)
+        via.setPB6Line(high: false)
+
+        XCTAssertEqual(via.timer2Counter, 0xFFFF)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.timer2, VIA6522.IRQ.timer2)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
         XCTAssertEqual(irqStates.last, true)
     }
 

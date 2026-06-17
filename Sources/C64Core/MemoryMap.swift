@@ -31,6 +31,9 @@ public final class MemoryMap: Bus {
     /// Bits: 0=LORAM, 1=HIRAM, 2=CHAREN, 3=cassette write, 4=cassette sense, 5=cassette motor
     public var portData: UInt8 = 0x37
 
+    /// Last value driven on the CPU data bus, used for simple open-bus reads.
+    var cpuDataBus: UInt8 = 0xFF
+
     /// Effective port value considering direction bits
     var effectivePort: UInt8 {
         // For input bits (direction=0), read as 1 (pull-up)
@@ -69,10 +72,10 @@ public final class MemoryMap: Bus {
         let addr = Int(address)
 
         // CPU port registers
-        if addr == 0x0000 { return portDirection }
+        if addr == 0x0000 { return finishRead(address, value: portDirection) }
         if addr == 0x0001 {
             // Bit 4 (cassette sense) reads as 1 (no cassette)
-            return (portData & portDirection) | (~portDirection & 0x17)
+            return finishRead(address, value: (portData & portDirection) | (~portDirection & 0x17))
         }
 
         let value: UInt8
@@ -111,14 +114,12 @@ public final class MemoryMap: Bus {
             value = ram[addr]
         }
 
-        if let dbg = debugger, !dbg.watchpoints.isEmpty {
-            dbg.notifyRead(address, value: value)
-        }
-        return value
+        return finishRead(address, value: value)
     }
 
     public func write(_ address: UInt16, value: UInt8) {
         let addr = Int(address)
+        cpuDataBus = value
 
         if let dbg = debugger, !dbg.watchpoints.isEmpty {
             dbg.notifyWrite(address, value: value)
@@ -144,28 +145,45 @@ public final class MemoryMap: Bus {
         ram[addr] = value
     }
 
+    func finishRead(_ address: UInt16, value: UInt8) -> UInt8 {
+        cpuDataBus = value
+        if let dbg = debugger, !dbg.watchpoints.isEmpty {
+            dbg.notifyRead(address, value: value)
+        }
+        return value
+    }
+
     // MARK: - I/O dispatch
 
     func readIO(_ address: UInt16) -> UInt8 {
         switch address {
         case 0xD000...0xD3FF:
-            return vic?.readRegister(address & 0x3F) ?? 0
+            return vic?.readRegister(address & 0x3F) ?? cpuDataBus
 
         case 0xD400...0xD7FF:
-            return sid?.readRegister(address & 0x1F) ?? 0
+            return readSIDRegister(address & 0x1F)
 
         case 0xD800...0xDBFF:
-            return colorRAM[Int(address - 0xD800)] | 0xF0  // upper nibble reads as 1
+            return (cpuDataBus & 0xF0) | (colorRAM[Int(address - 0xD800)] & 0x0F)
 
         case 0xDC00...0xDCFF:
-            return cia1?.readRegister(address & 0x0F) ?? 0
+            return cia1?.readRegister(address & 0x0F) ?? cpuDataBus
 
         case 0xDD00...0xDDFF:
-            return cia2?.readRegister(address & 0x0F) ?? 0
+            return cia2?.readRegister(address & 0x0F) ?? cpuDataBus
 
         default:
-            // $DE00-$DFFF: expansion area, return open bus
-            return 0
+            // $DE00-$DFFF: unmapped expansion area floats to the CPU data bus.
+            return cpuDataBus
+        }
+    }
+
+    func readSIDRegister(_ reg: UInt16) -> UInt8 {
+        switch reg {
+        case 0x19...0x1C:
+            return sid?.readRegister(reg) ?? cpuDataBus
+        default:
+            return cpuDataBus
         }
     }
 

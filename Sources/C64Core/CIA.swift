@@ -52,6 +52,11 @@ public final class CIA {
     /// Whether this CIA's interrupt line is active
     public var interruptActive: Bool = false
 
+    /// Current external FLAG pin level. The CIA latches interrupt source 4 on a falling edge.
+    var flagLineHigh: Bool = true
+    /// Current external CNT pin level, used by Timer B's Timer A-underflow + CNT mode.
+    var cntLineHigh: Bool = true
+
     // MARK: - TOD (Time of Day) — simplified
 
     var todTenths: UInt8 = 0
@@ -114,11 +119,7 @@ public final class CIA {
         if timerAControl & 0x01 != 0 {
             let countSource = timerAControl & 0x20  // bit 5: 0=system clock, 1=CNT pin
             if countSource == 0 {
-                if timerA == 0 {
-                    timerAUnderflow()
-                } else {
-                    timerA &-= 1
-                }
+                countTimerA()
             }
         }
 
@@ -127,11 +128,7 @@ public final class CIA {
             let countSource = timerBControl & 0x60
             if countSource == 0 {
                 // Count system clock
-                if timerB == 0 {
-                    timerBUnderflow()
-                } else {
-                    timerB &-= 1
-                }
+                countTimerB()
             }
             // countSource == 0x40: count timer A underflows (handled in timerAUnderflow)
         }
@@ -171,7 +168,13 @@ public final class CIA {
     }
 
     var timerBCountsTimerAUnderflows: Bool {
-        timerBControl & 0x01 != 0 && timerBControl & 0x40 != 0
+        guard timerBControl & 0x01 != 0 else { return false }
+
+        switch timerBControl & 0x60 {
+        case 0x40: return true
+        case 0x60: return cntLineHigh
+        default: return false
+        }
     }
 
     func checkInterrupt() {
@@ -190,6 +193,44 @@ public final class CIA {
             if wasActive {
                 onInterrupt?(false)
             }
+        }
+    }
+
+    public func setFlagLine(high: Bool) {
+        if flagLineHigh && !high {
+            interruptData |= 0x10
+            checkInterrupt()
+        }
+        flagLineHigh = high
+    }
+
+    public func setCNTLine(high: Bool) {
+        cntLineHigh = high
+    }
+
+    public func pulseCNT() {
+        if timerAControl & 0x01 != 0 && timerAControl & 0x20 != 0 {
+            countTimerA()
+        }
+
+        if timerBControl & 0x01 != 0 && timerBControl & 0x60 == 0x20 {
+            countTimerB()
+        }
+    }
+
+    func countTimerA() {
+        if timerA == 0 {
+            timerAUnderflow()
+        } else {
+            timerA &-= 1
+        }
+    }
+
+    func countTimerB() {
+        if timerB == 0 {
+            timerBUnderflow()
+        } else {
+            timerB &-= 1
         }
     }
 

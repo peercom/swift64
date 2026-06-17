@@ -98,6 +98,8 @@ public final class VIC {
     var extendedBGMode: Bool { controlReg1 & 0x40 != 0 }
     /// Multicolor text mode
     var multicolorMode: Bool { controlReg2 & 0x10 != 0 }
+    /// VIC-II invalid ECM combinations render display graphics as black.
+    var invalidECMMode: Bool { extendedBGMode && (bitmapMode || multicolorMode) }
 
     /// Bad line condition
     var badLine: Bool = false
@@ -105,6 +107,12 @@ public final class VIC {
     var badLineDENLatched: Bool = false
     /// Prevents repeated raster IRQs after multiple compare writes on the same rasterline.
     var rasterIRQTriggeredThisLine: Bool = false
+    /// Latched light pen X coordinate ($D013), stored as the upper 8 bits of the 9-bit X counter.
+    var lightPenX: UInt8 = 0
+    /// Latched light pen Y coordinate ($D014).
+    var lightPenY: UInt8 = 0
+    /// The VIC-II accepts only one light pen latch event per video frame.
+    var lightPenLatchedThisFrame: Bool = false
 
     /// True when the VIC is stealing the bus from the CPU for bad-line character fetches.
     var isStealingCPU: Bool {
@@ -218,6 +226,7 @@ public final class VIC {
             rasterLine = 0
             videoCounterBase = 0
             badLineDENLatched = false
+            lightPenLatchedThisFrame = false
             frameReady = true
         }
         rasterIRQTriggeredThisLine = false
@@ -268,6 +277,18 @@ public final class VIC {
                 onIRQ?(false)
             }
         }
+    }
+
+    /// Latch a light pen edge into LPX/LPY. The VIC-II exposes the upper 8 bits
+    /// of its 9-bit horizontal counter, so callers provide a 0...511 beam X.
+    public func triggerLightPen(x: Int, y: Int) {
+        guard !lightPenLatchedThisFrame else { return }
+
+        let clampedX = max(0, min(511, x))
+        lightPenX = UInt8((clampedX >> 1) & 0xFF)
+        lightPenY = UInt8(y & 0xFF)
+        lightPenLatchedThisFrame = true
+        raiseInterrupt(0x08)
     }
 
     func fetchCharData(column: Int) {
@@ -415,6 +436,19 @@ public final class VIC {
                     colorByte: colorData
                 )
             }
+
+            if invalidECMMode {
+                maskInvalidECMOutput(line: &line, xPos: xPos)
+            }
+        }
+    }
+
+    func maskInvalidECMOutput(line: inout [UInt32], xPos: Int) {
+        let black = ColorPalette.rgba[0]
+        for bit in 0..<8 {
+            let px = xPos + bit
+            guard px >= 0 && px < VIC.screenWidth else { continue }
+            line[px] = black
         }
     }
 
@@ -657,7 +691,8 @@ public final class VIC {
             if rasterLine > 255 { val |= 0x80 }
             return val
         case 0x12: return UInt8(rasterLine & 0xFF)
-        case 0x13...0x14: return 0  // Light pen (not implemented)
+        case 0x13: return lightPenX
+        case 0x14: return lightPenY
         case 0x15: return spriteEnabled
         case 0x16: return controlReg2 | 0xC0
         case 0x17: return spriteExpandY
