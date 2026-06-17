@@ -88,4 +88,19 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.voices[0].accumulator, 0x123456)
     }
+
+    func testTestBitImmediatelyResetsOscillatorState() {
+        let sid = SID()
+        sid.voices[2].control = 0x20
+        sid.voices[2].accumulator = 0xFFFFFF
+        sid.voices[2].shiftRegister = 0x123456
+        sid.oscillatorMSBRose[2] = true
+
+        sid.writeRegister(0x12, value: 0x08)
+
+        XCTAssertEqual(sid.voices[2].accumulator, 0)
+        XCTAssertEqual(sid.voices[2].shiftRegister, 0)
+        XCTAssertFalse(sid.oscillatorMSBRose[2])
+        XCTAssertEqual(sid.readRegister(0x1B), 0)
+    }
 }

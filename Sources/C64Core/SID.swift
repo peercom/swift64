@@ -336,7 +336,7 @@ public final class SID {
             case 1: voices[voice].frequency = (voices[voice].frequency & 0x00FF) | (UInt16(value) << 8)
             case 2: voices[voice].pulseWidth = (voices[voice].pulseWidth & 0xF00) | UInt16(value)
             case 3: voices[voice].pulseWidth = (voices[voice].pulseWidth & 0x0FF) | (UInt16(value & 0x0F) << 8)
-            case 4: voices[voice].control = value
+            case 4: writeControlRegister(voice: voice, value: value)
             case 5: voices[voice].attackDecay = value
             case 6: voices[voice].sustainRelease = value
             default: break
@@ -351,6 +351,15 @@ public final class SID {
             case 0x18: volumeFilter = value
             default: break
             }
+        }
+    }
+
+    func writeControlRegister(voice: Int, value: UInt8) {
+        voices[voice].control = value
+        if value & 0x08 != 0 {
+            voices[voice].accumulator = 0
+            voices[voice].shiftRegister = 0
+            oscillatorMSBRose[voice] = false
         }
     }
 }
