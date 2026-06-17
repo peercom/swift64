@@ -12,7 +12,7 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 | SID | Early partial | Three voices, ADSR, waveforms, edge-based oscillator sync, TEST-bit oscillator reset, OSC3/ENV3, paddle reads, and a basic filter exist; 6581/8580 model differences, ADSR bugs, combined waveforms, and filter curves remain open. |
 | CIA 6526 | Partial | Timers, TOD, keyboard/joystick scanning, FLAG/CNT paths, PB6/PB7 timer outputs, interrupt masking, and timer read latches are covered; serial port, TOD 50/60 Hz profile closure, and deeper port interactions remain open. |
 | 1541 true drive | In progress | 1541 CPU/VIA/GCR/IEC read path exists with D64/G64 smoke coverage; custom loaders, weak bits, halftracks, variable track length, write-back, SAVE, and format support remain open. |
-| Tape | Early signal foundation | T64 trap loading, raw TAP v0/v1 pulse parsing/playback, and CPU-port cassette sense/write/motor line surfaces exist; real datasette-to-CIA timing is not complete. |
+| Tape | Early signal foundation | T64 trap loading, raw TAP v0/v1 pulse parsing/playback, CPU-port cassette sense/write/motor line surfaces, and TAP-to-CIA1 FLAG edges exist; full datasette/Kernal timing is not complete. |
 | Cartridges/expansion | Early partial | Standard CRT parsing, 8K/16K ROM mapping, and Ultimax ROM/open-bus memory map behavior exist; banked/freezer/fastload cartridges, EasyFlash, expansion I/O, DMA, and REU remain open. |
 | Compatibility harness | Early partial | Local manifests now parse media/profile/run settings plus RAM signatures and screen RAM hashes; full PRG/D64/G64/T64/TAP/CRT execution, screenshots, and resumable result logs remain open. |
 

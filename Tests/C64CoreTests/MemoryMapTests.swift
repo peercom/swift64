@@ -46,11 +46,13 @@ final class MemoryMapTests: XCTestCase {
 
         XCTAssertTrue(memory.cassetteWriteLineHigh)
         XCTAssertTrue(memory.cassetteMotorLineHigh)
+        XCTAssertFalse(memory.cassetteMotorEnabled)
 
         memory.write(0x0001, value: 0x00)
 
         XCTAssertFalse(memory.cassetteWriteLineHigh)
         XCTAssertFalse(memory.cassetteMotorLineHigh)
+        XCTAssertTrue(memory.cassetteMotorEnabled)
     }
 
     func testROMBankingReadsROMsAndWritesRAMUnderneath() {

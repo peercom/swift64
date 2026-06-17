@@ -47,6 +47,11 @@ public final class MemoryMap: Bus {
         effectivePort & 0x20 != 0
     }
 
+    /// The datasette motor is active when the C64 drives the motor-control line low.
+    public var cassetteMotorEnabled: Bool {
+        !cassetteMotorLineHigh
+    }
+
     /// Last value driven on the CPU data bus, used for simple open-bus reads.
     var cpuDataBus: UInt8 = 0xFF
 

@@ -469,6 +469,8 @@ public final class C64 {
         // SID tick
         sid.tick()
 
+        updateTapeSignal()
+
         // Update joystick state on CIA1
         cia1.joystickPort2 = joystick.port2
         cia1.joystickPort1 = joystick.port1
@@ -486,6 +488,19 @@ public final class C64 {
         }
 
         monitorEmulationProgress()
+    }
+
+    func updateTapeSignal() {
+        guard tapeUnit.rawPlaybackActive else {
+            cia1.setFlagLine(high: true)
+            return
+        }
+
+        if memory.cassetteMotorEnabled {
+            tapeUnit.tickRawPlayback()
+        }
+
+        cia1.setFlagLine(high: tapeUnit.readSignalHigh)
     }
 
     private func clearFailureStatus() {

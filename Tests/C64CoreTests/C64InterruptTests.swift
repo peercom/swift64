@@ -60,4 +60,55 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertEqual(c64.cia2.readRegister(0x0D), 0x81)
         XCTAssertFalse(c64.cpu.nmiLine)
     }
+
+    func testRawTAPFallingEdgeDrivesCIA1FlagOnlyWhenCassetteMotorRuns() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.tapeUnit.mount(makeTAP(payload: [0x01])))
+        XCTAssertTrue(c64.tapeUnit.startRawPlayback())
+        c64.cia1.writeRegister(0x0D, value: 0x90)
+
+        for _ in 0..<8 {
+            c64.tickOneCycle()
+        }
+
+        XCTAssertFalse(c64.cia1.interruptActive)
+        XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 0)
+
+        c64.memory.write(0x0000, value: 0x20)
+        c64.memory.write(0x0001, value: 0x00)
+
+        for _ in 0..<8 {
+            c64.tickOneCycle()
+        }
+
+        XCTAssertFalse(c64.tapeUnit.readSignalHigh)
+        XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 1)
+        XCTAssertTrue(c64.cia1.interruptActive)
+        XCTAssertTrue(c64.cpu.irqLine)
+        XCTAssertEqual(c64.cia1.readRegister(0x0D), 0x90)
+        XCTAssertFalse(c64.cpu.irqLine)
+    }
+
+    private func makeTAP(payload: [UInt8]) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 20)
+        writeASCII("C64-TAPE-RAW", into: &bytes, at: 0)
+        bytes[0x0C] = 0
+        writeUInt32LE(UInt32(payload.count), into: &bytes, at: 0x10)
+        bytes.append(contentsOf: payload)
+        return Data(bytes)
+    }
+
+    private func writeASCII(_ string: String, into bytes: inout [UInt8], at offset: Int) {
+        for (index, byte) in string.utf8.enumerated() {
+            bytes[offset + index] = byte
+        }
+    }
+
+    private func writeUInt32LE(_ value: UInt32, into bytes: inout [UInt8], at offset: Int) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
+    }
 }
