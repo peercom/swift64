@@ -30,6 +30,7 @@ struct C64App: App {
                 Button("Open Tape Image (T64/TAP)...") {
                     openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
                         if emulator.c64.mountTape(url) {
+                            emulator.refreshStatus()
                             print("Tape mounted: \(url.lastPathComponent)")
                         }
                     }
@@ -39,6 +40,7 @@ struct C64App: App {
                 Button("Load Program (PRG)...") {
                     openFile(types: ["prg", "p00"], title: "Load PRG Program") { url in
                         emulator.c64.loadPRG(url, autoRun: true)
+                        emulator.refreshStatus()
                         print("PRG loaded: \(url.lastPathComponent)")
                     }
                 }
@@ -59,6 +61,7 @@ struct C64App: App {
 
                 Button("Reset C64") {
                     emulator.c64.reset()
+                    emulator.powerDriveIfNeeded()
                     emulator.refreshStatus()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])

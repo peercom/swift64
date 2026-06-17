@@ -36,6 +36,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
 - SID filter is simplified
 - Banked/freezer/fastload cartridges, EasyFlash, REU, and expansion-port DMA/I/O are not implemented
+- Selectable CRT display shaders are planned for the macOS app to recreate scanlines, phosphor mask, and composite softness on modern LCD screens
 
 See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
 

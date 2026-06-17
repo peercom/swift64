@@ -271,7 +271,7 @@ private struct FlagsRow: View {
             Text("P").foregroundColor(.secondary).frame(width: 16, alignment: .leading)
             Text(String(format: "$%02X", p)).padding(.trailing, 8).bold()
 
-            ForEach(flags, id: \ .0) { name, mask in
+            ForEach(flags, id: \.0) { name, mask in
                 Text(name)
                     .frame(width: 20, height: 20)
                     .background(p & mask != 0 ? Color.accentColor.opacity(0.2) : Color.clear)
@@ -389,7 +389,7 @@ private struct MemoryPanel: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(0..<16, id: \ .self) { row in
+                    ForEach(0..<16, id: \.self) { row in
                         MemoryRow(snap: snap, row: row)
                     }
                 }
@@ -456,7 +456,7 @@ private struct TracePanel: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(snap.traceLines.enumerated()), id: \ .offset) { idx, line in
+                        ForEach(Array(snap.traceLines.enumerated()), id: \.offset) { idx, line in
                             Text(line)
                                 .id(idx)
                                 .textSelection(.enabled)

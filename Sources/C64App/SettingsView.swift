@@ -14,24 +14,30 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Form {
-                Picker("Machine", selection: $machineProfile) {
-                    ForEach(MachineProfilePreference.allCases) { profile in
-                        Text(profile.title).tag(profile.rawValue)
+                Section("Machine") {
+                    Picker("Model", selection: $machineProfile) {
+                        ForEach(MachineProfilePreference.allCases) { profile in
+                            Text(profile.title).tag(profile.rawValue)
+                        }
+                    }
+
+                    Picker("Drive", selection: $trueDriveMode) {
+                        ForEach(TrueDriveModePreference.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
                     }
                 }
 
-                Picker("Drive Mode", selection: $trueDriveMode) {
-                    ForEach(TrueDriveModePreference.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
+                Section {
+                    HStack {
+                        Spacer()
+                        Button {
+                            emulator.applyEmulationPreferences(reset: true)
+                        } label: {
+                            Label("Apply", systemImage: "checkmark")
+                        }
+                        .keyboardShortcut(.defaultAction)
                     }
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Apply") {
-                        emulator.applyEmulationPreferences(reset: true)
-                    }
-                    .keyboardShortcut(.defaultAction)
                 }
             }
             .formStyle(.grouped)
@@ -40,20 +46,29 @@ struct SettingsView: View {
             }
 
             Form {
-                ROMPathRow(title: "BASIC", path: $basicROMPath)
-                ROMPathRow(title: "Kernal", path: $kernalROMPath)
-                ROMPathRow(title: "Characters", path: $characterROMPath)
-                ROMPathRow(title: "1541 Drive", path: $driveROMPath)
+                Section("C64 ROMs") {
+                    ROMPathRow(title: "BASIC", path: $basicROMPath)
+                    ROMPathRow(title: "Kernal", path: $kernalROMPath)
+                    ROMPathRow(title: "Characters", path: $characterROMPath)
+                }
 
-                HStack(alignment: .firstTextBaseline) {
-                    Text(emulator.romStatusMessage)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Spacer()
-                    Button("Reload ROMs") {
-                        emulator.reloadROMs(reset: true)
+                Section("Drive ROM") {
+                    ROMPathRow(title: "1541 Drive", path: $driveROMPath)
+                }
+
+                Section {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label(emulator.romStatusMessage, systemImage: romStatusIcon)
+                            .foregroundStyle(romStatusColor)
+                            .lineLimit(2)
+                        Spacer()
+                        Button {
+                            emulator.reloadROMs(reset: true)
+                        } label: {
+                            Label("Reload", systemImage: "arrow.clockwise")
+                        }
+                        .keyboardShortcut("r", modifiers: [.command])
                     }
-                    .keyboardShortcut("r", modifiers: [.command])
                 }
             }
             .formStyle(.grouped)
@@ -61,8 +76,16 @@ struct SettingsView: View {
                 Label("ROMs", systemImage: "folder")
             }
         }
-        .frame(width: 620, height: 320)
+        .frame(width: 700, height: 390)
         .scenePadding()
+    }
+
+    private var romStatusIcon: String {
+        emulator.romStatusMessage.lowercased().contains("not") || emulator.romStatusMessage.lowercased().contains("could not") ? "exclamationmark.circle" : "checkmark.circle"
+    }
+
+    private var romStatusColor: Color {
+        romStatusIcon == "checkmark.circle" ? .secondary : .orange
     }
 }
 
@@ -72,12 +95,20 @@ private struct ROMPathRow: View {
 
     var body: some View {
         HStack {
+            Text(title)
+                .frame(width: 82, alignment: .trailing)
+                .foregroundStyle(.secondary)
+
             TextField(title, text: $path)
                 .textFieldStyle(.roundedBorder)
                 .fontDesign(.monospaced)
-            Button("Choose...") {
+            Button {
                 chooseROM()
+            } label: {
+                Label("Choose", systemImage: "folder")
             }
+            .labelStyle(.iconOnly)
+            .help("Choose \(title) ROM")
         }
     }
 
@@ -93,4 +124,3 @@ private struct ROMPathRow: View {
         }
     }
 }
-

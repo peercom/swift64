@@ -10,6 +10,7 @@ struct ContentView: View {
 
     @Environment(\.openWindow) private var openWindow
     @State private var showingDriveStatus = false
+    @State private var isDropTargeted = false
 
     private let statusTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -18,33 +19,42 @@ struct ContentView: View {
     }
 
     var body: some View {
-        MetalView(emulator: emulator)
-            .aspectRatio(CGSize(width: 403, height: 284), contentMode: .fit)
-            .frame(minWidth: 806, minHeight: 568)
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        NavigationSplitView {
+            C64SidebarView(
+                status: status,
+                romStatusMessage: emulator.romStatusMessage,
+                openDisk: openDisk,
+                openTape: openTape,
+                loadPRG: loadPRG,
+                openCartridge: openCartridge,
+                openDebugger: { openWindow(id: "debugger") },
+                reset: reset
+            )
+            .navigationTitle("C64")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+        } detail: {
+            C64DisplayWorkspace(
+                emulator: emulator,
+                status: status,
+                isDropTargeted: isDropTargeted,
+                openDisk: openDisk,
+                loadPRG: loadPRG
+            )
+            .navigationTitle(status.mountedDiskName ?? "Commodore 64")
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
                 handleDrop(providers)
             }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button(action: { openDisk() }) {
-                        Label("Load Disk", systemImage: "opticaldiscdrive")
+                    Menu {
+                        Button("Open Disk Image...") { openDisk() }
+                        Button("Open Tape Image...") { openTape() }
+                        Button("Load Program...") { loadPRG() }
+                        Button("Open Cartridge Image...") { openCartridge() }
+                    } label: {
+                        Label("Open", systemImage: "folder.badge.plus")
                     }
-                    .help("Mount D64/G64 Disk Image")
-
-                    Button(action: { openTape() }) {
-                        Label("Load Tape", systemImage: "cassette")
-                    }
-                    .help("Mount T64/TAP Tape Image")
-
-                    Button(action: { loadPRG() }) {
-                        Label("Load PRG", systemImage: "doc.badge.gearshape")
-                    }
-                    .help("Load PRG Program")
-
-                    Button(action: { openCartridge() }) {
-                        Label("Load Cartridge", systemImage: "memorychip")
-                    }
-                    .help("Mount Standard CRT Cartridge Image")
+                    .help("Open C64 software or media")
 
                     Divider()
 
@@ -59,11 +69,6 @@ struct ContentView: View {
                     .toggleStyle(.button)
                     .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
 
-                    if emulator.hasMountedDisk {
-                        Label(status.mediaCapabilities?.isNativeLowLevel == true ? "Native G64" : "Synthetic GCR", systemImage: status.mediaCapabilities?.isNativeLowLevel == true ? "waveform.path" : "square.stack.3d.down.right")
-                            .help(status.mediaCapabilities?.isNativeLowLevel == true ? "Native low-level disk image mounted" : "Synthetic low-level GCR stream mounted")
-                    }
-
                     Button(action: { showingDriveStatus.toggle() }) {
                         Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
                     }
@@ -75,25 +80,27 @@ struct ContentView: View {
 
                     Divider()
 
-                    SettingsLink {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .help("Open emulator settings")
-
                     Button(action: { openWindow(id: "debugger") }) {
                         Label("Debugger", systemImage: "ladybug")
                     }
                     .help("Show Debugger")
 
-                    Button(action: { emulator.c64.reset() }) {
+                    Button(action: reset) {
                         Label("Reset", systemImage: "arrow.counterclockwise")
                     }
                     .help("Reset C64")
+
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Open emulator settings")
                 }
             }
-            .onReceive(statusTimer) { _ in
-                emulator.refreshStatus()
-            }
+        }
+        .frame(minWidth: 1040, minHeight: 680)
+        .onReceive(statusTimer) { _ in
+            emulator.refreshStatus()
+        }
     }
 
     func openDisk() {
@@ -105,6 +112,7 @@ struct ContentView: View {
     func openTape() {
         openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
             if emulator.c64.mountTape(url) {
+                emulator.refreshStatus()
                 print("Tape mounted: \(url.lastPathComponent)")
             }
         }
@@ -113,6 +121,7 @@ struct ContentView: View {
     func loadPRG() {
         openFile(types: ["prg", "p00"], title: "Load PRG Program") { url in
             emulator.c64.loadPRG(url, autoRun: true)
+            emulator.refreshStatus()
             print("PRG loaded: \(url.lastPathComponent)")
         }
     }
@@ -125,6 +134,12 @@ struct ContentView: View {
                 print("Cartridge mounted: \(url.lastPathComponent)")
             }
         }
+    }
+
+    func reset() {
+        emulator.c64.reset()
+        emulator.powerDriveIfNeeded()
+        emulator.refreshStatus()
     }
 
     func openFile(types: [String], title: String, handler: @escaping (URL) -> Void) {
@@ -151,6 +166,258 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+private struct C64SidebarView: View {
+    let status: C64.EmulationStatus
+    let romStatusMessage: String
+    let openDisk: () -> Void
+    let openTape: () -> Void
+    let loadPRG: () -> Void
+    let openCartridge: () -> Void
+    let openDebugger: () -> Void
+    let reset: () -> Void
+
+    var body: some View {
+        List {
+            Section("Media") {
+                SidebarActionRow(
+                    title: "Disk Image",
+                    detail: status.mountedDiskName ?? "D64 or G64",
+                    systemImage: "opticaldiscdrive",
+                    action: openDisk
+                )
+                SidebarActionRow(
+                    title: "Program",
+                    detail: "PRG or P00",
+                    systemImage: "doc.badge.gearshape",
+                    action: loadPRG
+                )
+                SidebarActionRow(
+                    title: "Tape",
+                    detail: "T64 or TAP",
+                    systemImage: "cassette",
+                    action: openTape
+                )
+                SidebarActionRow(
+                    title: "Cartridge",
+                    detail: status.mountedCartridgeName ?? "CRT",
+                    systemImage: "memorychip",
+                    action: openCartridge
+                )
+            }
+
+            Section("Machine") {
+                SidebarValueRow(title: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")", systemImage: status.cpuJammed ? "exclamationmark.triangle" : "cpu")
+                SidebarValueRow(title: "ROMs", value: romStatusMessage, systemImage: romStatusMessage.lowercased().contains("not") || romStatusMessage.lowercased().contains("could not") ? "exclamationmark.circle" : "checkmark.circle")
+                SidebarActionRow(
+                    title: "Debugger",
+                    detail: "CPU, memory, trace",
+                    systemImage: "ladybug",
+                    action: openDebugger
+                )
+                SidebarActionRow(
+                    title: "Reset",
+                    detail: "Restart the C64",
+                    systemImage: "arrow.counterclockwise",
+                    action: reset
+                )
+            }
+
+            Section("Drive") {
+                SidebarValueRow(title: "Mode", value: status.trueDriveMode.displayName, systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+                SidebarValueRow(title: "Media", value: mediaDescription, systemImage: status.mediaCapabilities?.isNativeLowLevel == true ? "waveform.path" : "square.stack.3d.down.right")
+                SidebarValueRow(title: "LED / Motor", value: "\(onOff(status.drive.ledOn)) / \(onOff(status.drive.motorOn))", systemImage: status.drive.ledOn ? "record.circle" : "circle")
+                SidebarValueRow(title: "Track", value: "\(status.drive.track)  half \(status.drive.halfTrack)", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+
+                if let failure = status.lastFailureReason {
+                    Label(failure, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    private var mediaDescription: String {
+        guard let format = status.mountedDiskFormat else { return "none" }
+        if status.mediaCapabilities?.isNativeLowLevel == true {
+            return "\(format.displayName), native"
+        }
+        if status.mediaCapabilities?.hasSyntheticGCR == true {
+            return "\(format.displayName), synthetic GCR"
+        }
+        return format.displayName
+    }
+
+    private func onOff(_ value: Bool) -> String {
+        value ? "on" : "off"
+    }
+
+    private func hex16(_ value: UInt16) -> String {
+        String(format: "%04X", value)
+    }
+}
+
+private struct SidebarActionRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            SidebarRowContent(title: title, detail: detail, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SidebarValueRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        SidebarRowContent(title: title, detail: value, systemImage: systemImage)
+    }
+}
+
+private struct SidebarRowContent: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct C64DisplayWorkspace: View {
+    @ObservedObject var emulator: EmulatorController
+    let status: C64.EmulationStatus
+    let isDropTargeted: Bool
+    let openDisk: () -> Void
+    let loadPRG: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            GeometryReader { proxy in
+                let displaySize = displaySize(for: proxy.size)
+
+                ZStack {
+                    Color.black
+
+                    MetalView(emulator: emulator)
+                        .frame(width: displaySize.width, height: displaySize.height)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .overlay {
+                if isDropTargeted {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.accentColor, lineWidth: 3)
+                        .padding(12)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage)
+            }
+        }
+        .background(.black)
+        .contextMenu {
+            Button("Open Disk Image...") { openDisk() }
+            Button("Load Program...") { loadPRG() }
+        }
+    }
+
+    private func displaySize(for container: CGSize) -> CGSize {
+        let ratio = CGFloat(403.0 / 284.0)
+        let availableWidth = max(container.width - 36, 1)
+        let availableHeight = max(container.height - 36, 1)
+        let widthFromHeight = availableHeight * ratio
+
+        if widthFromHeight <= availableWidth {
+            return CGSize(width: widthFromHeight, height: availableHeight)
+        }
+
+        return CGSize(width: availableWidth, height: availableWidth / ratio)
+    }
+}
+
+private struct C64StatusBar: View {
+    let status: C64.EmulationStatus
+    let romStatusMessage: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            StatusPill(title: "Mode", value: status.trueDriveMode == .off ? "Fast Load" : status.trueDriveMode.displayName, systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+            StatusPill(title: "Disk", value: status.mountedDiskName ?? "none", systemImage: "opticaldiscdrive")
+            StatusPill(title: "Drive", value: "LED \(onOff(status.drive.ledOn))  Motor \(onOff(status.drive.motorOn))", systemImage: status.drive.ledOn ? "record.circle.fill" : "circle")
+
+            Spacer(minLength: 8)
+
+            if let failure = status.lastFailureReason {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            } else {
+                Label(romStatusSummary, systemImage: romStatusIcon)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private var romStatusSummary: String {
+        romStatusMessage
+            .replacingOccurrences(of: "ROM files are not configured. ", with: "")
+            .replacingOccurrences(of: "Set BASIC, Kernal, Characters, and 1541 paths in Settings.", with: "ROMs need setup")
+    }
+
+    private var romStatusIcon: String {
+        romStatusMessage.lowercased().contains("not") || romStatusMessage.lowercased().contains("could not") ? "exclamationmark.circle" : "checkmark.circle"
+    }
+
+    private func onOff(_ value: Bool) -> String {
+        value ? "on" : "off"
+    }
+}
+
+private struct StatusPill: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        Label {
+            HStack(spacing: 4) {
+                Text(title)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .lineLimit(1)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+        }
     }
 }
 
