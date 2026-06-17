@@ -11,6 +11,8 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(c64.sid.clockRate, 985_248)
         XCTAssertEqual(c64.cia1.cyclesPerTodTenth, 98_525)
         XCTAssertEqual(c64.cia2.cyclesPerTodTenth, 98_525)
+        XCTAssertEqual(c64.cia1.tod50HzCyclesPerTenth, 98_525)
+        XCTAssertEqual(c64.cia1.tod60HzCyclesPerTenth, 118_230)
 
         c64.trueDriveEmulationMode = .compat1541
 
@@ -26,6 +28,8 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(c64.sid.clockRate, 1_022_727)
         XCTAssertEqual(c64.cia1.cyclesPerTodTenth, 102_273)
         XCTAssertEqual(c64.cia2.cyclesPerTodTenth, 102_273)
+        XCTAssertEqual(c64.cia1.tod50HzCyclesPerTenth, 85_228)
+        XCTAssertEqual(c64.cia1.tod60HzCyclesPerTenth, 102_273)
     }
 
     func testStandardTrueDriveUsesProfileClockRatio() {

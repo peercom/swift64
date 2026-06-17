@@ -195,8 +195,16 @@ public final class C64 {
         vic.videoStandard = machineProfile.videoStandard
         sid.model = machineProfile.sidModel
         sid.clockRate = machineProfile.sidClockHz
-        cia1.cyclesPerTodTenth = machineProfile.ciaTodCyclesPerTenth
-        cia2.cyclesPerTodTenth = machineProfile.ciaTodCyclesPerTenth
+        cia1.configureTOD(
+            fiftyHzCyclesPerTenth: machineProfile.ciaTod50HzCyclesPerTenth,
+            sixtyHzCyclesPerTenth: machineProfile.ciaTod60HzCyclesPerTenth,
+            selectedCyclesPerTenth: machineProfile.ciaTodCyclesPerTenth
+        )
+        cia2.configureTOD(
+            fiftyHzCyclesPerTenth: machineProfile.ciaTod50HzCyclesPerTenth,
+            sixtyHzCyclesPerTenth: machineProfile.ciaTod60HzCyclesPerTenth,
+            selectedCyclesPerTenth: machineProfile.ciaTodCyclesPerTenth
+        )
         configureDriveForCurrentMode()
     }
 

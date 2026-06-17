@@ -5,6 +5,8 @@ import Foundation
 public final class CIA {
     static let palCyclesPerTodTenth = 98_525
     public var cyclesPerTodTenth = CIA.palCyclesPerTodTenth
+    public var tod50HzCyclesPerTenth = CIA.palCyclesPerTodTenth
+    public var tod60HzCyclesPerTenth = Int((Double(CIA.palCyclesPerTodTenth) * 6.0 / 5.0).rounded())
 
     // MARK: - Ports
 
@@ -137,6 +139,17 @@ public final class CIA {
 
     public init(isCIA1: Bool) {
         self.isCIA1 = isCIA1
+    }
+
+    public func configureTOD(
+        fiftyHzCyclesPerTenth: Int,
+        sixtyHzCyclesPerTenth: Int,
+        selectedCyclesPerTenth: Int
+    ) {
+        tod50HzCyclesPerTenth = fiftyHzCyclesPerTenth
+        tod60HzCyclesPerTenth = sixtyHzCyclesPerTenth
+        cyclesPerTodTenth = selectedCyclesPerTenth
+        todCycleCount = 0
     }
 
     // MARK: - Tick
@@ -337,6 +350,16 @@ public final class CIA {
         if serialOutputBitsRemaining == 0 {
             interruptData |= 0x08
             checkInterrupt()
+        }
+    }
+
+    func updateTODFrequencyFromControl() {
+        let selectedCycles = timerAControl & 0x80 != 0
+            ? tod50HzCyclesPerTenth
+            : tod60HzCyclesPerTenth
+        if cyclesPerTodTenth != selectedCycles {
+            cyclesPerTodTenth = selectedCycles
+            todCycleCount = 0
         }
     }
 
@@ -566,6 +589,7 @@ public final class CIA {
             let forceLoad = value & 0x10 != 0
             let startRisingEdge = timerAControl & 0x01 == 0 && value & 0x01 != 0
             timerAControl = value & ~0x10  // bit 4 is strobe only
+            updateTODFrequencyFromControl()
             if startRisingEdge {
                 timerAOutputHigh = true
                 timerAPulseCyclesRemaining = 0

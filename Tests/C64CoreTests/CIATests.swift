@@ -325,6 +325,33 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(irqStates, [true, false])
     }
 
+    func testTODFrequencySelectionUsesControlRegisterBit7() {
+        let cia = CIA(isCIA1: true)
+        cia.configureTOD(fiftyHzCyclesPerTenth: 5, sixtyHzCyclesPerTenth: 6, selectedCyclesPerTenth: 5)
+
+        XCTAssertEqual(cia.cyclesPerTodTenth, 5)
+
+        cia.writeRegister(0x08, value: 0x00)
+        tickTODCycles(cia, 4)
+        XCTAssertEqual(cia.readRegister(0x08), 0x00)
+        tickTODCycles(cia, 1)
+        XCTAssertEqual(cia.readRegister(0x08), 0x01)
+
+        cia.writeRegister(0x0E, value: 0x00)
+        XCTAssertEqual(cia.cyclesPerTodTenth, 6)
+        cia.writeRegister(0x08, value: 0x00)
+        tickTODCycles(cia, 5)
+        XCTAssertEqual(cia.readRegister(0x08), 0x00)
+        tickTODCycles(cia, 1)
+        XCTAssertEqual(cia.readRegister(0x08), 0x01)
+
+        cia.writeRegister(0x0E, value: 0x80)
+        XCTAssertEqual(cia.cyclesPerTodTenth, 5)
+        cia.writeRegister(0x08, value: 0x00)
+        tickTODCycles(cia, 5)
+        XCTAssertEqual(cia.readRegister(0x08), 0x01)
+    }
+
     func testJoystickPort2ReadsFromCIA1PortA() {
         let cia = CIA(isCIA1: true)
 
@@ -492,6 +519,12 @@ final class CIATests: XCTestCase {
 
     private func tickTODTenth(_ cia: CIA) {
         for _ in 0..<CIA.palCyclesPerTodTenth {
+            cia.tick()
+        }
+    }
+
+    private func tickTODCycles(_ cia: CIA, _ count: Int) {
+        for _ in 0..<count {
             cia.tick()
         }
     }

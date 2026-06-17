@@ -39,6 +39,24 @@ public struct MachineProfile: Equatable {
         driveClockHz / cpuClockHz
     }
 
+    public var ciaTod50HzCyclesPerTenth: Int {
+        switch videoStandard {
+        case .pal:
+            return ciaTodCyclesPerTenth
+        case .ntsc:
+            return Int((Double(ciaTodCyclesPerTenth) * 5.0 / 6.0).rounded())
+        }
+    }
+
+    public var ciaTod60HzCyclesPerTenth: Int {
+        switch videoStandard {
+        case .pal:
+            return Int((Double(ciaTodCyclesPerTenth) * 6.0 / 5.0).rounded())
+        case .ntsc:
+            return ciaTodCyclesPerTenth
+        }
+    }
+
     public static let palC64 = MachineProfile(
         name: "PAL C64 + 1541C",
         videoStandard: .pal,
