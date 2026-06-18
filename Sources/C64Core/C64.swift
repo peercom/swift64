@@ -167,7 +167,12 @@ public final class C64 {
 
         // CIA2 → CPU NMI
         cia2.onInterrupt = { [weak self] active in
-            self?.cpu.setNMILine(high: active)
+            self?.updateNMI()
+        }
+
+        // Expansion-port cartridges can drive NMI too.
+        memory.onCartridgeNMIChange = { [weak self] _ in
+            self?.updateNMI()
         }
 
         // VIC → CPU IRQ
@@ -383,6 +388,7 @@ public final class C64 {
         guard let cartridge = Cartridge.parseCRT(data) else { return false }
         memory.cartridge = cartridge
         mountedCartridgeName = cartridge.name
+        updateNMI()
         clearFailureStatus()
         return true
     }
@@ -390,6 +396,7 @@ public final class C64 {
     public func unmountCartridge() {
         memory.cartridge = nil
         mountedCartridgeName = nil
+        updateNMI()
         clearFailureStatus()
     }
 
@@ -506,7 +513,7 @@ public final class C64 {
         memory.resetCPUPort()
         memory.resetCartridge()
         updateIRQ()
-        cpu.setNMILine(high: false)
+        updateNMI()
         cpu.reset()
         pendingTypedText.removeAll(keepingCapacity: true)
         driveClockAccumulator = 0
@@ -564,6 +571,8 @@ public final class C64 {
         // SID tick
         sid.tick()
 
+        memory.tickCartridge()
+
         updateTapeSignal()
 
         // Update joystick state on CIA1
@@ -594,6 +603,10 @@ public final class C64 {
         case .standard1541:
             return false
         }
+    }
+
+    func updateNMI() {
+        cpu.setNMILine(high: cia2.interruptActive || memory.cartridge?.nmiLineActive == true)
     }
 
     func updateTapeSignal() {

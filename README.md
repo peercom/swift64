@@ -9,7 +9,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Boots to the C64 BASIC screen
 - Keyboard input, joystick (numpad)
 - Audio output (SID chip)
-- Loads PRG, D64, G64, T64, TAP, standard CRT cartridge files, Simon's BASIC, Magic Desk, Ocean type 1, Fun Play/Power Play, Westermann Learning, and Rex Utility CRTs
+- Loads PRG, D64, G64, T64, TAP, standard CRT cartridge files, Action Replay, Action Replay 3, Action Replay 4, Final Cartridge I, Final Cartridge Plus, Final Cartridge III, Simon's BASIC, C64 Game System/System 3, Warp Speed, Magic Formel, Magic Desk, Ocean type 1, Fun Play/Power Play, Epyx FastLoad, Westermann Learning, Rex Utility, and EasyFlash CRTs
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
 - Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
@@ -26,7 +26,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
-| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Simon's BASIC upper-ROM control, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, and normal-mapped Westermann/Rex cartridge aliases |
+| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Action Replay bank/RAM/IO2 mapping, Action Replay 3 mirrored ROML/ROMH mapping, Action Replay 4 bank/control/IO2 mapping, Final Cartridge I IO-toggle mapping, Final Cartridge Plus segmented ROM/control mapping, Final Cartridge III 16K bank/control/NMI mapping, Simon's BASIC upper-ROM control, C64 Game System/System 3 IO1-address bank switching, Warp Speed IO mirroring and ROM-window control, Magic Formel `$E000` bank switching, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, Epyx FastLoad ROM/IO2/capacitor-gate behavior, EasyFlash bank/control/RAM mapping, and normal-mapped Westermann/Rex cartridge aliases |
 
 ### What needs work
 
@@ -35,7 +35,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - 1541 SAVE/write/format support is deferred until read compatibility is stable
 - Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
 - SID filter is simplified
-- Banked/freezer/fastload cartridges, EasyFlash, REU, and expansion-port DMA/I/O are not implemented
+- Freezer button CPU-state capture, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
 - Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
 
 See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
@@ -50,12 +50,23 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- Action Replay CRT cartridges now parse type 1 images, switch 8K ROM banks through IO1, expose the current ROM or cartridge RAM through IO2, support the RAM overlay at `$8000-$9FFF`, and honor the disable bit
+- Action Replay 3 CRT cartridges now parse type 35 images, switch two 8K ROM banks through IO1, mirror the active bank into ROML/ROMH, and honor EXROM-hide and disable control
+- Action Replay 4 CRT cartridges now parse type 30 images, switch 8K ROM banks through IO1, mirror the selected ROM's first page through IO2, and honor ROM-hide/freeze-end disable control
+- Final Cartridge I CRT cartridges now parse type 13 images, map the 16K ROM at `$8000-$BFFF`, expose cartridge ROM through IO1/IO2, and toggle ROM visibility off/on through IO1/IO2 access
+- Final Cartridge Plus CRT cartridges now parse type 29 images, map the 32K image segments into `$8000`, `$A000`, and `$E000`, and honor IO2 enable/visibility/readback control bits
+- Final Cartridge III CRT cartridges now parse type 3 images, select 16K banks through `$DFFF`, mirror selected bank bytes through IO1/IO2, honor the register-hide bit, and drive the CPU NMI line through the cartridge control register
 - Simon's BASIC CRT cartridges now parse type 4 images and control the upper ROM through IO1 writes
+- C64 Game System/System 3 CRT cartridges now parse type 15 images and select 64 ROML banks through `$DE00-$DE3F` IO1 address accesses
+- Warp Speed CRT cartridges now parse type 16 images, mirror `$9E00-$9FFF` into IO1/IO2, and toggle the `$8000-$BFFF` ROM window through IO2/IO1 writes
+- Magic Formel CRT cartridges now parse type 14 images, switch eight `$E000-$FFFF` ROM banks through `$DF00-$DF07`, and support the `$FF` to `$DF00` normal-Kernal fallback
 - Magic Desk CRT cartridges now parse type 19 banked ROML images and switch banks through IO1 writes
 - C64 reset/power-on now restores cartridge latch state so banked cartridges return to their startup bank
 - Ocean type 1 CRT cartridges now parse type 5 banked ROML/ROMH images and switch banks through IO1 writes
 - Fun Play/Power Play CRT cartridges now parse type 7 banked ROML images and switch banks through their decoded IO1 values
 - Westermann Learning and Rex Utility CRT cartridge types now mount through the existing normal 16K/8K mapping path
+- Epyx FastLoad CRT cartridges now parse type 10 images, expose the 8K ROM at `$8000`, mirror the last ROM page through IO2, and model the documented 512-cycle IO1/ROML capacitor-gated ROM enable timeout
+- EasyFlash CRT cartridges now parse type 32 images, switch banks through `$DE00`, control 8K/16K/Ultimax/off modes through `$DE02`, and expose the `$DF00` RAM page
 - RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame

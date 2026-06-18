@@ -25,6 +25,9 @@ public final class MemoryMap: Bus {
     /// Mounted cartridge ROM, if any.
     public var cartridge: Cartridge?
 
+    /// Called when cartridge I/O may have changed expansion-port interrupt lines.
+    public var onCartridgeNMIChange: ((Bool) -> Void)?
+
     // MARK: - CPU port
 
     /// CPU port data direction register ($0000)
@@ -96,6 +99,7 @@ public final class MemoryMap: Bus {
 
     public func resetCartridge() {
         cartridge?.reset()
+        onCartridgeNMIChange?(cartridge?.nmiLineActive == true)
     }
 
     // MARK: - Bus protocol
@@ -118,6 +122,7 @@ public final class MemoryMap: Bus {
         let value: UInt8
         switch addr {
         case 0x8000...0x9FFF:
+            cartridge?.observeRead(address)
             value = cartridge?.read(address) ?? ram[addr]
 
         case 0xA000...0xBFFF:
@@ -190,6 +195,10 @@ public final class MemoryMap: Bus {
             return
         }
 
+        if addr >= 0x8000 && addr <= 0x9FFF, cartridge?.write(address, value: value) == true {
+            return
+        }
+
         // All writes go to RAM underneath
         ram[addr] = value
     }
@@ -207,7 +216,10 @@ public final class MemoryMap: Bus {
         switch addr {
         case 0x0000...0x0FFF, 0xC000...0xCFFF:
             return ram[addr]
-        case 0x8000...0x9FFF, 0xE000...0xFFFF:
+        case 0x8000...0x9FFF:
+            cartridge?.observeRead(address)
+            return cartridge?.read(address) ?? cpuDataBus
+        case 0xE000...0xFFFF:
             return cartridge?.read(address) ?? cpuDataBus
         case 0xD000...0xDFFF:
             return readIO(address)
@@ -247,8 +259,10 @@ public final class MemoryMap: Bus {
         case 0xDD00...0xDDFF:
             return cia2?.readRegister(address & 0x0F) ?? cpuDataBus
 
+        case 0xDE00...0xDFFF:
+            return cartridge?.readIO(address) ?? cpuDataBus
+
         default:
-            // $DE00-$DFFF: unmapped expansion area floats to the CPU data bus.
             return cpuDataBus
         }
     }
@@ -281,10 +295,19 @@ public final class MemoryMap: Bus {
 
         case 0xDE00...0xDEFF:
             cartridge?.writeIO1(address, value: value)
+            onCartridgeNMIChange?(cartridge?.nmiLineActive == true)
+
+        case 0xDF00...0xDFFF:
+            cartridge?.writeIO2(address, value: value)
+            onCartridgeNMIChange?(cartridge?.nmiLineActive == true)
 
         default:
             break
         }
+    }
+
+    func tickCartridge(cycles: Int = 1) {
+        cartridge?.tick(cycles: cycles)
     }
 
     // MARK: - VIC memory access
