@@ -306,23 +306,25 @@ public final class C64 {
 
     // MARK: - Media loading
 
-    /// Mount a D64 disk image.
+    /// Mount a D64 or G64 disk image.
     public func mountDisk(_ url: URL) -> Bool {
-        let highLevelResult = diskDrive.mountFromFile(url)
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return mountDisk(data, fileName: url.lastPathComponent)
+    }
+
+    /// Mount a disk image from data, using the filename extension to detect D64 vs G64.
+    public func mountDisk(_ data: Data, fileName: String) -> Bool {
+        let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+        let isG64 = ext == "g64" || (ext != "d64" && data.starts(with: Array("GCR-1541".utf8)))
+
+        let highLevelResult = isG64 ? diskDrive.mountG64(data) : diskDrive.mount(data)
         var lowLevelResult = false
 
-        // Also load into the 1541's GCR disk for true drive emulation
-        if let data = try? Data(contentsOf: url) {
-            let ext = url.pathExtension.lowercased()
-            if ext == "g64" {
-                lowLevelResult = drive1541.insertDisk(data, isG64: true)
-            } else {
-                lowLevelResult = drive1541.insertDisk(data, isG64: false)
-            }
-        }
+        // Also load into the 1541's GCR disk for true drive emulation.
+        lowLevelResult = drive1541.insertDisk(data, isG64: isG64)
 
         if highLevelResult || lowLevelResult {
-            mountedDiskName = url.lastPathComponent
+            mountedDiskName = fileName
             clearFailureStatus()
         }
         return highLevelResult || lowLevelResult
@@ -330,13 +332,7 @@ public final class C64 {
 
     /// Mount a D64 disk image from data.
     public func mountDisk(_ data: Data) -> Bool {
-        let result = diskDrive.mount(data)
-        let lowLevelResult = drive1541.insertDisk(data, isG64: false)
-        if result || lowLevelResult {
-            mountedDiskName = "memory.d64"
-            clearFailureStatus()
-        }
-        return result || lowLevelResult
+        mountDisk(data, fileName: "memory.d64")
     }
 
     /// Mount a T64/TAP tape image.
@@ -486,8 +482,8 @@ public final class C64 {
         }
 
         // Set default CPU port
-        memory.portDirection = 0x2F
-        memory.portData = 0x37
+        memory.resetCPUPort()
+        memory.resetCartridge()
 
         // Reset CPU
         cpu.powerOn()
@@ -503,7 +499,23 @@ public final class C64 {
     }
 
     public func reset() {
+        vic.reset()
+        sid.reset()
+        cia1.reset()
+        cia2.reset()
+        memory.resetCPUPort()
+        memory.resetCartridge()
+        updateIRQ()
+        cpu.setNMILine(high: false)
         cpu.reset()
+        pendingTypedText.removeAll(keepingCapacity: true)
+        driveClockAccumulator = 0
+
+        if trueDriveEmulationMode != .off {
+            iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
+            drive1541.reset()
+        }
+
         clearFailureStatus()
     }
 
@@ -530,7 +542,7 @@ public final class C64 {
         if !cpuStalledByVIC && cpu.cycle == 0 {
             debugger.traceInstruction()
             if !debugger.checkBreakpoint() { return }
-            if trueDriveEmulationMode == .off {
+            if shouldUseKernalTrapAtCurrentInstruction() {
                 _ = kernalTraps.checkTrap()
             }
         }
@@ -573,16 +585,24 @@ public final class C64 {
         monitorEmulationProgress()
     }
 
+    func shouldUseKernalTrapAtCurrentInstruction() -> Bool {
+        switch trueDriveEmulationMode {
+        case .off:
+            return true
+        case .compat1541:
+            return kernalTraps.isDiskLoadRequest()
+        case .standard1541:
+            return false
+        }
+    }
+
     func updateTapeSignal() {
-        guard tapeUnit.rawPlaybackActive else {
+        guard tapeUnit.rawPlaybackActive, memory.cassetteMotorEnabled else {
             cia1.setFlagLine(high: true)
             return
         }
 
-        if memory.cassetteMotorEnabled {
-            tapeUnit.tickRawPlayback()
-        }
-
+        tapeUnit.tickRawPlayback()
         cia1.setFlagLine(high: tapeUnit.readSignalHigh)
     }
 

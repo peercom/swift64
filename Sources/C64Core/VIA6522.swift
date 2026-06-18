@@ -141,6 +141,44 @@ public final class VIA6522 {
 
     public init() {}
 
+    public func reset() {
+        portA = 0x00
+        portB = 0x00
+        ddra = 0x00
+        ddrb = 0x00
+        portAInputLatch = nil
+        portBInputLatch = nil
+
+        timer1Counter = 0xFFFF
+        timer1Latch = 0xFFFF
+        timer1Fired = false
+        pendingT1IRQ = false
+        timer1HighLatched = nil
+
+        timer2Counter = 0xFFFF
+        timer2LatchLow = 0xFF
+        timer2Fired = false
+        timer2HighLatched = nil
+        pb6LineHigh = true
+
+        shiftRegister = 0x00
+        acr = 0x00
+        pcr = 0x00
+        ifr = 0x00
+        ier = 0x00
+        ca2OutputState = true
+
+        ca1Prev = ca1
+        ca2Prev = ca2
+        cb1Prev = cb1
+        cb2Prev = cb2
+        ca1DebugCount = 0
+
+        onInterrupt?(false)
+        onPortBWrite?()
+        onCA2Change?(ca2OutputState)
+    }
+
     // MARK: - Tick
 
     public func tick() {

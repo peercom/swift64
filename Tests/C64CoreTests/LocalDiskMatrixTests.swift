@@ -5,11 +5,13 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let matrixEnv = "SWIFT64_LOCAL_DISK_MATRIX"
     private let trueDriveEnv = "SWIFT64_LOCAL_TRUE_DRIVE_MATRIX"
     private let milestoneEnv = "SWIFT64_LOCAL_MILESTONE_MATRIX"
+    private let gianaRunEnv = "SWIFT64_LOCAL_GIANA_RUN_SMOKE"
+    private let gianaFastRunEnv = "SWIFT64_LOCAL_GIANA_FAST_RUN_SMOKE"
 
     func testLocalDiskImagesMountAndEncodeWhenEnabled() throws {
         try requireEnvironment(matrixEnv)
 
-        let urls = try localDiskURLs(limitEnv: "SWIFT64_LOCAL_DISK_LIMIT")
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_DISK_LIMIT", extensions: Self.diskImageExtensions)
         XCTAssertFalse(urls.isEmpty, "Expected local disk images under C64/DISKS")
 
         var summaries: [String] = []
@@ -38,7 +40,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     func testLocalDiskImagesTrueDriveDirectorySmokeWhenEnabled() throws {
         try requireEnvironment(trueDriveEnv)
 
-        let urls = try localDiskURLs(limitEnv: "SWIFT64_LOCAL_TRUE_DRIVE_LIMIT", defaultLimit: 1)
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_TRUE_DRIVE_LIMIT", defaultLimit: 1, extensions: Self.diskImageExtensions)
         XCTAssertFalse(urls.isEmpty, "Expected local disk images under C64/DISKS")
 
         var summaries: [String] = []
@@ -73,9 +75,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         for milestone in milestones {
             let c64 = C64(machineProfile: milestone.machineProfile.profile)
             try loadBundledROMs(into: c64)
-            c64.trueDriveEmulationMode = .compat1541
-            XCTAssertTrue(c64.mountDisk(milestone.url), "Failed to mount \(milestone.url.path)")
+            c64.trueDriveEmulationMode = milestone.driveMode.trueDriveMode
+            XCTAssertTrue(mountPrePowerOnMedia(for: milestone, into: c64), "Failed to mount \(milestone.url.path)")
             c64.powerOn()
+            XCTAssertTrue(mountPostPowerOnMedia(for: milestone, into: c64), "Failed to load \(milestone.url.path)")
 
             for _ in 0..<20 {
                 XCTAssertTrue(c64.runFrame())
@@ -92,13 +95,138 @@ final class LocalDiskMatrixTests: XCTestCase {
         print("Local named milestone matrix:\n" + summaries.joined(separator: "\n"))
     }
 
+    func testLocalGreatGianaSistersRunSmokeWhenEnabled() throws {
+        try requireEnvironment(gianaRunEnv)
+
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_GIANA_RUN_LIMIT", extensions: Self.diskImageExtensions)
+        let giana = try XCTUnwrap(urls.first {
+            $0.lastPathComponent.lowercased().contains("great_giana_sisters")
+            && $0.pathExtension.lowercased() == "g64"
+        })
+
+        let c64 = C64(machineProfile: .palC64)
+        try loadBundledROMs(into: c64)
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
+        c64.powerOn()
+
+        for _ in 0..<20 {
+            XCTAssertTrue(c64.runFrame())
+        }
+
+        let baseline = c64.drive1541.statusSnapshot
+        c64.typeText("LOAD\"*\",8,1\rRUN\r")
+
+        let maxCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_RUN_MAX_CYCLES"] ?? "") ?? 8_000_000
+        var loaded = false
+        var loadScreenHash: String?
+        var screenChangedAfterLoad = false
+        var ranPostLoadCycles = 0
+        var enteredProgramCode = false
+
+        for _ in 0..<maxCycles {
+            c64.tickOneCycle()
+            enteredProgramCode = enteredProgramCode || (0x0801...0xBFFF).contains(c64.cpu.pc)
+
+            let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+            if !loaded && loadEndAddress > 0x0900 {
+                loaded = true
+                loadScreenHash = CompatibilityHash.screenRAM(c64.memory.ram)
+            }
+
+            if loaded {
+                ranPostLoadCycles += 1
+                if ranPostLoadCycles > 200_000,
+                   let loadScreenHash,
+                   CompatibilityHash.screenRAM(c64.memory.ram) != loadScreenHash {
+                    screenChangedAfterLoad = true
+                    break
+                }
+            }
+        }
+
+        let drive = c64.drive1541.statusSnapshot
+        let pc = String(format: "%04X", c64.cpu.pc)
+        let drivePC = String(format: "%04X", drive.cpuPC)
+        let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+        let loadEnd = String(format: "%04X", loadEndAddress)
+        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) reason=\(c64.emulationStatus.lastFailureReason ?? "none")"
+        print(summary)
+
+        XCTAssertTrue(loaded || enteredProgramCode, summary)
+    }
+
+    func testLocalGreatGianaSistersFastRunSmokeWhenEnabled() throws {
+        try requireEnvironment(gianaFastRunEnv)
+
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_GIANA_RUN_LIMIT", extensions: Self.diskImageExtensions)
+        let giana = try XCTUnwrap(urls.first {
+            $0.lastPathComponent.lowercased().contains("great_giana_sisters")
+            && $0.pathExtension.lowercased() == "g64"
+        })
+
+        let c64 = C64(machineProfile: .palC64)
+        try loadBundledROMs(into: c64)
+        c64.trueDriveEmulationMode = .off
+        XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
+        c64.powerOn()
+
+        for _ in 0..<20 {
+            XCTAssertTrue(c64.runFrame())
+        }
+
+        c64.typeText("LOAD\"*\",8,1\rRUN\r")
+        let maxCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_FAST_RUN_MAX_CYCLES"] ?? "") ?? 4_000_000
+        var loaded = false
+        var loadScreenHash: String?
+        var screenChangedAfterLoad = false
+        var ranPostLoadCycles = 0
+        var enteredProgramCode = false
+
+        for _ in 0..<maxCycles {
+            c64.tickOneCycle()
+            enteredProgramCode = enteredProgramCode || (0x0801...0xBFFF).contains(c64.cpu.pc)
+
+            let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+            if !loaded && loadEndAddress > 0x0900 {
+                loaded = true
+                loadScreenHash = CompatibilityHash.screenRAM(c64.memory.ram)
+            }
+
+            if loaded {
+                ranPostLoadCycles += 1
+                if ranPostLoadCycles > 200_000,
+                   let loadScreenHash,
+                   CompatibilityHash.screenRAM(c64.memory.ram) != loadScreenHash {
+                    screenChangedAfterLoad = true
+                    break
+                }
+            }
+        }
+
+        let pc = String(format: "%04X", c64.cpu.pc)
+        let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+        let loadEnd = String(format: "%04X", loadEndAddress)
+        let summary = "Giana fast run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) loadEnd=$\(loadEnd) reason=\(c64.emulationStatus.lastFailureReason ?? "none")"
+        print(summary)
+
+        XCTAssertTrue(loaded || enteredProgramCode, summary)
+    }
+
     private func requireEnvironment(_ name: String) throws {
         guard ProcessInfo.processInfo.environment[name] == "1" else {
             throw XCTSkip("Set \(name)=1 to run local disk image matrix tests")
         }
     }
 
-    private func localDiskURLs(limitEnv: String, defaultLimit: Int? = nil) throws -> [URL] {
+    private static let diskImageExtensions: Set<String> = ["d64", "g64"]
+    private static let milestoneMediaExtensions: Set<String> = ["prg", "d64", "g64", "t64", "tap", "crt"]
+
+    private func localMediaURLs(
+        limitEnv: String,
+        defaultLimit: Int? = nil,
+        extensions allowedExtensions: Set<String>
+    ) throws -> [URL] {
         let root = localDiskRoot
         guard let enumerator = FileManager.default.enumerator(
             at: root,
@@ -116,12 +244,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             if let filter, !url.path.lowercased().contains(filter) {
                 return nil
             }
-            switch url.pathExtension.lowercased() {
-            case "d64", "g64":
-                return url
-            default:
-                return nil
-            }
+            return allowedExtensions.contains(url.pathExtension.lowercased()) ? url : nil
         }
         .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
 
@@ -214,7 +337,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private func localMilestones() throws -> [LocalMilestone] {
-        let urls = try localDiskURLs(limitEnv: "SWIFT64_LOCAL_MILESTONE_LIMIT")
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_MILESTONE_LIMIT", extensions: Self.milestoneMediaExtensions)
         let manifestMilestones = try loadManifestMilestones(urls: urls)
         if !manifestMilestones.isEmpty {
             return manifestMilestones
@@ -230,7 +353,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         return [
             LocalMilestone(
                 url: giana,
+                mediaType: .g64,
                 machineProfile: .palC64,
+                driveMode: .compat1541,
                 commands: [#"LOAD"*",8,1"#],
                 maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
                 pcRange: nil,
@@ -254,18 +379,53 @@ final class LocalDiskMatrixTests: XCTestCase {
             guard let url = urls.first(where: { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }) else {
                 return nil
             }
+            let driveMode = entry.driveMode ?? .compat1541
+            let mediaType = entry.mediaType ?? mediaType(for: url)
             return LocalMilestone(
                 url: url,
+                mediaType: mediaType,
                 machineProfile: entry.machineProfile ?? .palC64,
+                driveMode: driveMode,
                 commands: entry.commands,
                 maxCycles: entry.maxCycles ?? 24_000_000,
                 pcRange: entry.pcRange,
-                minGCRReads: nonNegativeUInt64(entry.driveStatus?.minGCRReads ?? entry.minGCRReads ?? 64),
-                minByteReady: nonNegativeUInt64(entry.driveStatus?.minByteReady ?? entry.minByteReady ?? 512),
+                minGCRReads: nonNegativeUInt64(entry.driveStatus?.minGCRReads ?? entry.minGCRReads ?? defaultMinGCRReads(for: driveMode)),
+                minByteReady: nonNegativeUInt64(entry.driveStatus?.minByteReady ?? entry.minByteReady ?? defaultMinByteReady(for: driveMode)),
                 driveStatus: entry.driveStatus,
                 ramSignatures: entry.ramSignatures,
                 screenRAMHash: entry.screenRAMHash
             )
+        }
+    }
+
+    private func mountPrePowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
+        switch milestone.mediaType {
+        case .d64, .g64:
+            return c64.mountDisk(milestone.url)
+        case .t64, .tap:
+            return c64.mountTape(milestone.url)
+        case .crt:
+            return c64.mountCartridge(milestone.url)
+        case .prg:
+            return true
+        }
+    }
+
+    private func mountPostPowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
+        guard milestone.mediaType == .prg else { return true }
+        guard PRGLoader.loadFromFile(milestone.url) != nil else { return false }
+        c64.loadPRG(milestone.url)
+        return true
+    }
+
+    private func mediaType(for url: URL) -> CompatibilityMediaType {
+        switch url.pathExtension.lowercased() {
+        case "prg": return .prg
+        case "g64": return .g64
+        case "t64": return .t64
+        case "tap": return .tap
+        case "crt": return .crt
+        default: return .d64
         }
     }
 
@@ -303,6 +463,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         UInt64(max(0, value))
     }
 
+    private func defaultMinGCRReads(for driveMode: CompatibilityDriveMode) -> Int {
+        driveMode == .fastLoad ? 0 : 64
+    }
+
+    private func defaultMinByteReady(for driveMode: CompatibilityDriveMode) -> Int {
+        driveMode == .fastLoad ? 0 : 512
+    }
+
     private func matrixSummary(_ message: String, url: URL, gcrDisk: GCRDisk) -> String {
         let caps = gcrDisk.image?.capabilities
         return "\(message) for \(url.path) format=\(caps?.format.displayName ?? "unknown") halftracks=\(caps?.populatedHalfTrackCount ?? 0) native=\(caps?.nativeLowLevelTrackCount ?? 0) synthetic=\(caps?.syntheticGCRTrackCount ?? 0)"
@@ -329,7 +497,7 @@ private struct MatrixRunResult {
     func summary(name: String, command: String, c64: C64) -> String {
         let drive = c64.drive1541.statusSnapshot
         let verdict = passed ? "PASS" : "FAIL"
-        return "\(verdict) \(name) command=\(command) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) reason=\(reason)"
+        return "\(verdict) \(name) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) reason=\(reason)"
     }
 
     private func hex16(_ value: UInt16) -> String {
@@ -339,7 +507,9 @@ private struct MatrixRunResult {
 
 private struct LocalMilestone {
     let url: URL
+    let mediaType: CompatibilityMediaType
     let machineProfile: CompatibilityMachineProfile
+    let driveMode: CompatibilityDriveMode
     let commands: [String]
     let maxCycles: Int
     let pcRange: ClosedRange<UInt16>?

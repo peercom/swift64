@@ -40,6 +40,9 @@ public struct DiskImage {
         public let bitLength: Int
         /// 1541 speed zone selected for this track.
         public let speedZone: Int
+        /// Optional per-GCR-byte speed map decoded from a G64 speed block.
+        /// Entries are 0...3 and indexed by byte position in `bytes`.
+        public let speedZoneMap: [UInt8]?
         /// True when the source is a native low-level stream rather than a
         /// synthetic D64 sector encoding.
         public let isNativeLowLevel: Bool
@@ -49,12 +52,14 @@ public struct DiskImage {
             bytes: [UInt8],
             bitLength: Int? = nil,
             speedZone: Int,
+            speedZoneMap: [UInt8]? = nil,
             isNativeLowLevel: Bool
         ) {
             self.halfTrack = halfTrack
             self.bytes = bytes
             self.bitLength = bitLength ?? bytes.count * 8
             self.speedZone = speedZone
+            self.speedZoneMap = speedZoneMap
             self.isNativeLowLevel = isNativeLowLevel
         }
     }
@@ -73,7 +78,8 @@ public struct DiskImage {
         let syntheticCount = populated.count - nativeCount
         let hasHalfTrackData = populated.contains { $0.halfTrack % 2 == 1 }
         let hasVariableLengths = Set(populated.map(\.bitLength)).count > 1
-        let hasSpeedZones = !populated.isEmpty && Set(populated.map(\.speedZone)).count > 1
+        let hasSpeedZones = populated.contains { $0.speedZoneMap != nil } ||
+            (!populated.isEmpty && Set(populated.map(\.speedZone)).count > 1)
         var unsupported: [String] = []
 
         switch format {

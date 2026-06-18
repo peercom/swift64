@@ -89,6 +89,15 @@ public final class MemoryMap: Bus {
         charROM = [UInt8](charset)
     }
 
+    public func resetCPUPort() {
+        portDirection = 0x2F
+        portData = 0x37
+    }
+
+    public func resetCartridge() {
+        cartridge?.reset()
+    }
+
     // MARK: - Bus protocol
 
     public func read(_ address: UInt16) -> UInt8 {
@@ -269,6 +278,9 @@ public final class MemoryMap: Bus {
 
         case 0xDD00...0xDDFF:
             cia2?.writeRegister(address & 0x0F, value: value)
+
+        case 0xDE00...0xDEFF:
+            cartridge?.writeIO1(address, value: value)
 
         default:
             break

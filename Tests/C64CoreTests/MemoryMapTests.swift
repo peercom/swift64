@@ -2,6 +2,21 @@ import XCTest
 @testable import C64Core
 
 final class MemoryMapTests: XCTestCase {
+    func testResetCPUPortRestoresDefaultROMBankingAndCassetteOutputs() {
+        let memory = MemoryMap()
+        memory.write(0x0000, value: 0x00)
+        memory.write(0x0001, value: 0x00)
+
+        memory.resetCPUPort()
+
+        XCTAssertEqual(memory.portDirection, 0x2F)
+        XCTAssertEqual(memory.portData, 0x37)
+        XCTAssertEqual(memory.read(0x0001), 0x37)
+        XCTAssertFalse(memory.cassetteWriteLineHigh)
+        XCTAssertTrue(memory.cassetteMotorLineHigh)
+        XCTAssertFalse(memory.cassetteMotorEnabled)
+    }
+
     func testCPUDataPortInputBitsReadAsEffectivePulledUpPortLines() {
         let memory = MemoryMap()
 

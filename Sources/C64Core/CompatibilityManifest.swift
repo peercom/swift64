@@ -41,10 +41,25 @@ public enum CompatibilityMachineProfile: String, Decodable, Equatable {
     }
 }
 
+public enum CompatibilityDriveMode: String, Decodable, Equatable {
+    case fastLoad
+    case compat1541
+    case standard1541
+
+    public var trueDriveMode: TrueDriveEmulationMode {
+        switch self {
+        case .fastLoad: return .off
+        case .compat1541: return .compat1541
+        case .standard1541: return .standard1541
+        }
+    }
+}
+
 public struct CompatibilityMilestone: Decodable, Equatable {
     public let file: String
     public let mediaType: CompatibilityMediaType?
     public let machineProfile: CompatibilityMachineProfile?
+    public let driveMode: CompatibilityDriveMode?
     public let commands: [String]
     public let maxCycles: Int?
     public let pcStart: Int?
@@ -60,6 +75,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case file
         case mediaType
         case machineProfile
+        case driveMode
         case command
         case commands
         case maxCycles
@@ -77,6 +93,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         file: String,
         mediaType: CompatibilityMediaType? = nil,
         machineProfile: CompatibilityMachineProfile? = nil,
+        driveMode: CompatibilityDriveMode? = nil,
         command: String,
         maxCycles: Int? = nil,
         pcStart: Int? = nil,
@@ -91,6 +108,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.file = file
         self.mediaType = mediaType
         self.machineProfile = machineProfile
+        self.driveMode = driveMode
         self.commands = [command]
         self.maxCycles = maxCycles
         self.pcStart = pcStart
@@ -107,6 +125,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         file: String,
         mediaType: CompatibilityMediaType? = nil,
         machineProfile: CompatibilityMachineProfile? = nil,
+        driveMode: CompatibilityDriveMode? = nil,
         commands: [String],
         maxCycles: Int? = nil,
         pcStart: Int? = nil,
@@ -121,6 +140,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.file = file
         self.mediaType = mediaType
         self.machineProfile = machineProfile
+        self.driveMode = driveMode
         self.commands = commands
         self.maxCycles = maxCycles
         self.pcStart = pcStart
@@ -138,6 +158,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         file = try container.decode(String.self, forKey: .file)
         mediaType = try container.decodeIfPresent(CompatibilityMediaType.self, forKey: .mediaType)
         machineProfile = try container.decodeIfPresent(CompatibilityMachineProfile.self, forKey: .machineProfile)
+        driveMode = try container.decodeIfPresent(CompatibilityDriveMode.self, forKey: .driveMode)
         if let commandSequence = try container.decodeIfPresent([String].self, forKey: .commands) {
             guard !commandSequence.isEmpty else {
                 throw DecodingError.dataCorruptedError(

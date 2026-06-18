@@ -2,6 +2,70 @@ import XCTest
 @testable import C64Core
 
 final class C64InterruptTests: XCTestCase {
+    func testResetClearsCIAInterruptLinesAndMasks() {
+        let c64 = C64()
+
+        c64.cia1.interruptData = 0x01
+        c64.cia1.writeRegister(0x0D, value: 0x81)
+        c64.cia2.interruptData = 0x01
+        c64.cia2.writeRegister(0x0D, value: 0x81)
+
+        XCTAssertTrue(c64.cpu.irqLine)
+        XCTAssertTrue(c64.cpu.nmiLine)
+
+        c64.reset()
+
+        XCTAssertFalse(c64.cia1.interruptActive)
+        XCTAssertFalse(c64.cia2.interruptActive)
+        XCTAssertEqual(c64.cia1.interruptMask, 0)
+        XCTAssertEqual(c64.cia2.interruptMask, 0)
+        XCTAssertEqual(c64.cia1.interruptData, 0)
+        XCTAssertEqual(c64.cia2.interruptData, 0)
+        XCTAssertFalse(c64.cpu.irqLine)
+        XCTAssertFalse(c64.cpu.nmiLine)
+    }
+
+    func testResetClearsCIA2IECOutputs() {
+        let c64 = C64()
+        c64.cia2.writeRegister(0x02, value: 0x38)
+        c64.cia2.writeRegister(0x00, value: 0x38)
+
+        XCTAssertTrue(c64.iecBus.c64Atn)
+        XCTAssertTrue(c64.iecBus.c64Clk)
+        XCTAssertTrue(c64.iecBus.c64Data)
+
+        c64.reset()
+
+        XCTAssertEqual(c64.cia2.ddra, 0)
+        XCTAssertFalse(c64.iecBus.c64Atn)
+        XCTAssertFalse(c64.iecBus.c64Clk)
+        XCTAssertFalse(c64.iecBus.c64Data)
+        XCTAssertTrue(c64.iecBus.atnLine)
+        XCTAssertTrue(c64.iecBus.clockLine)
+        XCTAssertTrue(c64.iecBus.dataLine)
+    }
+
+    func testResetClearsVICIRQAndSIDVoiceState() {
+        let c64 = C64()
+        c64.vic.rasterLine = 0x0034
+        c64.vic.writeRegister(0x1A, value: 0x01)
+        c64.vic.writeRegister(0x12, value: 0x34)
+        c64.sid.voices[0].frequency = 0x4000
+        c64.sid.voices[0].control = 0x21
+        c64.sid.voices[0].accumulator = 0x800000
+
+        XCTAssertTrue(c64.cpu.irqLine)
+
+        c64.reset()
+
+        XCTAssertFalse(c64.cpu.irqLine)
+        XCTAssertEqual(c64.vic.readRegister(0x19), 0x70)
+        XCTAssertEqual(c64.vic.readRegister(0x1A), 0xF0)
+        XCTAssertEqual(c64.sid.voices[0].frequency, 0)
+        XCTAssertEqual(c64.sid.voices[0].control, 0)
+        XCTAssertEqual(c64.sid.voices[0].accumulator, 0)
+    }
+
     func testCIA1InterruptMaskClearDeassertsCPUIRQLine() {
         let c64 = C64()
 
@@ -119,6 +183,34 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertTrue(c64.cpu.irqLine)
         XCTAssertEqual(c64.cia1.readRegister(0x0D), 0x90)
         XCTAssertFalse(c64.cpu.irqLine)
+    }
+
+    func testRawTAPSignalReturnsIdleWhenCassetteMotorStops() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01, 0x02])))
+        c64.cia1.writeRegister(0x0D, value: 0x90)
+
+        c64.memory.write(0x0000, value: 0x20)
+        c64.memory.write(0x0001, value: 0x00)
+
+        for _ in 0..<8 {
+            c64.tickOneCycle()
+        }
+
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.tapeUnit.readSignalHigh)
+        XCTAssertFalse(c64.cia1.flagLineHigh)
+        _ = c64.cia1.readRegister(0x0D)
+
+        c64.memory.write(0x0001, value: 0x20)
+        c64.tickOneCycle()
+
+        XCTAssertFalse(c64.memory.cassetteMotorEnabled)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertFalse(c64.cia1.interruptActive)
+        XCTAssertFalse(c64.cpu.irqLine)
+        XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 1)
     }
 
     func testUnmountTapeClearsRawPlaybackAndRestoresSenseAndFlagLines() {

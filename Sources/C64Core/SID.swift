@@ -113,6 +113,24 @@ public final class SID {
 
     public init() {}
 
+    public func reset() {
+        voices = [Voice(), Voice(), Voice()]
+        filterCutoff = 0
+        filterResonance = 0
+        filterControl = 0
+        volumeFilter = 0
+        paddleX = 0xFF
+        paddleY = 0xFF
+        filterLow = 0
+        filterBand = 0
+        filterHigh = 0
+        sampleCycleCounter = 0
+        oscillatorMSBRose = [Bool](repeating: false, count: 3)
+        sampleWritePos = 0
+        sampleReadPos = 0
+        sampleBuffer = [Float](repeating: 0, count: sampleBuffer.count)
+    }
+
     // MARK: - Tick
 
     /// Advance one system clock cycle.

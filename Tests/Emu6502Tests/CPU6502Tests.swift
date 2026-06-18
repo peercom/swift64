@@ -674,6 +674,47 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertFalse(cpu.tick())
     }
 
+    func testResetRecoversFromKILJamAndFetchesResetVector() {
+        let (cpu, bus) = makeCPU([0x02])  // KIL
+        runInstructions(cpu, count: 1)
+        XCTAssertTrue(cpu.jammed)
+
+        bus.memory[0xFFFC] = 0x34
+        bus.memory[0xFFFD] = 0x12
+        cpu.reset()
+        for _ in 0..<7 {
+            XCTAssertTrue(cpu.tick())
+        }
+
+        XCTAssertFalse(cpu.jammed)
+        XCTAssertEqual(cpu.pc, 0x1234)
+    }
+
+    func testResetDiscardsPendingNMIEdgeAndDoesNotRetriggerHeldLine() {
+        let (cpu, bus) = makeCPU([0xEA])  // NOP at reset vector
+        bus.memory[0xFFFC] = 0x00
+        bus.memory[0xFFFD] = 0x06
+        bus.memory[0xFFFA] = 0x34
+        bus.memory[0xFFFB] = 0x12
+
+        cpu.setNMILine(high: true)
+        XCTAssertTrue(cpu.nmiPending)
+
+        cpu.reset()
+        for _ in 0..<7 {
+            XCTAssertTrue(cpu.tick())
+        }
+
+        XCTAssertEqual(cpu.pc, 0x0600)
+        XCTAssertFalse(cpu.nmiPending)
+
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(cpu.pc, 0x0601)
+        XCTAssertEqual(cpu.cycle, 1)
+        XCTAssertFalse(cpu.servicingInterrupt)
+    }
+
     // MARK: - BCD mode
 
     func testADCBCD() {

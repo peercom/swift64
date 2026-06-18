@@ -141,6 +141,64 @@ public final class CIA {
         self.isCIA1 = isCIA1
     }
 
+    public func reset() {
+        portA = 0xFF
+        portB = 0xFF
+        ddra = 0x00
+        ddrb = 0x00
+
+        timerA = 0xFFFF
+        timerALatch = 0xFFFF
+        timerAControl = 0x00
+        timerAHighLatched = nil
+        timerAOutputHigh = false
+        timerAPulseCyclesRemaining = 0
+
+        timerB = 0xFFFF
+        timerBLatch = 0xFFFF
+        timerBControl = 0x00
+        timerBHighLatched = nil
+        timerBOutputHigh = false
+        timerBPulseCyclesRemaining = 0
+
+        interruptMask = 0x00
+        interruptData = 0x00
+        let wasActive = interruptActive
+        interruptActive = false
+        if wasActive {
+            onInterrupt?(false)
+        }
+
+        flagLineHigh = true
+        cntLineHigh = true
+
+        todTenths = 0
+        todSeconds = 0
+        todMinutes = 0
+        todHours = 0x01
+        todAlarmTenths = 0
+        todAlarmSeconds = 0
+        todAlarmMinutes = 0
+        todAlarmHours = 0
+        todLatched = false
+        todLatchTenths = 0
+        todLatchSeconds = 0
+        todLatchMinutes = 0
+        todLatchHours = 0
+        todWriteAlarm = false
+        todCycleCount = 0
+        todStoppedForWrite = false
+
+        serialData = 0
+        spLineHigh = true
+        serialInputShift = 0
+        serialInputBitsReceived = 0
+        serialOutputShift = 0
+        serialOutputBitsRemaining = 0
+
+        onPortAWrite?(portA)
+    }
+
     public func configureTOD(
         fiftyHzCyclesPerTenth: Int,
         sixtyHzCyclesPerTenth: Int,

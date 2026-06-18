@@ -19,7 +19,10 @@ let package = Package(
         .executableTarget(
             name: "C64App",
             dependencies: ["C64Core"],
-            exclude: ["ROMS"],
+            exclude: ["Assets.xcassets", "C64App.entitlements", "ROMS"],
+            resources: [
+                .process("Resources"),
+            ],
             linkerSettings: [
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),

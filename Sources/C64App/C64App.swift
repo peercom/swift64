@@ -9,6 +9,15 @@ struct C64App: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
+        #if SWIFT_PACKAGE
+        let resourceBundle = Bundle.module
+        #else
+        let resourceBundle = Bundle.main
+        #endif
+        if let iconURL = resourceBundle.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApplication.shared.applicationIconImage = icon
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 

@@ -339,25 +339,14 @@ public final class Drive1541 {
         gcrTraceLog = 0
         diskPCTraceLog = 0
         memory.via1WriteLog = 0
+        resetHardwareState(resetCPU: false)
 
         let resetLo = memory.rom[0x3FFC]  // $FFFC - $C000 = $3FFC
         let resetHi = memory.rom[0x3FFD]
         driveLog("[1541] powerOn: ROM reset vector = $\(String(format: "%02X%02X", resetHi, resetLo))")
 
         cpu.powerOn()
-        halfTrack = 36  // Track 18
-        headBitPosition = 0
-        motorOn = false
         enabled = true
-        debugCycleCount = 0
-        byteReadyCount = 0
-        via2PortAReadCount = 0
-        via2PortAReadBytes.removeAll(keepingCapacity: true)
-        syncDetectionCount = 0
-        decodedIECCommandBytes.removeAll(keepingCapacity: true)
-        decodedIECDataBytes.removeAll(keepingCapacity: true)
-        noProgressCycleCount = 0
-        lastFailureReason = nil
 
 
         // Note: onBusUpdate is NOT wired to updateVIA1FromBus.
@@ -394,7 +383,48 @@ public final class Drive1541 {
     }
 
     public func reset() {
-        cpu.reset()
+        resetHardwareState(resetCPU: true)
+        enabled = true
+    }
+
+    private func resetHardwareState(resetCPU: Bool) {
+        via1.reset()
+        via2.reset()
+
+        if resetCPU {
+            cpu.powerOn()
+        }
+
+        halfTrack = 36  // Track 18
+        headBitPosition = 0
+        stepperPhase = 0
+        motorOn = false
+        ledOn = false
+        syncDetected = false
+        shiftRegister = 0
+        bitCounter = 0
+        ue7Counter = 0
+        uf4Counter = 0
+        byteReadyEdge = false
+        byteReadyLevel = false
+        soDelay = 0
+        byteReadyActive = true
+        via2.ca1 = false
+        via2.portAInput = 0xFF
+        updateVIA2Inputs()
+        updateBusFromVIA1()
+
+        debugCycleCount = 0
+        byteReadyCount = 0
+        via2PortAReadCount = 0
+        via2PortAReadBytes.removeAll(keepingCapacity: true)
+        syncDetectionCount = 0
+        decodedIECCommandBytes.removeAll(keepingCapacity: true)
+        decodedIECDataBytes.removeAll(keepingCapacity: true)
+        noProgressCycleCount = 0
+        lastFailureReason = nil
+        debugBytesRead = 0
+        debugLogCount = 0
     }
 
     // MARK: - Tick (one drive clock cycle)
@@ -600,7 +630,6 @@ public final class Drive1541 {
     func tickGCRHead() {
         let viaSpeedZone = Int((via2.portB >> 5) & 0x03)
         let trackInfo = disk.trackInfo(halfTrack: halfTrack)
-        let zone = trackInfo?.speedZone ?? viaSpeedZone
 
         guard let trackData = trackInfo?.bytes ?? disk.tracks[halfTrack], !trackData.isEmpty else {
             via2.portAInput = 0x00
@@ -623,6 +652,11 @@ public final class Drive1541 {
             // UE7 counter: counts 0-15, resets to zone value on carry
             ue7Counter += 1
             if ue7Counter >= 16 {
+                let zone = speedZoneForCurrentHeadPosition(
+                    trackInfo: trackInfo,
+                    fallbackZone: viaSpeedZone,
+                    totalBits: totalBits
+                )
                 ue7Counter = zone
 
                 // UF4 counter: clocked by UE7 carry
@@ -672,6 +706,23 @@ public final class Drive1541 {
                 }
             }
         }
+    }
+
+    private func speedZoneForCurrentHeadPosition(
+        trackInfo: DiskImage.Track?,
+        fallbackZone: Int,
+        totalBits: Int
+    ) -> Int {
+        guard let trackInfo else { return fallbackZone }
+        guard let speedZoneMap = trackInfo.speedZoneMap, !speedZoneMap.isEmpty, totalBits > 0 else {
+            return trackInfo.speedZone
+        }
+
+        let byteIndex = (headBitPosition % totalBits) / 8
+        guard byteIndex < speedZoneMap.count else {
+            return trackInfo.speedZone
+        }
+        return Int(speedZoneMap[byteIndex])
     }
 
     // MARK: - IRQ management

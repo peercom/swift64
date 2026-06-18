@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showingDriveStatus = false
     @State private var isDropTargeted = false
     @State private var isFullScreen = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     private let statusTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -20,105 +21,92 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            if isFullScreen {
-                C64DisplayWorkspace(
-                    emulator: emulator,
-                    status: status,
-                    isDropTargeted: isDropTargeted,
-                    showsStatusBar: false,
-                    openDisk: openDisk,
-                    loadPRG: loadPRG
-                )
-                .ignoresSafeArea()
-                .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-                    handleDrop(providers)
-                }
-            } else {
-                NavigationSplitView {
-                    C64SidebarView(
-                        status: status,
-                        romStatusMessage: emulator.romStatusMessage,
-                        openDisk: openDisk,
-                        openTape: openTape,
-                        loadPRG: loadPRG,
-                        openCartridge: openCartridge,
-                        openDebugger: { openWindow(id: "debugger") },
-                        reset: reset
-                    )
-                    .navigationTitle("C64")
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-                } detail: {
-                    C64DisplayWorkspace(
-                        emulator: emulator,
-                        status: status,
-                        isDropTargeted: isDropTargeted,
-                        showsStatusBar: true,
-                        openDisk: openDisk,
-                        loadPRG: loadPRG
-                    )
-                    .navigationTitle(status.mountedDiskName ?? "Commodore 64")
-                    .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-                        handleDrop(providers)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            C64SidebarView(
+                status: status,
+                romStatusMessage: emulator.romStatusMessage,
+                openDisk: openDisk,
+                openTape: openTape,
+                loadPRG: loadPRG,
+                openCartridge: openCartridge,
+                openDebugger: { openWindow(id: "debugger") },
+                reset: reset
+            )
+            .navigationTitle("C64")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+        } detail: {
+            C64DisplayWorkspace(
+                emulator: emulator,
+                status: status,
+                isDropTargeted: isDropTargeted,
+                showsStatusBar: !isFullScreen,
+                openDisk: openDisk,
+                loadPRG: loadPRG
+            )
+            .ignoresSafeArea(isFullScreen ? .all : [], edges: .all)
+            .navigationTitle(status.mountedDiskName ?? "Commodore 64")
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleDrop(providers)
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Menu {
+                        Button("Open Disk Image...") { openDisk() }
+                        Button("Open Tape Image...") { openTape() }
+                        Button("Load Program...") { loadPRG() }
+                        Button("Open Cartridge Image...") { openCartridge() }
+                    } label: {
+                        Label("Open", systemImage: "folder.badge.plus")
                     }
-                    .toolbar {
-                        ToolbarItemGroup(placement: .primaryAction) {
-                            Menu {
-                                Button("Open Disk Image...") { openDisk() }
-                                Button("Open Tape Image...") { openTape() }
-                                Button("Load Program...") { loadPRG() }
-                                Button("Open Cartridge Image...") { openCartridge() }
-                            } label: {
-                                Label("Open", systemImage: "folder.badge.plus")
-                            }
-                            .help("Open C64 software or media")
+                    .help("Open C64 software or media")
 
-                            Divider()
+                    Divider()
 
-                            Toggle(isOn: Binding(
-                                get: { emulator.c64.trueDriveEmulation },
-                                set: { enabled in
-                                    emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
-                                }
-                            )) {
-                                Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
-                            }
-                            .toggleStyle(.button)
-                            .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
-
-                            Button(action: { showingDriveStatus.toggle() }) {
-                                Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
-                            }
-                            .help("Show compact drive and media status")
-                            .popover(isPresented: $showingDriveStatus, arrowEdge: .bottom) {
-                                DriveStatusPopover(status: status)
-                                    .frame(width: 360)
-                            }
-
-                            Divider()
-
-                            Button(action: { openWindow(id: "debugger") }) {
-                                Label("Debugger", systemImage: "ladybug")
-                            }
-                            .help("Show Debugger")
-
-                            Button(action: reset) {
-                                Label("Reset", systemImage: "arrow.counterclockwise")
-                            }
-                            .help("Reset C64")
-
-                            SettingsLink {
-                                Label("Settings", systemImage: "gearshape")
-                            }
-                            .help("Open emulator settings")
+                    Toggle(isOn: Binding(
+                        get: { emulator.c64.trueDriveEmulation },
+                        set: { enabled in
+                            emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
                         }
+                    )) {
+                        Label(status.trueDriveMode == .off ? "Fast Load" : "True Drive 1541", systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
                     }
+                    .toggleStyle(.button)
+                    .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
+
+                    Button(action: { showingDriveStatus.toggle() }) {
+                        Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
+                    }
+                    .help("Show compact drive and media status")
+                    .popover(isPresented: $showingDriveStatus, arrowEdge: .bottom) {
+                        DriveStatusPopover(status: status)
+                            .frame(width: 360)
+                    }
+
+                    Divider()
+
+                    Button(action: { openWindow(id: "debugger") }) {
+                        Label("Debugger", systemImage: "ladybug")
+                    }
+                    .help("Show Debugger")
+
+                    Button(action: reset) {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .help("Reset C64")
+
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Open emulator settings")
                 }
             }
         }
         .frame(minWidth: 1040, minHeight: 680)
         .toolbar(isFullScreen ? .hidden : .visible, for: .windowToolbar)
         .background(WindowFullScreenObserver(isFullScreen: $isFullScreen).frame(width: 0, height: 0))
+        .onChange(of: isFullScreen) { _, fullScreen in
+            columnVisibility = fullScreen ? .detailOnly : .all
+        }
         .onReceive(statusTimer) { _ in
             emulator.refreshStatus()
         }
@@ -618,7 +606,7 @@ final class EmulatorController: ObservableObject {
     var audioEngine: AVAudioEngine?
     var audioSourceNode: AVAudioSourceNode?
     /// Exposed so the debugger bridge can access snapshots.
-    weak var renderer: MetalRenderer?
+    var renderer: MetalRenderer?
 
     @Published var hasMountedDisk = false
     @Published var emulationStatus: C64.EmulationStatus?
@@ -628,6 +616,7 @@ final class EmulatorController: ObservableObject {
     @Published var crtShaderIntensity: Float = 0.65
 
     init() {
+        migrateLegacyPreferencesIfNeeded()
         applyEmulationPreferences(reset: false, powerDrive: false)
         applyDisplayPreferences()
         reloadROMs(reset: false)
@@ -680,11 +669,28 @@ final class EmulatorController: ObservableObject {
     }
 
     func mountDisk(_ url: URL) {
-        if c64.mountDisk(url) {
+        do {
+            let data = try readUserSelectedFile(url)
+            guard c64.mountDisk(data, fileName: url.lastPathComponent) else {
+                print("Could not mount disk image: \(url.lastPathComponent)")
+                return
+            }
             hasMountedDisk = true
             refreshStatus()
             print("Disk mounted: \(url.lastPathComponent)")
+        } catch {
+            print("Could not read disk image \(url.lastPathComponent): \(error.localizedDescription)")
         }
+    }
+
+    private func readUserSelectedFile(_ url: URL) throws -> Data {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try Data(contentsOf: url)
     }
 
     func setTrueDriveMode(_ mode: TrueDriveEmulationMode) {
@@ -778,13 +784,15 @@ final class EmulatorController: ObservableObject {
 
     func hasConfiguredROMPaths() -> Bool {
         let defaults = UserDefaults.standard
-        let paths = [
-            defaults.string(forKey: PreferenceKey.basicROMPath) ?? "",
-            defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "",
-            defaults.string(forKey: PreferenceKey.characterROMPath) ?? "",
-            defaults.string(forKey: PreferenceKey.driveROMPath) ?? "",
+        let sources = [
+            (defaults.string(forKey: PreferenceKey.basicROMPath) ?? "", PreferenceKey.basicROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "", PreferenceKey.kernalROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.characterROMPath) ?? "", PreferenceKey.characterROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.driveROMPath) ?? "", PreferenceKey.driveROMImportedPath),
         ]
-        return paths.contains { !$0.isEmpty }
+        return sources.contains { path, importedPathKey in
+            hasROMSource(path: path, importedPathKey: importedPathKey)
+        }
     }
 
     func loadROMsFromConfiguredPaths() -> Bool {
@@ -795,19 +803,21 @@ final class EmulatorController: ObservableObject {
         let drivePath = defaults.string(forKey: PreferenceKey.driveROMPath) ?? ""
 
         do {
-            guard !basicPath.isEmpty, !kernalPath.isEmpty, !characterPath.isEmpty else {
+            guard hasROMSource(path: basicPath, importedPathKey: PreferenceKey.basicROMImportedPath),
+                  hasROMSource(path: kernalPath, importedPathKey: PreferenceKey.kernalROMImportedPath),
+                  hasROMSource(path: characterPath, importedPathKey: PreferenceKey.characterROMImportedPath) else {
                 romStatusMessage = "BASIC, Kernal, and Characters ROM paths are required."
                 print("WARNING: \(romStatusMessage)")
                 return false
             }
 
-            let basic = try Data(contentsOf: URL(fileURLWithPath: basicPath))
-            let kernal = try Data(contentsOf: URL(fileURLWithPath: kernalPath))
-            let characters = try Data(contentsOf: URL(fileURLWithPath: characterPath))
+            let basic = try loadConfiguredROM(path: basicPath, bookmarkKey: PreferenceKey.basicROMBookmark, importedPathKey: PreferenceKey.basicROMImportedPath)
+            let kernal = try loadConfiguredROM(path: kernalPath, bookmarkKey: PreferenceKey.kernalROMBookmark, importedPathKey: PreferenceKey.kernalROMImportedPath)
+            let characters = try loadConfiguredROM(path: characterPath, bookmarkKey: PreferenceKey.characterROMBookmark, importedPathKey: PreferenceKey.characterROMImportedPath)
             try c64.loadROMsValidated(basic: basic, kernal: kernal, charset: characters)
 
-            if !drivePath.isEmpty {
-                let drive = try Data(contentsOf: URL(fileURLWithPath: drivePath))
+            if hasROMSource(path: drivePath, importedPathKey: PreferenceKey.driveROMImportedPath) {
+                let drive = try loadConfiguredROM(path: drivePath, bookmarkKey: PreferenceKey.driveROMBookmark, importedPathKey: PreferenceKey.driveROMImportedPath)
                 try c64.loadDriveROMValidated(drive)
                 romStatusMessage = "ROMs loaded from configured paths, including 1541 drive ROM."
             } else {
@@ -819,6 +829,98 @@ final class EmulatorController: ObservableObject {
             romStatusMessage = "Could not load configured ROM paths: \(error.localizedDescription)"
             print("ERROR: \(romStatusMessage)")
             return false
+        }
+    }
+
+    func hasROMSource(path: String, importedPathKey: String) -> Bool {
+        if !path.isEmpty {
+            return true
+        }
+        guard let importedPath = UserDefaults.standard.string(forKey: importedPathKey), !importedPath.isEmpty else {
+            return false
+        }
+        return FileManager.default.isReadableFile(atPath: importedPath)
+    }
+
+    func loadConfiguredROM(path: String, bookmarkKey: String, importedPathKey: String) throws -> Data {
+        if let importedPath = UserDefaults.standard.string(forKey: importedPathKey), !importedPath.isEmpty {
+            let importedURL = URL(fileURLWithPath: importedPath)
+            if FileManager.default.isReadableFile(atPath: importedURL.path) {
+                return try Data(contentsOf: importedURL)
+            }
+        }
+
+        if let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            if path.isEmpty || url.path == path {
+                if isStale {
+                    try saveSecurityBookmark(for: url, key: bookmarkKey)
+                }
+                let didStartAccessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartAccessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                return try Data(contentsOf: url)
+            }
+        }
+
+        guard !path.isEmpty else {
+            throw ROMAccessError.missingSandboxSource
+        }
+
+        let url = URL(fileURLWithPath: path)
+        do {
+            return try Data(contentsOf: url)
+        } catch {
+            throw ROMAccessError.missingSecurityBookmark(path: path, underlying: error)
+        }
+    }
+
+    func saveSecurityBookmark(for url: URL, key: String) throws {
+        let bookmark = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        UserDefaults.standard.set(bookmark, forKey: key)
+    }
+
+    func migrateLegacyPreferencesIfNeeded() {
+        let defaults = UserDefaults.standard
+        let legacyDomainName = "local.swift64.C64App"
+        guard let legacyDomain = defaults.persistentDomain(forName: legacyDomainName) else { return }
+
+        for key in [
+            PreferenceKey.machineProfile,
+            PreferenceKey.trueDriveMode,
+            PreferenceKey.basicROMPath,
+            PreferenceKey.kernalROMPath,
+            PreferenceKey.characterROMPath,
+            PreferenceKey.driveROMPath,
+            PreferenceKey.crtShaderEnabled,
+            PreferenceKey.crtShaderIntensity,
+        ] where defaults.object(forKey: key) == nil {
+            if let value = legacyDomain[key] {
+                defaults.set(value, forKey: key)
+            }
+        }
+    }
+
+    enum ROMAccessError: LocalizedError {
+        case missingSecurityBookmark(path: String, underlying: Error)
+        case missingSandboxSource
+
+        var errorDescription: String? {
+            switch self {
+            case .missingSecurityBookmark(let path, let underlying):
+                return "Cannot access \(path). Re-select the ROM in Settings so Swift64 can import a sandbox-safe copy. \(underlying.localizedDescription)"
+            case .missingSandboxSource:
+                return "No sandbox-safe ROM copy is available. Re-select the ROM in Settings."
+            }
         }
     }
 
@@ -905,6 +1007,7 @@ final class EmulatorController: ObservableObject {
     }
 
     deinit {
+        renderer?.stop()
         audioEngine?.stop()
     }
 }
@@ -924,15 +1027,21 @@ struct MetalView: NSViewRepresentable {
         // Register for drag & drop
         view.registerForDraggedTypes([.fileURL])
 
-        let renderer = MetalRenderer(mtkView: view, c64: emulator.c64)
+        let renderer: MetalRenderer?
+        if let existingRenderer = emulator.renderer {
+            existingRenderer.configure(for: view)
+            renderer = existingRenderer
+        } else {
+            renderer = MetalRenderer(mtkView: view, c64: emulator.c64)
+            emulator.renderer = renderer
+        }
         view.delegate = renderer
         context.coordinator.renderer = renderer
-        emulator.renderer = renderer
         renderer?.crtShaderEnabled = emulator.crtShaderEnabled
         renderer?.crtShaderIntensity = emulator.crtShaderIntensity
 
         // Set up keyboard event monitoring
-        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
+        context.coordinator.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
             return context.coordinator.handleKeyEvent(event)
         }
 
@@ -954,9 +1063,16 @@ struct MetalView: NSViewRepresentable {
     class Coordinator {
         let emulator: EmulatorController
         var renderer: MetalRenderer?
+        var eventMonitor: Any?
 
         init(emulator: EmulatorController) {
             self.emulator = emulator
+        }
+
+        deinit {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
         }
 
         func handleKeyEvent(_ event: NSEvent) -> NSEvent? {

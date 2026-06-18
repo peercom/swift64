@@ -96,15 +96,17 @@ public final class GCRDisk {
             guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else { continue }
 
             let trackBytes = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
-            let speedZone = Self.g64SpeedZone(
+            let speedInfo = Self.g64SpeedInfo(
                 from: bytes,
                 speedTableStart: speedTableStart,
-                trackIndex: i
-            ) ?? Self.speedZone(for: i / 2 + 1)
+                trackIndex: i,
+                trackLength: trackLen
+            )
             let info = DiskImage.Track(
                 halfTrack: i,
                 bytes: trackBytes,
-                speedZone: speedZone,
+                speedZone: speedInfo?.dominantZone ?? Self.speedZone(for: i / 2 + 1),
+                speedZoneMap: speedInfo?.speedZoneMap,
                 isNativeLowLevel: true
             )
             tracks[i] = info.bytes
@@ -170,19 +172,45 @@ public final class GCRDisk {
 
     // MARK: - GCR encoding
 
-    private static func g64SpeedZone(from bytes: [UInt8], speedTableStart: Int, trackIndex: Int) -> Int? {
+    private static func g64SpeedInfo(
+        from bytes: [UInt8],
+        speedTableStart: Int,
+        trackIndex: Int,
+        trackLength: Int
+    ) -> (dominantZone: Int, speedZoneMap: [UInt8]?)? {
         let pos = speedTableStart + trackIndex * 4
         guard pos + 4 <= bytes.count else { return nil }
         let value = Int(bytes[pos])
             | (Int(bytes[pos + 1]) << 8)
             | (Int(bytes[pos + 2]) << 16)
             | (Int(bytes[pos + 3]) << 24)
-        guard value != 0 else { return nil }
+        if value < 4 {
+            return (value, nil)
+        }
 
-        // G64 speed table value can either be a packed zone map or a direct
-        // zone byte in simple images. For now, preserve the dominant low bits
-        // so custom media keeps a stable declared zone.
-        return value & 0x03
+        guard value > 0 && value < bytes.count else { return nil }
+
+        let speedBlockLength = (trackLength + 3) / 4
+        guard value + speedBlockLength <= bytes.count else { return nil }
+
+        var speedZoneMap: [UInt8] = []
+        speedZoneMap.reserveCapacity(trackLength)
+        for speedByte in bytes[value..<(value + speedBlockLength)] {
+            for shift in stride(from: 6, through: 0, by: -2) {
+                speedZoneMap.append((speedByte >> UInt8(shift)) & 0x03)
+                if speedZoneMap.count == trackLength { break }
+            }
+        }
+
+        var counts = [Int](repeating: 0, count: 4)
+        for zone in speedZoneMap {
+            counts[Int(zone)] += 1
+        }
+        let dominantZone = counts.enumerated().max { lhs, rhs in
+            lhs.element == rhs.element ? lhs.offset > rhs.offset : lhs.element < rhs.element
+        }?.offset ?? 0
+
+        return (dominantZone, speedZoneMap)
     }
 
     /// Extract disk ID bytes from D64 BAM (track 18, sector 0, offset $A2-$A3).

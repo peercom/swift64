@@ -10,6 +10,7 @@ final class CompatibilityManifestTests: XCTestCase {
               "file": "demo.g64",
               "mediaType": "g64",
               "machineProfile": "ntscC64",
+              "driveMode": "standard1541",
               "commands": ["LOAD\\"*\\",8,1", "RUN"],
               "maxCycles": 24000000,
               "pcStart": 49152,
@@ -47,6 +48,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaType, .g64)
         XCTAssertEqual(milestone.machineProfile, .ntscC64)
         XCTAssertEqual(milestone.machineProfile?.profile, .ntscC64)
+        XCTAssertEqual(milestone.driveMode, .standard1541)
+        XCTAssertEqual(milestone.driveMode?.trueDriveMode, .standard1541)
         XCTAssertEqual(milestone.commands, ["LOAD\"*\",8,1", "RUN"])
         XCTAssertEqual(milestone.command, "LOAD\"*\",8,1")
         XCTAssertEqual(milestone.pcRange, 0xC000...0xCFFF)
@@ -85,11 +88,64 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.file, "legacy.d64")
         XCTAssertNil(milestone.mediaType)
         XCTAssertNil(milestone.machineProfile)
+        XCTAssertNil(milestone.driveMode)
         XCTAssertEqual(milestone.commands, ["LOAD\"$\",8"])
         XCTAssertEqual(milestone.command, "LOAD\"$\",8")
         XCTAssertNil(milestone.pcRange)
         XCTAssertNil(milestone.driveStatus)
         XCTAssertEqual(milestone.ramSignatures, [])
+    }
+
+    func testManifestDecodesDriveModes() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "fast.d64",
+              "mediaType": "d64",
+              "driveMode": "fastLoad",
+              "command": "LOAD\\"*\\",8,1"
+            },
+            {
+              "file": "hybrid.g64",
+              "mediaType": "g64",
+              "driveMode": "compat1541",
+              "command": "LOAD\\"*\\",8,1"
+            },
+            {
+              "file": "strict.g64",
+              "mediaType": "g64",
+              "driveMode": "standard1541",
+              "command": "LOAD\\"*\\",8,1"
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones[0].driveMode?.trueDriveMode, .off)
+        XCTAssertEqual(manifest.milestones[1].driveMode?.trueDriveMode, .compat1541)
+        XCTAssertEqual(manifest.milestones[2].driveMode?.trueDriveMode, .standard1541)
+    }
+
+    func testManifestDecodesAllMilestoneMediaTypes() throws {
+        let json = """
+        {
+          "milestones": [
+            { "file": "program.prg", "mediaType": "prg", "command": "RUN" },
+            { "file": "disk.d64", "mediaType": "d64", "command": "LOAD\\"*\\",8,1" },
+            { "file": "raw.g64", "mediaType": "g64", "command": "LOAD\\"*\\",8,1" },
+            { "file": "tape.t64", "mediaType": "t64", "command": "LOAD" },
+            { "file": "signal.tap", "mediaType": "tap", "command": "LOAD" },
+            { "file": "cart.crt", "mediaType": "crt", "command": "SYS 32768" }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones.compactMap(\.mediaType), [.prg, .d64, .g64, .t64, .tap, .crt])
     }
 
     func testManifestDecodesC64CProfiles() throws {

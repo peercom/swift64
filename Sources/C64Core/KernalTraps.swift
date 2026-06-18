@@ -95,6 +95,22 @@ public final class KernalTraps {
         }
     }
 
+    func isDiskDirectoryLoadRequest() -> Bool {
+        guard isDiskLoadRequest() else { return false }
+        guard let memory = memory else { return false }
+
+        return loadRequestFilename(memory: memory) == "$"
+    }
+
+    func isDiskLoadRequest() -> Bool {
+        guard enabled, let cpu = cpu, let memory = memory else { return false }
+        guard cpu.pc == KernalTraps.loadRoutine else { return false }
+        guard cpu.a == 0 else { return false }
+
+        let deviceNum = memory.ram[Int(KernalTraps.device)]
+        return (8...11).contains(deviceNum)
+    }
+
     func debugLog(_ msg: String) {
         C64Trace.log(.kernal, msg)
     }
@@ -104,18 +120,8 @@ public final class KernalTraps {
     func handleLoad(cpu: CPU6502, memory: MemoryMap) -> Bool {
         let deviceNum = memory.ram[Int(KernalTraps.device)]
         let secondaryAddr = memory.ram[Int(KernalTraps.secondaryAddr)]
-        let nameLen = memory.ram[Int(KernalTraps.fnLen)]
-        let nameLo = memory.ram[Int(KernalTraps.fnAddr)]
-        let nameHi = memory.ram[Int(KernalTraps.fnAddr + 1)]
-        let nameAddr = UInt16(nameLo) | (UInt16(nameHi) << 8)
         let verifying = cpu.a != 0
-
-        // Read filename from RAM
-        var filename = ""
-        for i in 0..<Int(nameLen) {
-            let ch = memory.ram[Int(nameAddr) + i]
-            filename.append(Character(UnicodeScalar(ch)))
-        }
+        let filename = loadRequestFilename(memory: memory)
 
         debugLog("[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)")
 
@@ -361,6 +367,20 @@ public final class KernalTraps {
 
     func setStatus(memory: MemoryMap, value: UInt8) {
         memory.ram[Int(KernalTraps.status)] = value
+    }
+
+    func loadRequestFilename(memory: MemoryMap) -> String {
+        let nameLen = memory.ram[Int(KernalTraps.fnLen)]
+        let nameLo = memory.ram[Int(KernalTraps.fnAddr)]
+        let nameHi = memory.ram[Int(KernalTraps.fnAddr + 1)]
+        let nameAddr = UInt16(nameLo) | (UInt16(nameHi) << 8)
+
+        var filename = ""
+        for i in 0..<Int(nameLen) {
+            let ch = memory.ram[Int(nameAddr) + i]
+            filename.append(Character(UnicodeScalar(ch)))
+        }
+        return filename
     }
 
     /// Simulate RTS: pop return address from stack, set PC.

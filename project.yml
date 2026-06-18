@@ -1,0 +1,67 @@
+name: Swift64
+options:
+  bundleIdPrefix: com.holgervonameln
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    SWIFT_VERSION: 5.9
+targets:
+  Emu6502:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/Emu6502
+  C64Core:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/C64Core
+    dependencies:
+      - target: Emu6502
+  Swift64:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/C64App
+        excludes:
+          - ROMS
+    dependencies:
+      - target: C64Core
+      - target: Emu6502
+      - sdk: AVFoundation.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+    entitlements:
+      path: Sources/C64App/C64App.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.bookmarks.app-scope: true
+        com.apple.security.files.user-selected.read-only: true
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Swift64
+        INFOPLIST_KEY_CFBundleName: Swift64
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.entertainment
+        INFOPLIST_KEY_LSMinimumSystemVersion: "14.0"
+        INFOPLIST_KEY_NSHumanReadableCopyright: Copyright © 2026 Holger von Ameln.
+        PRODUCT_BUNDLE_IDENTIFIER: com.holgervonameln.swift64
+        PRODUCT_NAME: Swift64
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) XCODE_PROJECT"
+schemes:
+  Swift64:
+    build:
+      targets:
+        Swift64: all
+    run:
+      config: Debug
+    archive:
+      config: Release

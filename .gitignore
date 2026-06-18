@@ -1,6 +1,10 @@
 .build/
 .DS_Store
 *.xcodeproj/
+!Swift64.xcodeproj/
+!Swift64.xcodeproj/project.pbxproj
+!Swift64.xcodeproj/xcshareddata/
+!Swift64.xcodeproj/xcshareddata/**
 .swiftpm/
 DerivedData/
 *.rom
@@ -10,3 +14,5 @@ DerivedData/
 C64/
 dist/
 script/
+!script/
+!script/build_and_run.sh

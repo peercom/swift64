@@ -2,6 +2,35 @@ import XCTest
 @testable import C64Core
 
 final class VICTests: XCTestCase {
+    func testResetClearsRegistersRasterStateAndDeassertsIRQ() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0134
+        vic.rasterCycle = 12
+        vic.writeRegister(0x1A, value: 0x09)
+        vic.writeRegister(0x12, value: 0x34)
+        vic.writeRegister(0x11, value: 0x9B)
+        vic.writeRegister(0x15, value: 0xFF)
+        vic.writeRegister(0x20, value: 0x02)
+        vic.triggerLightPen(x: 200, y: 100)
+
+        XCTAssertTrue(vic.readRegister(0x19) & 0x80 != 0)
+
+        vic.reset()
+
+        XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.readRegister(0x11), 0x1B)
+        XCTAssertEqual(vic.readRegister(0x12), 0)
+        XCTAssertEqual(vic.readRegister(0x15), 0)
+        XCTAssertEqual(vic.readRegister(0x19), 0x70)
+        XCTAssertEqual(vic.readRegister(0x1A), 0xF0)
+        XCTAssertEqual(vic.readRegister(0x20), 0xFE)
+        XCTAssertFalse(vic.frameReady)
+        XCTAssertEqual(irqStates.last, false)
+    }
+
     func testEndOfLineRendersLastVisibleRasterline() {
         let vic = VIC()
         let borderColor = ColorPalette.rgba[2]

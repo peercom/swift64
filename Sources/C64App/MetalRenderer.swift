@@ -123,6 +123,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     deinit {
+        stop()
+    }
+
+    func configure(for view: MTKView) {
+        view.device = device
+    }
+
+    func stop() {
         running = false
     }
 

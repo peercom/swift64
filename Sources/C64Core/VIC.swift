@@ -178,6 +178,55 @@ public final class VIC {
         framebuffer = [UInt32](repeating: 0, count: VIC.screenWidth * VIC.screenHeight)
     }
 
+    public func reset() {
+        spriteX = [UInt16](repeating: 0, count: 8)
+        spriteY = [UInt8](repeating: 0, count: 8)
+        spriteXMSB = 0
+        controlReg1 = 0x1B
+        controlReg2 = 0xC8
+        rasterCompare = 0
+        memoryPointers = 0x14
+        let wasIRQActive = interruptRegister & 0x80 != 0
+        interruptRegister = 0
+        interruptEnable = 0
+        spriteEnabled = 0
+        spriteMulticolor = 0
+        spriteExpandX = 0
+        spriteExpandY = 0
+        spritePriority = 0
+        spriteColors = [UInt8](repeating: 0, count: 8)
+        spriteMulticolor0 = 0
+        spriteMulticolor1 = 0
+        spriteSpriteCollision = 0
+        spriteDataCollision = 0
+        backgroundColor = [UInt8](repeating: 0, count: 4)
+        borderColor = 14
+
+        rasterLine = 0
+        rasterCycle = 0
+        displayActive = false
+        badLine = false
+        badLineDENLatched = false
+        rasterIRQTriggeredThisLine = false
+        lightPenX = 0
+        lightPenY = 0
+        lightPenLatchedThisFrame = false
+        rowCounter = 0
+        videoCounter = 0
+        videoCounterBase = 0
+        lineBuffer = [UInt8](repeating: 0, count: 40)
+        colorBuffer = [UInt8](repeating: 0, count: 40)
+        spriteYExpFF = [Bool](repeating: false, count: 8)
+        spriteMC = [Int](repeating: 0, count: 8)
+        spriteDisplay = [Bool](repeating: false, count: 8)
+        spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
+        frameReady = false
+
+        if wasIRQActive {
+            onIRQ?(false)
+        }
+    }
+
     func applyVideoStandardTiming() {
         switch videoStandard {
         case .pal:

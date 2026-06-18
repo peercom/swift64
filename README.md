@@ -9,7 +9,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Boots to the C64 BASIC screen
 - Keyboard input, joystick (numpad)
 - Audio output (SID chip)
-- Loads PRG, D64, G64, T64, TAP, and standard CRT cartridge files
+- Loads PRG, D64, G64, T64, TAP, standard CRT cartridge files, Simon's BASIC, Magic Desk, Ocean type 1, Fun Play/Power Play, Westermann Learning, and Rex Utility CRTs
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
 - Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
@@ -26,7 +26,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
-| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping |
+| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Simon's BASIC upper-ROM control, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, and normal-mapped Westermann/Rex cartridge aliases |
 
 ### What needs work
 
@@ -47,8 +47,15 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - ROM loading now validates expected stock ROM sizes before applying Settings-selected files
 - PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
+- Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- Simon's BASIC CRT cartridges now parse type 4 images and control the upper ROM through IO1 writes
+- Magic Desk CRT cartridges now parse type 19 banked ROML images and switch banks through IO1 writes
+- C64 reset/power-on now restores cartridge latch state so banked cartridges return to their startup bank
+- Ocean type 1 CRT cartridges now parse type 5 banked ROML/ROMH images and switch banks through IO1 writes
+- Fun Play/Power Play CRT cartridges now parse type 7 banked ROML images and switch banks through their decoded IO1 values
+- Westermann Learning and Rex Utility CRT cartridge types now mount through the existing normal 16K/8K mapping path
 - RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
@@ -58,7 +65,16 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - SID oscillator sync now resets voices on source MSB rising edges instead of source level, improving hard-sync behavior
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
 - TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
+- TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
+- G64 native tracks now preserve per-byte speed-zone blocks and the 1541 GCR head uses those maps for variable-speed read timing
+- 1541 reset/power-on now clears VIA timers, interrupts, port state, byte-ready, and GCR head state while keeping mounted media inserted
+- C64 reset now also resets true-drive 1541 hardware state and clears host-queued typed commands without ejecting mounted media
+- C64 reset now clears CIA timer, interrupt, serial, TOD, and CIA2 IEC output state so reset releases serial lines and deasserts IRQ/NMI
+- C64 reset now clears VIC-II register/raster/IRQ state and SID voice/filter/audio state while preserving selected video and SID models
+- C64 reset now restores the 6510 CPU port before reset-vector fetches, so Kernal ROM is visible even after software banks ROM out
+- 6502/6510 reset now recovers from JAM/KIL opcodes and resumes through the reset vector instead of staying halted
+- 6502/6510 reset now discards stale pending NMI edges and does not immediately retrigger a held NMI line after reset
 - VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
 - VIC-II bad-line character fetches now stall the C64 CPU during the fetch window while VIC/CIA/SID/drive timing continues
 - CIA interrupt masking/read-clear behavior now deasserts CPU IRQ/NMI lines cleanly and avoids duplicate active callbacks
@@ -107,7 +123,7 @@ SWIFT64_LOCAL_TRUE_DRIVE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testL
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter screen/PC milestones with an untracked `C64/DISKS/compatibility.json` file.
+The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen/PC milestones with an untracked `C64/DISKS/compatibility.json` file.
 
 Useful fast regression slices:
 
@@ -129,6 +145,7 @@ Example milestone manifest:
       "file": "great_giana_sisters[time_warp_1987](pal)(r1)(!).g64",
       "mediaType": "g64",
       "machineProfile": "palC64",
+      "driveMode": "compat1541",
       "commands": ["LOAD\"*\",8,1", "RUN"],
       "maxCycles": 24000000,
       "pcStart": 49152,

@@ -50,13 +50,21 @@ struct SettingsView: View {
 
             Form {
                 Section("C64 ROMs") {
-                    ROMPathRow(title: "BASIC", path: $basicROMPath)
-                    ROMPathRow(title: "Kernal", path: $kernalROMPath)
-                    ROMPathRow(title: "Characters", path: $characterROMPath)
+                    ROMPathRow(title: "BASIC", path: $basicROMPath, bookmarkKey: PreferenceKey.basicROMBookmark, importedPathKey: PreferenceKey.basicROMImportedPath, storedFileName: "basic.rom") {
+                        emulator.romStatusMessage = $0
+                    }
+                    ROMPathRow(title: "Kernal", path: $kernalROMPath, bookmarkKey: PreferenceKey.kernalROMBookmark, importedPathKey: PreferenceKey.kernalROMImportedPath, storedFileName: "kernal.rom") {
+                        emulator.romStatusMessage = $0
+                    }
+                    ROMPathRow(title: "Characters", path: $characterROMPath, bookmarkKey: PreferenceKey.characterROMBookmark, importedPathKey: PreferenceKey.characterROMImportedPath, storedFileName: "characters.rom") {
+                        emulator.romStatusMessage = $0
+                    }
                 }
 
                 Section("Drive ROM") {
-                    ROMPathRow(title: "1541 Drive", path: $driveROMPath)
+                    ROMPathRow(title: "1541 Drive", path: $driveROMPath, bookmarkKey: PreferenceKey.driveROMBookmark, importedPathKey: PreferenceKey.driveROMImportedPath, storedFileName: "1541.rom") {
+                        emulator.romStatusMessage = $0
+                    }
                 }
 
                 Section {
@@ -134,13 +142,90 @@ struct SettingsView: View {
     }
 
     private func applyROMSettings() {
+        guard ensureROMBookmarks() else {
+            emulator.romStatusMessage = "ROM access was not authorized. Use each folder button once to import sandbox-safe ROM copies."
+            return
+        }
         emulator.reloadROMs(reset: true)
+    }
+
+    private func ensureROMBookmarks() -> Bool {
+        let configuredROMs = [
+            ("BASIC", basicROMPath, PreferenceKey.basicROMBookmark, PreferenceKey.basicROMImportedPath, "basic.rom"),
+            ("Kernal", kernalROMPath, PreferenceKey.kernalROMBookmark, PreferenceKey.kernalROMImportedPath, "kernal.rom"),
+            ("Characters", characterROMPath, PreferenceKey.characterROMBookmark, PreferenceKey.characterROMImportedPath, "characters.rom"),
+            ("1541 Drive", driveROMPath, PreferenceKey.driveROMBookmark, PreferenceKey.driveROMImportedPath, "1541.rom"),
+        ]
+
+        for (title, path, bookmarkKey, importedPathKey, storedFileName) in configuredROMs where !path.isEmpty {
+            guard !hasImportedROM(importedPathKey: importedPathKey) && !hasMatchingBookmark(path: path, bookmarkKey: bookmarkKey) else { continue }
+            guard authorizeROM(title: title, path: path, bookmarkKey: bookmarkKey, importedPathKey: importedPathKey, storedFileName: storedFileName) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func hasImportedROM(importedPathKey: String) -> Bool {
+        guard let path = UserDefaults.standard.string(forKey: importedPathKey), !path.isEmpty else { return false }
+        return FileManager.default.isReadableFile(atPath: path)
+    }
+
+    private func hasMatchingBookmark(path: String, bookmarkKey: String) -> Bool {
+        guard let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else { return false }
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
+            return false
+        }
+        return !isStale && url.path == path
+    }
+
+    private func authorizeROM(title: String, path: String, bookmarkKey: String, importedPathKey: String, storedFileName: String) -> Bool {
+        let expectedURL = URL(fileURLWithPath: path)
+        let panel = NSOpenPanel()
+        panel.title = "Authorize \(title) ROM"
+        panel.message = "Choose the configured ROM file so Swift64 can import a private copy into its app container."
+        panel.prompt = "Authorize"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.directoryURL = expectedURL.deletingLastPathComponent()
+        panel.nameFieldStringValue = expectedURL.lastPathComponent
+
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        do {
+            _ = try ROMFileStore.importAuthorizedROM(from: url, bookmarkKey: bookmarkKey, importedPathKey: importedPathKey, storedFileName: storedFileName)
+            UserDefaults.standard.set(url.path, forKey: pathKey(for: bookmarkKey))
+            return true
+        } catch {
+            print("Could not authorize \(title) ROM: \(error)")
+            return false
+        }
+    }
+
+    private func pathKey(for bookmarkKey: String) -> String {
+        switch bookmarkKey {
+        case PreferenceKey.basicROMBookmark: return PreferenceKey.basicROMPath
+        case PreferenceKey.kernalROMBookmark: return PreferenceKey.kernalROMPath
+        case PreferenceKey.characterROMBookmark: return PreferenceKey.characterROMPath
+        case PreferenceKey.driveROMBookmark: return PreferenceKey.driveROMPath
+        default: return bookmarkKey
+        }
     }
 }
 
 private struct ROMPathRow: View {
     let title: String
     @Binding var path: String
+    let bookmarkKey: String
+    let importedPathKey: String
+    let storedFileName: String
+    let onImport: (String) -> Void
 
     var body: some View {
         HStack {
@@ -169,7 +254,16 @@ private struct ROMPathRow: View {
         panel.canChooseFiles = true
 
         if panel.runModal() == .OK, let url = panel.url {
-            path = url.path
+            do {
+                _ = try ROMFileStore.importAuthorizedROM(from: url, bookmarkKey: bookmarkKey, importedPathKey: importedPathKey, storedFileName: storedFileName)
+                path = url.path
+                onImport("\(title) ROM authorized and imported.")
+            } catch {
+                UserDefaults.standard.removeObject(forKey: bookmarkKey)
+                UserDefaults.standard.removeObject(forKey: importedPathKey)
+                onImport("Could not import \(title) ROM: \(error.localizedDescription)")
+                print("Could not import \(title) ROM: \(error)")
+            }
         }
     }
 }

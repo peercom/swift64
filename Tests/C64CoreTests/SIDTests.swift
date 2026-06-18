@@ -2,6 +2,37 @@ import XCTest
 @testable import C64Core
 
 final class SIDTests: XCTestCase {
+    func testResetClearsVoiceFilterPaddleAndAudioStateButKeepsModelAndClock() {
+        let sid = SID()
+        sid.model = .mos8580
+        sid.clockRate = 1_022_727
+        sid.voices[0].frequency = 0x1234
+        sid.voices[0].control = 0x21
+        sid.voices[0].accumulator = 0xABCDEF
+        sid.voices[2].envelopeLevel = 0x77
+        sid.writeRegister(0x18, value: 0x0F)
+        sid.setPaddle(x: 0x12, y: 0x34)
+        sid.sampleBuffer[0] = 0.5
+        sid.sampleWritePos = 10
+        sid.oscillatorMSBRose[1] = true
+
+        sid.reset()
+
+        XCTAssertEqual(sid.model, .mos8580)
+        XCTAssertEqual(sid.clockRate, 1_022_727)
+        XCTAssertEqual(sid.voices[0].frequency, 0)
+        XCTAssertEqual(sid.voices[0].control, 0)
+        XCTAssertEqual(sid.voices[0].accumulator, 0)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
+        XCTAssertEqual(sid.voices[2].envelopeLevel, 0)
+        XCTAssertEqual(sid.readRegister(0x19), 0xFF)
+        XCTAssertEqual(sid.readRegister(0x1A), 0xFF)
+        XCTAssertEqual(sid.volumeFilter, 0)
+        XCTAssertEqual(sid.sampleBuffer[0], 0)
+        XCTAssertEqual(sid.sampleWritePos, 0)
+        XCTAssertFalse(sid.oscillatorMSBRose.contains(true))
+    }
+
     func testPaddleRegistersReadLatchedAnalogValues() {
         let sid = SID()
 

@@ -1,0 +1,742 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		061B603B187E83F098A45017 /* CIA.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82D4B7A984C0295BAC44565 /* CIA.swift */; };
+		0783C74D3AD33E6C614B97F6 /* CPU6502.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D794E204E86C69D37D1747 /* CPU6502.swift */; };
+		0C7BA180E37360E6FFE568D6 /* DebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86A4DFB898B876FC77D7709 /* DebuggerView.swift */; };
+		0E0ABC6CD6C8A0ADD9CB2D3D /* ColorPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */; };
+		12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CA3D09FA940CA84F595C9C /* SID.swift */; };
+		237804E7A0DB0B5647CDF6DE /* DiskDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */; };
+		25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */; };
+		265046B932FB1B4566FBAC25 /* VIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118A9E70995FB663B124F661 /* VIC.swift */; };
+		26A69A079EBA706CEB051566 /* C64Trace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 979027D7F59AB7A5559A257A /* C64Trace.swift */; };
+		2FA754BF02D45F6B5430ADB3 /* Joystick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7FC9314BC445E26A33A4C2 /* Joystick.swift */; };
+		31A83EA49D0E0C56CC9C40F9 /* DiskImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C9714128738A08B2767150 /* DiskImage.swift */; };
+		326E85E04717EA1ABA30CA35 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F02EA636B5026B5622417D /* MetalRenderer.swift */; };
+		3505A4CD61FBCA8B19D71215 /* GCRDisk.swift in Sources */ = {isa = PBXBuildFile; fileRef = E872D132D76715546D258507 /* GCRDisk.swift */; };
+		3888A62B48755A2A868CD3B0 /* VIA6522.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */; };
+		4D78973A36171B1668208C34 /* G64Parser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A427BE176A05A2316D09A2F /* G64Parser.swift */; };
+		5A0F18B62641B9CA4DFF2BFE /* Drive1541.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C2C70F5179425125360113 /* Drive1541.swift */; };
+		629FAE2EF13B430DDCDB30AD /* Keyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DE024727035BA1DC20CE24 /* Keyboard.swift */; };
+		62D96E6F7720E06AFBAF547B /* C64Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4769B97731BB5103DAF2CF61 /* C64Preferences.swift */; };
+		63A1943C769CD9CC6DB30CD0 /* Bus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BC4533014D9BB87EF27F4D3 /* Bus.swift */; };
+		64C9AA86930964522A1649E3 /* Cartridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */; };
+		757762D6A8621E5A0CCDAE9C /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 677BA4C907BF97D425E001A0 /* MetalKit.framework */; };
+		7C527898C5FB1F00B5911383 /* Instructions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FCE7B1EFA4B960CF8646CF /* Instructions.swift */; };
+		80BC47C92ED182334E2EDD78 /* C64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D5E8A112118514B27CCE218 /* C64.swift */; };
+		92DE108DF8221F3C31CC13AA /* Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2DF1EFA74DD2855CA6DD0E /* Types.swift */; };
+		92FADFA59D78C284A969B874 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3EAFE976F27217801A0897F /* AVFoundation.framework */; };
+		952FABD7E385142307C0B270 /* TapeUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05218A2819F982209E94FD95 /* TapeUnit.swift */; };
+		9647E1F676E53473B55AA390 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AD753AC2B0E696D0CAB1702B /* Assets.xcassets */; };
+		A303A110E497034C753B66CF /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 1711556A4CCEF23F1C93EFE0 /* AppIcon.icns */; };
+		A88768B30747340D7DBD1486 /* C64App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300DE71EBF779617B43AA9E1 /* C64App.swift */; };
+		AABF89F7D759F9092859665C /* libC64Core.a in Frameworks */ = {isa = PBXBuildFile; fileRef = EFABA3AD3237026A30ACD089 /* libC64Core.a */; };
+		AE216B608D3761CF75910FAF /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DCA5949F8CA7D9CEE00B959 /* Metal.framework */; };
+		B9287A3B7540B4732F403CD4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */; };
+		BC59583138E19882E60906CA /* libEmu6502.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A63B0E9A51796888B094878A /* libEmu6502.a */; };
+		C18030A209FE33EE51809747 /* IECBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA8A4D190AA8B2D7F886CFB /* IECBus.swift */; };
+		C406F7C71172A9C0CE5B06CE /* Debugger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 143003602437499D121E7F69 /* Debugger.swift */; };
+		CD69B15FA2CD5D3256B51A21 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80192F6E6D4256FB1246016 /* ContentView.swift */; };
+		D50F9121748726FFCD25D246 /* KernalTraps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61ADFC557D655CE2C63F112B /* KernalTraps.swift */; };
+		DB3E30025ACCA5876A7E5593 /* MachineProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1ED263F1FD419DE817455C /* MachineProfile.swift */; };
+		FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5238177200FD6BB810A221 /* PRGLoader.swift */; };
+		FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0544971F445D40AAACADAB98 /* MemoryMap.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		017395CE8D3EEA2E096688BB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E1C17F5F2C9774007B660C6D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F13890420D509D4B52DAD396;
+			remoteInfo = Emu6502;
+		};
+		7D124B3770656F10D5253B5D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E1C17F5F2C9774007B660C6D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F13890420D509D4B52DAD396;
+			remoteInfo = Emu6502;
+		};
+		85327BB07B73AEAC619BD6FF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E1C17F5F2C9774007B660C6D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5C16117A9E07961D451739A2;
+			remoteInfo = C64Core;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		05218A2819F982209E94FD95 /* TapeUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapeUnit.swift; sourceTree = "<group>"; };
+		0544971F445D40AAACADAB98 /* MemoryMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryMap.swift; sourceTree = "<group>"; };
+		06CA3D09FA940CA84F595C9C /* SID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SID.swift; sourceTree = "<group>"; };
+		0A427BE176A05A2316D09A2F /* G64Parser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G64Parser.swift; sourceTree = "<group>"; };
+		0BC4533014D9BB87EF27F4D3 /* Bus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bus.swift; sourceTree = "<group>"; };
+		0F150B58515AB1146B51A5A4 /* Swift64.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Swift64.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		118A9E70995FB663B124F661 /* VIC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VIC.swift; sourceTree = "<group>"; };
+		143003602437499D121E7F69 /* Debugger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debugger.swift; sourceTree = "<group>"; };
+		14C2C70F5179425125360113 /* Drive1541.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Drive1541.swift; sourceTree = "<group>"; };
+		16FCE7B1EFA4B960CF8646CF /* Instructions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Instructions.swift; sourceTree = "<group>"; };
+		1711556A4CCEF23F1C93EFE0 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		18D794E204E86C69D37D1747 /* CPU6502.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPU6502.swift; sourceTree = "<group>"; };
+		2D5E8A112118514B27CCE218 /* C64.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64.swift; sourceTree = "<group>"; };
+		2DCA5949F8CA7D9CEE00B959 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		300DE71EBF779617B43AA9E1 /* C64App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64App.swift; sourceTree = "<group>"; };
+		4769B97731BB5103DAF2CF61 /* C64Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Preferences.swift; sourceTree = "<group>"; };
+		54132BA620E1EB972F64D612 /* C64App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = C64App.entitlements; sourceTree = "<group>"; };
+		61ADFC557D655CE2C63F112B /* KernalTraps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernalTraps.swift; sourceTree = "<group>"; };
+		659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorPalette.swift; sourceTree = "<group>"; };
+		677BA4C907BF97D425E001A0 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		76C9714128738A08B2767150 /* DiskImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskImage.swift; sourceTree = "<group>"; };
+		7C7FC9314BC445E26A33A4C2 /* Joystick.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Joystick.swift; sourceTree = "<group>"; };
+		7EA8A4D190AA8B2D7F886CFB /* IECBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IECBus.swift; sourceTree = "<group>"; };
+		8C5238177200FD6BB810A221 /* PRGLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRGLoader.swift; sourceTree = "<group>"; };
+		979027D7F59AB7A5559A257A /* C64Trace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Trace.swift; sourceTree = "<group>"; };
+		A1F02EA636B5026B5622417D /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
+		A63B0E9A51796888B094878A /* libEmu6502.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libEmu6502.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		A86A4DFB898B876FC77D7709 /* DebuggerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebuggerView.swift; sourceTree = "<group>"; };
+		AD753AC2B0E696D0CAB1702B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VIA6522.swift; sourceTree = "<group>"; };
+		B82D4B7A984C0295BAC44565 /* CIA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CIA.swift; sourceTree = "<group>"; };
+		B9DE024727035BA1DC20CE24 /* Keyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keyboard.swift; sourceTree = "<group>"; };
+		D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
+		D80192F6E6D4256FB1246016 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskDrive.swift; sourceTree = "<group>"; };
+		DE2DF1EFA74DD2855CA6DD0E /* Types.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Types.swift; sourceTree = "<group>"; };
+		E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cartridge.swift; sourceTree = "<group>"; };
+		E872D132D76715546D258507 /* GCRDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GCRDisk.swift; sourceTree = "<group>"; };
+		EFABA3AD3237026A30ACD089 /* libC64Core.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libC64Core.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		F3EAFE976F27217801A0897F /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		FD1ED263F1FD419DE817455C /* MachineProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineProfile.swift; sourceTree = "<group>"; };
+		FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		53F1CC69F3BCEB8309420A94 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AABF89F7D759F9092859665C /* libC64Core.a in Frameworks */,
+				BC59583138E19882E60906CA /* libEmu6502.a in Frameworks */,
+				92FADFA59D78C284A969B874 /* AVFoundation.framework in Frameworks */,
+				AE216B608D3761CF75910FAF /* Metal.framework in Frameworks */,
+				757762D6A8621E5A0CCDAE9C /* MetalKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		00684B5D7DFC5791EAFDDAEF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EFABA3AD3237026A30ACD089 /* libC64Core.a */,
+				A63B0E9A51796888B094878A /* libEmu6502.a */,
+				0F150B58515AB1146B51A5A4 /* Swift64.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4BB3F0CD8E7DD470FEA9808C /* Emu6502 */ = {
+			isa = PBXGroup;
+			children = (
+				0BC4533014D9BB87EF27F4D3 /* Bus.swift */,
+				18D794E204E86C69D37D1747 /* CPU6502.swift */,
+				16FCE7B1EFA4B960CF8646CF /* Instructions.swift */,
+				DE2DF1EFA74DD2855CA6DD0E /* Types.swift */,
+			);
+			name = Emu6502;
+			path = Sources/Emu6502;
+			sourceTree = "<group>";
+		};
+		B889A2B2BC969BC94FF197AC /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F3EAFE976F27217801A0897F /* AVFoundation.framework */,
+				2DCA5949F8CA7D9CEE00B959 /* Metal.framework */,
+				677BA4C907BF97D425E001A0 /* MetalKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C0D872D579C919EBADF015B6 /* C64Core */ = {
+			isa = PBXGroup;
+			children = (
+				2D5E8A112118514B27CCE218 /* C64.swift */,
+				979027D7F59AB7A5559A257A /* C64Trace.swift */,
+				E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */,
+				B82D4B7A984C0295BAC44565 /* CIA.swift */,
+				659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */,
+				D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */,
+				143003602437499D121E7F69 /* Debugger.swift */,
+				DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */,
+				76C9714128738A08B2767150 /* DiskImage.swift */,
+				14C2C70F5179425125360113 /* Drive1541.swift */,
+				0A427BE176A05A2316D09A2F /* G64Parser.swift */,
+				E872D132D76715546D258507 /* GCRDisk.swift */,
+				7EA8A4D190AA8B2D7F886CFB /* IECBus.swift */,
+				7C7FC9314BC445E26A33A4C2 /* Joystick.swift */,
+				61ADFC557D655CE2C63F112B /* KernalTraps.swift */,
+				B9DE024727035BA1DC20CE24 /* Keyboard.swift */,
+				FD1ED263F1FD419DE817455C /* MachineProfile.swift */,
+				0544971F445D40AAACADAB98 /* MemoryMap.swift */,
+				8C5238177200FD6BB810A221 /* PRGLoader.swift */,
+				06CA3D09FA940CA84F595C9C /* SID.swift */,
+				05218A2819F982209E94FD95 /* TapeUnit.swift */,
+				B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */,
+				118A9E70995FB663B124F661 /* VIC.swift */,
+			);
+			name = C64Core;
+			path = Sources/C64Core;
+			sourceTree = "<group>";
+		};
+		C4136D50260201194C0C44B6 = {
+			isa = PBXGroup;
+			children = (
+				D1ECC3792EE5A663FD73B194 /* C64App */,
+				C0D872D579C919EBADF015B6 /* C64Core */,
+				4BB3F0CD8E7DD470FEA9808C /* Emu6502 */,
+				B889A2B2BC969BC94FF197AC /* Frameworks */,
+				00684B5D7DFC5791EAFDDAEF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D1ECC3792EE5A663FD73B194 /* C64App */ = {
+			isa = PBXGroup;
+			children = (
+				AD753AC2B0E696D0CAB1702B /* Assets.xcassets */,
+				54132BA620E1EB972F64D612 /* C64App.entitlements */,
+				300DE71EBF779617B43AA9E1 /* C64App.swift */,
+				4769B97731BB5103DAF2CF61 /* C64Preferences.swift */,
+				D80192F6E6D4256FB1246016 /* ContentView.swift */,
+				A86A4DFB898B876FC77D7709 /* DebuggerView.swift */,
+				A1F02EA636B5026B5622417D /* MetalRenderer.swift */,
+				FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */,
+				F2C2AAEBB43A419685C51891 /* Resources */,
+			);
+			name = C64App;
+			path = Sources/C64App;
+			sourceTree = "<group>";
+		};
+		F2C2AAEBB43A419685C51891 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1711556A4CCEF23F1C93EFE0 /* AppIcon.icns */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		38AF7E3EE39794FDE0BDA8FD /* Swift64 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 161EDF3BDBBFD80E98271DB2 /* Build configuration list for PBXNativeTarget "Swift64" */;
+			buildPhases = (
+				0899984756252C6568CCF081 /* Sources */,
+				93B443293D37FF0CA3BDC83C /* Resources */,
+				53F1CC69F3BCEB8309420A94 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				160D8382B8330188C23DDCD5 /* PBXTargetDependency */,
+				15CB217B7CA7EF66DE5774A8 /* PBXTargetDependency */,
+			);
+			name = Swift64;
+			packageProductDependencies = (
+			);
+			productName = Swift64;
+			productReference = 0F150B58515AB1146B51A5A4 /* Swift64.app */;
+			productType = "com.apple.product-type.application";
+		};
+		5C16117A9E07961D451739A2 /* C64Core */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B220C3F2F449E97D1C911B2 /* Build configuration list for PBXNativeTarget "C64Core" */;
+			buildPhases = (
+				F50F920711CAFFD9E6D22390 /* Sources */,
+				785DDAAA890D4C4FCEE1874C /* Copy Swift Objective-C Interface Header */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				15EF81487946470FA61868DA /* PBXTargetDependency */,
+			);
+			name = C64Core;
+			packageProductDependencies = (
+			);
+			productName = C64Core;
+			productReference = EFABA3AD3237026A30ACD089 /* libC64Core.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		F13890420D509D4B52DAD396 /* Emu6502 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 44AE6DC54D41B71EE3DD9BBC /* Build configuration list for PBXNativeTarget "Emu6502" */;
+			buildPhases = (
+				7A6E05BD0C159C7192E1FAC5 /* Sources */,
+				8685037FB920A7D2743AF5F1 /* Copy Swift Objective-C Interface Header */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Emu6502;
+			packageProductDependencies = (
+			);
+			productName = Emu6502;
+			productReference = A63B0E9A51796888B094878A /* libEmu6502.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E1C17F5F2C9774007B660C6D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					38AF7E3EE39794FDE0BDA8FD = {
+						ProvisioningStyle = Automatic;
+					};
+					5C16117A9E07961D451739A2 = {
+						ProvisioningStyle = Automatic;
+					};
+					F13890420D509D4B52DAD396 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = CFB53D4F458495681804D64B /* Build configuration list for PBXProject "Swift64" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C4136D50260201194C0C44B6;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5C16117A9E07961D451739A2 /* C64Core */,
+				F13890420D509D4B52DAD396 /* Emu6502 */,
+				38AF7E3EE39794FDE0BDA8FD /* Swift64 */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		93B443293D37FF0CA3BDC83C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A303A110E497034C753B66CF /* AppIcon.icns in Resources */,
+				9647E1F676E53473B55AA390 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		785DDAAA890D4C4FCEE1874C /* Copy Swift Objective-C Interface Header */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(DERIVED_SOURCES_DIR)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			name = "Copy Swift Objective-C Interface Header";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_MODULE_NAME)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "ditto \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+		};
+		8685037FB920A7D2743AF5F1 /* Copy Swift Objective-C Interface Header */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(DERIVED_SOURCES_DIR)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			name = "Copy Swift Objective-C Interface Header";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_MODULE_NAME)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "ditto \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0899984756252C6568CCF081 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A88768B30747340D7DBD1486 /* C64App.swift in Sources */,
+				62D96E6F7720E06AFBAF547B /* C64Preferences.swift in Sources */,
+				CD69B15FA2CD5D3256B51A21 /* ContentView.swift in Sources */,
+				0C7BA180E37360E6FFE568D6 /* DebuggerView.swift in Sources */,
+				326E85E04717EA1ABA30CA35 /* MetalRenderer.swift in Sources */,
+				B9287A3B7540B4732F403CD4 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A6E05BD0C159C7192E1FAC5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				63A1943C769CD9CC6DB30CD0 /* Bus.swift in Sources */,
+				0783C74D3AD33E6C614B97F6 /* CPU6502.swift in Sources */,
+				7C527898C5FB1F00B5911383 /* Instructions.swift in Sources */,
+				92DE108DF8221F3C31CC13AA /* Types.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F50F920711CAFFD9E6D22390 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				80BC47C92ED182334E2EDD78 /* C64.swift in Sources */,
+				26A69A079EBA706CEB051566 /* C64Trace.swift in Sources */,
+				061B603B187E83F098A45017 /* CIA.swift in Sources */,
+				64C9AA86930964522A1649E3 /* Cartridge.swift in Sources */,
+				0E0ABC6CD6C8A0ADD9CB2D3D /* ColorPalette.swift in Sources */,
+				25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */,
+				C406F7C71172A9C0CE5B06CE /* Debugger.swift in Sources */,
+				237804E7A0DB0B5647CDF6DE /* DiskDrive.swift in Sources */,
+				31A83EA49D0E0C56CC9C40F9 /* DiskImage.swift in Sources */,
+				5A0F18B62641B9CA4DFF2BFE /* Drive1541.swift in Sources */,
+				4D78973A36171B1668208C34 /* G64Parser.swift in Sources */,
+				3505A4CD61FBCA8B19D71215 /* GCRDisk.swift in Sources */,
+				C18030A209FE33EE51809747 /* IECBus.swift in Sources */,
+				2FA754BF02D45F6B5430ADB3 /* Joystick.swift in Sources */,
+				D50F9121748726FFCD25D246 /* KernalTraps.swift in Sources */,
+				629FAE2EF13B430DDCDB30AD /* Keyboard.swift in Sources */,
+				DB3E30025ACCA5876A7E5593 /* MachineProfile.swift in Sources */,
+				FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */,
+				FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */,
+				12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */,
+				952FABD7E385142307C0B270 /* TapeUnit.swift in Sources */,
+				3888A62B48755A2A868CD3B0 /* VIA6522.swift in Sources */,
+				265046B932FB1B4566FBAC25 /* VIC.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		15CB217B7CA7EF66DE5774A8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F13890420D509D4B52DAD396 /* Emu6502 */;
+			targetProxy = 7D124B3770656F10D5253B5D /* PBXContainerItemProxy */;
+		};
+		15EF81487946470FA61868DA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F13890420D509D4B52DAD396 /* Emu6502 */;
+			targetProxy = 017395CE8D3EEA2E096688BB /* PBXContainerItemProxy */;
+		};
+		160D8382B8330188C23DDCD5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5C16117A9E07961D451739A2 /* C64Core */;
+			targetProxy = 85327BB07B73AEAC619BD6FF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2218845CA16A8E984FCF0023 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.C64Core;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		6351954E21220178BF6994B3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.Emu6502;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		9D571D700FA0A72CDE4EF890 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		DF8196CD46119C4B8065F922 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		EFAC688B1005450262AAC4A8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/C64App/C64App.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Swift64;
+				INFOPLIST_KEY_CFBundleName = Swift64;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_LSMinimumSystemVersion = 14.0;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Holger von Ameln.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.swift64;
+				PRODUCT_NAME = Swift64;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) XCODE_PROJECT";
+			};
+			name = Release;
+		};
+		F4A4580FD0C33987A7B2D4F7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.Emu6502;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		FA7BDE4638F833EA670261EF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.C64Core;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		FC66E651F84C147D7773D8AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/C64App/C64App.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Swift64;
+				INFOPLIST_KEY_CFBundleName = Swift64;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_LSMinimumSystemVersion = 14.0;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Holger von Ameln.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.swift64;
+				PRODUCT_NAME = Swift64;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) XCODE_PROJECT";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		161EDF3BDBBFD80E98271DB2 /* Build configuration list for PBXNativeTarget "Swift64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FC66E651F84C147D7773D8AC /* Debug */,
+				EFAC688B1005450262AAC4A8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		44AE6DC54D41B71EE3DD9BBC /* Build configuration list for PBXNativeTarget "Emu6502" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F4A4580FD0C33987A7B2D4F7 /* Debug */,
+				6351954E21220178BF6994B3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4B220C3F2F449E97D1C911B2 /* Build configuration list for PBXNativeTarget "C64Core" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2218845CA16A8E984FCF0023 /* Debug */,
+				FA7BDE4638F833EA670261EF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CFB53D4F458495681804D64B /* Build configuration list for PBXProject "Swift64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF8196CD46119C4B8065F922 /* Debug */,
+				9D571D700FA0A72CDE4EF890 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E1C17F5F2C9774007B660C6D /* Project object */;
+}

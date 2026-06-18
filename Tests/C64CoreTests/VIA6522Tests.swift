@@ -2,6 +2,43 @@ import XCTest
 @testable import C64Core
 
 final class VIA6522Tests: XCTestCase {
+    func testResetClearsRegistersTimersInterruptsAndLatches() {
+        let via = VIA6522()
+        var irqStates: [Bool] = []
+        var ca2States: [Bool] = []
+        via.onInterrupt = { irqStates.append($0) }
+        via.onCA2Change = { ca2States.append($0) }
+
+        via.portAInput = 0xA5
+        via.portBInput = 0x5A
+        via.writeRegister(0x00, value: 0x12)
+        via.writeRegister(0x01, value: 0x34)
+        via.writeRegister(0x02, value: 0xFF)
+        via.writeRegister(0x03, value: 0x0F)
+        via.writeRegister(0x0B, value: 0x63)
+        via.writeRegister(0x0C, value: 0x0E)
+        via.writeRegister(0x0E, value: 0xC2)
+        via.ca1 = true
+        via.tick()
+
+        via.reset()
+
+        XCTAssertEqual(via.portA, 0)
+        XCTAssertEqual(via.portB, 0)
+        XCTAssertEqual(via.ddra, 0)
+        XCTAssertEqual(via.ddrb, 0)
+        XCTAssertEqual(via.timer1Counter, 0xFFFF)
+        XCTAssertEqual(via.timer1Latch, 0xFFFF)
+        XCTAssertEqual(via.timer2Counter, 0xFFFF)
+        XCTAssertEqual(via.acr, 0)
+        XCTAssertEqual(via.pcr, 0)
+        XCTAssertEqual(via.ifr, 0)
+        XCTAssertEqual(via.ier, 0)
+        XCTAssertTrue(via.ca2OutputState)
+        XCTAssertEqual(irqStates.last, false)
+        XCTAssertEqual(ca2States.last, true)
+    }
+
     func testCA1PositiveEdgeSetsIFRAndIRQWhenEnabled() {
         let via = VIA6522()
         var irqStates: [Bool] = []

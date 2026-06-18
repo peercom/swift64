@@ -97,6 +97,12 @@ public final class CPU6502 {
 
     /// Trigger a hardware reset. Takes effect at the next instruction boundary.
     public func reset() {
+        jammed = false
+        servicingInterrupt = false
+        interruptType = .none
+        cycle = 0
+        nmiPending = false
+        nmiLinePrev = nmiLine
         resetPending = true
     }
 
@@ -183,6 +189,8 @@ public final class CPU6502 {
         jammed = false
         servicingInterrupt = false
         interruptType = .none
+        nmiPending = false
+        nmiLinePrev = nmiLine
     }
 
     // MARK: - Flag helpers
