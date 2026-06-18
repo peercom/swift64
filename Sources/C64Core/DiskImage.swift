@@ -22,6 +22,8 @@ public struct DiskImage {
         public let preservesHalfTracks: Bool
         public let preservesRawTrackLengths: Bool
         public let preservesSpeedZones: Bool
+        public let preservesVariableSpeedZones: Bool
+        public let preservesSectorErrorInfo: Bool
         public let supportsWraparoundReads: Bool
         public let maxTrackSize: Int?
         public let unsupportedFeatures: [String]
@@ -67,6 +69,7 @@ public struct DiskImage {
     public let format: Format
     public let tracks: [Track?]
     public let maxTrackSize: Int?
+    public let sectorErrorCodes: [UInt8]?
 
     public var hasNativeLowLevelTracks: Bool {
         tracks.contains { $0?.isNativeLowLevel == true }
@@ -77,9 +80,9 @@ public struct DiskImage {
         let nativeCount = populated.filter(\.isNativeLowLevel).count
         let syntheticCount = populated.count - nativeCount
         let hasHalfTrackData = populated.contains { $0.halfTrack % 2 == 1 }
-        let hasVariableLengths = Set(populated.map(\.bitLength)).count > 1
-        let hasSpeedZones = populated.contains { $0.speedZoneMap != nil } ||
-            (!populated.isEmpty && Set(populated.map(\.speedZone)).count > 1)
+        let hasVariableSpeedZones = populated.contains { track in
+            track.speedZoneMap?.isEmpty == false
+        }
         var unsupported: [String] = []
 
         switch format {
@@ -97,17 +100,25 @@ public struct DiskImage {
             nativeLowLevelTrackCount: nativeCount,
             syntheticGCRTrackCount: syntheticCount,
             preservesHalfTracks: format == .g64 && hasHalfTrackData,
-            preservesRawTrackLengths: format == .g64 && hasVariableLengths,
-            preservesSpeedZones: format == .g64 && hasSpeedZones,
+            preservesRawTrackLengths: format == .g64 && nativeCount > 0,
+            preservesSpeedZones: format == .g64 && nativeCount > 0,
+            preservesVariableSpeedZones: format == .g64 && hasVariableSpeedZones,
+            preservesSectorErrorInfo: sectorErrorCodes != nil,
             supportsWraparoundReads: true,
             maxTrackSize: maxTrackSize,
             unsupportedFeatures: unsupported
         )
     }
 
-    public init(format: Format, tracks: [Track?], maxTrackSize: Int? = nil) {
+    public init(
+        format: Format,
+        tracks: [Track?],
+        maxTrackSize: Int? = nil,
+        sectorErrorCodes: [UInt8]? = nil
+    ) {
         self.format = format
         self.tracks = tracks
         self.maxTrackSize = maxTrackSize
+        self.sectorErrorCodes = sectorErrorCodes
     }
 }

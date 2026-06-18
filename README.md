@@ -67,7 +67,20 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
 - TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
+- Extended 40/41/42-track D64 images now keep their extra-track geometry for fast sector reads and synthetic true-drive GCR tracks
+- D64 images with appended sector-error tables now preserve per-sector error metadata for future bad-sector/GCR error simulation
+- D64 sector-error tables now corrupt synthetic GCR sync/header/data/checksum/disk-ID fields for common read-error codes
+- D64 directory and PRG sector-chain walkers now stop on cyclic chains instead of hanging on malformed media
+- KERNAL VERIFY traps now compare disk data against RAM and report verify mismatches without modifying memory
+- Unsupported KERNAL SAVE traps now report an error instead of pretending a disk write succeeded
+- G64 fast-path sector decoding now keeps whole-track data beyond track 35 by producing extended D64 geometry when present
+- G64 fast-path sector decoding now validates GCR symbols plus header/data checksums instead of accepting corrupted sectors as good data
+- G64 fast-path sector decoding now fails when no sectors decode, while native true-drive G64 streams still mount as low-level media
+- G64 low-level loading now rejects unsupported G64 versions instead of accepting unknown layouts as native tracks
+- G64 low-level loading now rejects images without track data and keeps the previous disk mounted after failed loads
 - G64 native tracks now preserve per-byte speed-zone blocks and the 1541 GCR head uses those maps for variable-speed read timing
+- G64 media capabilities now report raw track length, constant speed-zone, and halftrack preservation accurately for native tracks
+- 1541 media insert and write-protect changes now refresh the VIA2 disk-controller input lines that drive ROM code observes
 - 1541 reset/power-on now clears VIA timers, interrupts, port state, byte-ready, and GCR head state while keeping mounted media inserted
 - C64 reset now also resets true-drive 1541 hardware state and clears host-queued typed commands without ejecting mounted media
 - C64 reset now clears CIA timer, interrupt, serial, TOD, and CIA2 IEC output state so reset releases serial lines and deasserts IRQ/NMI
@@ -121,6 +134,8 @@ Local disk-image matrix tests are opt-in because they depend on files under `C64
 SWIFT64_LOCAL_DISK_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesMountAndEncodeWhenEnabled
 SWIFT64_LOCAL_TRUE_DRIVE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesTrueDriveDirectorySmokeWhenEnabled
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64DirectoryLoadStartsGCRReadHardware
+SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
 ```
 
 The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen/PC milestones with an untracked `C64/DISKS/compatibility.json` file.
@@ -132,9 +147,10 @@ swift test --filter VICTests
 swift test --filter CIATests
 swift test --filter C64InterruptTests
 swift test --filter C64TimingTests
-swift test --filter Drive1541Tests/testTrueDriveD64DirectoryLoadStartsGCRReadHardware
-swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
+swift test --filter Drive1541Tests
 ```
+
+The slow true-drive serial-load milestones inside `Drive1541Tests` are skipped by default unless `SWIFT64_SLOW_TRUE_DRIVE_TESTS=1` is set, because they run multi-million-cycle 1541 ROM paths.
 
 Example milestone manifest:
 
@@ -155,6 +171,21 @@ Example milestone manifest:
         "minByteReady": 512,
         "minSyncDetections": 1,
         "hasNativeLowLevelImage": true
+      },
+      "mediaStatus": {
+        "populatedHalfTrackCount": 84,
+        "nativeLowLevelTrackCount": 84,
+        "syntheticGCRTrackCount": 0,
+        "hasSyntheticGCR": false,
+        "isNativeLowLevel": true,
+        "preservesHalfTracks": true,
+        "preservesRawTrackLengths": true,
+        "preservesSpeedZones": true,
+        "preservesVariableSpeedZones": true,
+        "preservesSectorErrorInfo": false,
+        "supportsWraparoundReads": true,
+        "maxTrackSize": 7928,
+        "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
       },
       "ramSignatures": [
         { "address": 2049, "bytes": "01 08" }

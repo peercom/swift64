@@ -249,24 +249,34 @@ public final class Drive1541 {
     // MARK: - Disk operations
 
     public func insertDisk(_ data: Data, isG64: Bool = false) -> Bool {
-        if isG64 {
-            return disk.loadG64(data)
-        } else {
-            return disk.loadD64(data)
+        let mounted = isG64 ? disk.loadG64(data) : disk.loadD64(data)
+        if mounted {
+            updateVIA2Inputs()
         }
+        return mounted
     }
 
     public func insertDiskImage(_ image: DiskImage) -> Bool {
         disk.tracks = image.tracks.map { $0?.bytes }
         disk.trackInfos = image.tracks
         disk.image = image
-        return image.tracks.contains { $0 != nil }
+        let mounted = image.tracks.contains { $0 != nil }
+        if mounted {
+            updateVIA2Inputs()
+        }
+        return mounted
     }
 
     public func ejectDisk() {
         disk.tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.image = nil
+        updateVIA2Inputs()
+    }
+
+    public func setWriteProtected(_ protected: Bool) {
+        disk.writeProtected = protected
+        updateVIA2Inputs()
     }
 
     public var statusSnapshot: StatusSnapshot {

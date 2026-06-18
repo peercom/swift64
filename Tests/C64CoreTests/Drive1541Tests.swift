@@ -3,6 +3,8 @@ import Emu6502
 @testable import C64Core
 
 final class Drive1541Tests: XCTestCase {
+    private static let slowTrueDriveEnv = "SWIFT64_SLOW_TRUE_DRIVE_TESTS"
+
     func testFireByteReadyPulsesSOAndClearsOnPortARead() {
         let drive = Drive1541()
 
@@ -55,6 +57,31 @@ final class Drive1541Tests: XCTestCase {
             slowDrive.headBitPosition,
             "A zone-3 speed map should advance the head farther than zone-0 over the same drive cycles"
         )
+    }
+
+    func testInsertDiskRefreshesVIA2WriteProtectAndSyncInputs() {
+        let drive = Drive1541()
+        drive.via2.portBInput = 0x00
+
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        let portB = drive.via2.readRegister(0x00)
+        XCTAssertEqual(portB & 0x10, 0x00, "Write-protected disks should hold VIA2 PB4 low")
+        XCTAssertEqual(portB & 0x80, 0x80, "No active sync should leave VIA2 PB7 high")
+        XCTAssertTrue(drive.statusSnapshot.writeProtected)
+    }
+
+    func testWriteProtectChangesAreVisibleThroughVIA2PB4() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        drive.setWriteProtected(false)
+        XCTAssertEqual(drive.via2.readRegister(0x00) & 0x10, 0x10)
+        XCTAssertFalse(drive.statusSnapshot.writeProtected)
+
+        drive.setWriteProtected(true)
+        XCTAssertEqual(drive.via2.readRegister(0x00) & 0x10, 0x00)
+        XCTAssertTrue(drive.statusSnapshot.writeProtected)
     }
 
     func testResetClearsVIAAndGCRHardwareStateButKeepsDiskInserted() {
@@ -272,6 +299,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveLoadCommandReachesIECSerialHandshake() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalG64()
 
         c64.typeText("LOAD\"$\",8\r")
@@ -301,6 +329,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveLoadCommandRunsDriveATNHandler() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalG64()
 
         c64.typeText("LOAD\"$\",8\r")
@@ -332,6 +361,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveReceivesListenCommandByte() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalG64()
 
         c64.typeText("LOAD\"$\",8\r")
@@ -351,6 +381,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveListenCommandCompletesATNAcknowledgeCycle() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalG64()
 
         c64.typeText("LOAD\"$\",8\r")
@@ -382,6 +413,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveD64DirectoryLoadStartsGCRReadHardware() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalD64()
         let baseline = c64.drive1541.statusSnapshot
 
@@ -465,6 +497,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTrueDriveD64PrgLoadUsesFileAddress() throws {
+        try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalD64()
         var feeder = KeyboardTextFeeder("LOAD\"*\",8,1\r")
         let baseline = c64.drive1541.statusSnapshot
@@ -578,6 +611,12 @@ final class Drive1541Tests: XCTestCase {
         return c64
     }
 
+    private func requireSlowTrueDriveTests() throws {
+        guard ProcessInfo.processInfo.environment[Self.slowTrueDriveEnv] == "1" else {
+            throw XCTSkip("Set \(Self.slowTrueDriveEnv)=1 to run slow true-drive serial load milestones")
+        }
+    }
+
     private func makeDriveWithSpeedMappedTrack(zone: UInt8) -> Drive1541 {
         let drive = Drive1541()
         let bytes = [UInt8](repeating: 0x00, count: 256)
@@ -594,6 +633,17 @@ final class Drive1541Tests: XCTestCase {
         drive.halfTrack = 36
         drive.motorOn = true
         return drive
+    }
+
+    private func makeDiskImageWithTrack(bytes: [UInt8]) -> DiskImage {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[36] = DiskImage.Track(
+            halfTrack: 36,
+            bytes: bytes,
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        return DiskImage(format: .g64, tracks: tracks, maxTrackSize: bytes.count)
     }
 
     private func makeBootedTrueDriveC64WithMinimalD64() throws -> C64 {

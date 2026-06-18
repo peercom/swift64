@@ -2,6 +2,54 @@ import XCTest
 @testable import C64Core
 
 final class GCRDiskTests: XCTestCase {
+    func testG64LoadRejectsUnsupportedVersion() {
+        var g64 = makeEmptyG64Header(version: 1)
+
+        let offsetTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        let rawTrack: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF]
+        let trackOffset = g64.count
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+        g64.append(contentsOf: rawTrack)
+        g64[offsetTableStart] = UInt8(trackOffset & 0xFF)
+        g64[offsetTableStart + 1] = UInt8((trackOffset >> 8) & 0xFF)
+        g64[offsetTableStart + 2] = UInt8((trackOffset >> 16) & 0xFF)
+        g64[offsetTableStart + 3] = UInt8((trackOffset >> 24) & 0xFF)
+
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.loadG64(Data(g64)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
+    func testG64LoadRejectsImagesWithoutTrackData() {
+        var g64 = makeEmptyG64Header(version: 0)
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 8))
+
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.loadG64(Data(g64)))
+        XCTAssertFalse(disk.hasDisk)
+        XCTAssertNil(disk.image)
+    }
+
+    func testG64FailedLoadKeepsPreviouslyMountedTracks() {
+        let disk = GCRDisk()
+        let d64 = makeBlankD64()
+        XCTAssertTrue(disk.loadD64(d64))
+        let originalTrack = disk.trackInfo(halfTrack: 34)?.bytes
+        var badG64 = makeEmptyG64Header(version: 0)
+        badG64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 8))
+
+        XCTAssertFalse(disk.loadG64(Data(badG64)))
+
+        XCTAssertTrue(disk.hasDisk)
+        XCTAssertEqual(disk.image?.format, .d64)
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, originalTrack)
+    }
+
     func testG64LoadPreservesNativeHalfTrackBytesAndSpeedZone() {
         var g64 = [UInt8]()
         g64.append(contentsOf: Array("GCR-1541".utf8))
@@ -43,8 +91,51 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.hasNativeLowLevelImage)
         XCTAssertEqual(disk.image?.capabilities.nativeLowLevelTrackCount, 1)
         XCTAssertEqual(disk.image?.capabilities.syntheticGCRTrackCount, 0)
+        XCTAssertEqual(disk.image?.capabilities.maxTrackSize, 4)
+        XCTAssertFalse(disk.image?.capabilities.preservesHalfTracks == true)
+        XCTAssertTrue(disk.image?.capabilities.preservesRawTrackLengths == true)
+        XCTAssertTrue(disk.image?.capabilities.preservesSpeedZones == true)
+        XCTAssertFalse(disk.image?.capabilities.preservesVariableSpeedZones == true)
         XCTAssertTrue(disk.image?.capabilities.supportsWraparoundReads == true)
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
+    }
+
+    func testG64LoadReportsNativeHalfTrackPreservation() {
+        var g64 = [UInt8]()
+        g64.append(contentsOf: Array("GCR-1541".utf8))
+        g64.append(0x00)
+        g64.append(84)
+        g64.append(0x04)
+        g64.append(0x00)
+
+        let offsetTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        let speedTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+
+        let rawTrack: [UInt8] = [0x12, 0x34, 0x56, 0x78]
+        let trackOffset = g64.count
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+        g64.append(contentsOf: rawTrack)
+
+        let halfTrack = 35
+        let offsetPos = offsetTableStart + halfTrack * 4
+        g64[offsetPos] = UInt8(trackOffset & 0xFF)
+        g64[offsetPos + 1] = UInt8((trackOffset >> 8) & 0xFF)
+        g64[offsetPos + 2] = UInt8((trackOffset >> 16) & 0xFF)
+        g64[offsetPos + 3] = UInt8((trackOffset >> 24) & 0xFF)
+
+        let speedPos = speedTableStart + halfTrack * 4
+        g64[speedPos] = 0x02
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadG64(Data(g64)))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: halfTrack)?.bytes, rawTrack)
+        XCTAssertTrue(disk.image?.capabilities.preservesHalfTracks == true)
+        XCTAssertTrue(disk.image?.capabilities.preservesRawTrackLengths == true)
+        XCTAssertTrue(disk.image?.capabilities.preservesSpeedZones == true)
     }
 
     func testG64LoadPreservesPerByteSpeedZoneBlock() {
@@ -90,6 +181,7 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(info?.speedZoneMap, [0, 1, 2, 3, 3, 2, 1, 0])
         XCTAssertEqual(info?.speedZone, 0)
         XCTAssertEqual(disk.image?.capabilities.preservesSpeedZones, true)
+        XCTAssertEqual(disk.image?.capabilities.preservesVariableSpeedZones, true)
     }
 
     func testD64LoadCreatesSyntheticLowLevelTracks() {
@@ -106,7 +198,122 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(disk.hasNativeLowLevelImage)
         XCTAssertEqual(disk.image?.capabilities.syntheticGCRTrackCount, 35)
         XCTAssertTrue(disk.image?.capabilities.hasSyntheticGCR == true)
+        XCTAssertFalse(disk.image?.capabilities.preservesVariableSpeedZones == true)
+        XCTAssertFalse(disk.image?.capabilities.preservesSectorErrorInfo == true)
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Native copy-protection bitstream") == true)
+    }
+
+    func testD64LoadPreservesSectorErrorTableMetadata() throws {
+        var d64 = [UInt8](makeBlankD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 0x05
+        d64[errorOffset + 358] = 0x0B
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(d64)))
+
+        XCTAssertEqual(disk.image?.sectorErrorCodes?.count, 683)
+        XCTAssertEqual(disk.image?.sectorErrorCodes?.first, 0x05)
+        XCTAssertEqual(disk.image?.sectorErrorCodes?[358], 0x0B)
+        XCTAssertTrue(disk.image?.capabilities.preservesSectorErrorInfo == true)
+    }
+
+    func testD64SectorDataChecksumErrorCorruptsSyntheticGCRDataBlock() throws {
+        var d64 = [UInt8](makeBlankD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 23
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(d64)))
+        let track1 = try XCTUnwrap(disk.trackInfo(halfTrack: 0)?.bytes)
+        let decoded = G64Parser.decodeSectors(from: track1, track: 1, expectedSectors: 21)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorHeaderChecksumErrorCorruptsSyntheticGCRHeaderBlock() throws {
+        var d64 = [UInt8](makeBlankD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 27
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(d64)))
+        let track1 = try XCTUnwrap(disk.trackInfo(halfTrack: 0)?.bytes)
+        let decoded = G64Parser.decodeSectors(from: track1, track: 1, expectedSectors: 21)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorHeaderNotFoundErrorSuppressesSyntheticGCRSector() throws {
+        let decoded = try decodedTrack1Sectors(d64ErrorCode: 20)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorNoSyncErrorSuppressesSyntheticGCRSector() throws {
+        let decoded = try decodedTrack1Sectors(d64ErrorCode: 21)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorDataBlockNotPresentErrorSuppressesSyntheticGCRSector() throws {
+        let decoded = try decodedTrack1Sectors(d64ErrorCode: 22)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorByteDecodeErrorCorruptsSyntheticGCRDataBytes() throws {
+        let decoded = try decodedTrack1Sectors(d64ErrorCode: 24)
+
+        XCTAssertFalse(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorDiskIDMismatchErrorWritesMismatchedSyntheticGCRHeaderID() throws {
+        let track1 = try syntheticTrack1(d64ErrorCode: 29)
+        let header = G64Parser.decodeGCRBlock(Array(track1[5..<15]), count: 8)
+        let decoded = G64Parser.decodeSectors(from: track1, track: 1, expectedSectors: 21)
+
+        XCTAssertEqual(header[0], 0x08)
+        XCTAssertEqual(header[2], 0)
+        XCTAssertEqual(header[3], 1)
+        XCTAssertEqual(header[4], 0xBD)
+        XCTAssertEqual(header[5], 0xBE)
+        XCTAssertTrue(decoded.contains { $0.0 == 0 })
+    }
+
+    func testUnknownD64SectorErrorCodePreservesMetadataWithoutCorruptingSyntheticGCR() throws {
+        let decoded = try decodedTrack1Sectors(d64ErrorCode: 0x0F)
+
+        XCTAssertTrue(decoded.contains { $0.0 == 0 })
+        XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testExtendedD64LoadPreservesTrack41SectorErrorTableMetadata() throws {
+        var d64 = [UInt8](makeBlankD64())
+        d64.append(contentsOf: [UInt8](repeating: 0, count: 200704 - d64.count))
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset + 783] = 0x0F
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(d64)))
+
+        XCTAssertEqual(disk.image?.sectorErrorCodes?.count, 784)
+        XCTAssertEqual(disk.image?.sectorErrorCodes?[783], 0x0F)
+        XCTAssertTrue(disk.image?.capabilities.preservesSectorErrorInfo == true)
     }
 
     func testExtendedD64LoadCreatesSyntheticLowLevelTracks() {
@@ -116,6 +323,20 @@ final class GCRDiskTests: XCTestCase {
         let disk = GCRDisk()
         XCTAssertTrue(disk.loadD64(Data(image)))
         XCTAssertNotNil(disk.trackInfo(halfTrack: 34))
+    }
+
+    func testExtendedD64LoadCreatesSyntheticLowLevelTracksBeyond35() {
+        var image = [UInt8](makeBlankD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 205312 - image.count))
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(image)))
+
+        let track42 = disk.trackInfo(halfTrack: 82)
+        XCTAssertNotNil(track42)
+        XCTAssertEqual(track42?.speedZone, GCRDisk.speedZone(for: 42))
+        XCTAssertEqual(track42?.isNativeLowLevel, false)
+        XCTAssertEqual(disk.image?.capabilities.syntheticGCRTrackCount, 42)
     }
 
     func testC64DataMountPreservesG64FormatFromFilename() {
@@ -151,7 +372,72 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(c64.mountDisk(Data(g64), fileName: "selected.g64"))
         XCTAssertEqual(c64.emulationStatus.mountedDiskName, "selected.g64")
         XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .g64)
+        XCTAssertFalse(c64.diskDrive.isMounted)
         XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+    }
+
+    func testC64MountRejectsUnsupportedG64Version() {
+        var g64 = makeEmptyG64Header(version: 1)
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 8))
+
+        let c64 = C64()
+
+        XCTAssertFalse(c64.mountDisk(Data(g64), fileName: "unsupported.g64"))
+        XCTAssertNil(c64.emulationStatus.mountedDiskName)
+        XCTAssertNil(c64.emulationStatus.mountedDiskFormat)
+        XCTAssertFalse(c64.emulationStatus.drive.hasDisk)
+    }
+
+    func testC64MountRejectsG64WithoutTrackData() {
+        var g64 = makeEmptyG64Header(version: 0)
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 8))
+
+        let c64 = C64()
+
+        XCTAssertFalse(c64.mountDisk(Data(g64), fileName: "empty.g64"))
+        XCTAssertNil(c64.emulationStatus.mountedDiskName)
+        XCTAssertNil(c64.emulationStatus.mountedDiskFormat)
+        XCTAssertFalse(c64.emulationStatus.drive.hasDisk)
+    }
+
+    func testC64FailedG64MountKeepsPreviouslyMountedDiskStatus() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankD64(), fileName: "good.d64"))
+
+        let before = c64.emulationStatus
+        XCTAssertEqual(before.mountedDiskName, "good.d64")
+        XCTAssertEqual(before.mountedDiskFormat, .d64)
+        XCTAssertEqual(before.mediaCapabilities?.hasSyntheticGCR, true)
+        XCTAssertEqual(before.drive.hasNativeLowLevelImage, false)
+
+        var badG64 = makeEmptyG64Header(version: 0)
+        badG64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 8))
+
+        XCTAssertFalse(c64.mountDisk(Data(badG64), fileName: "bad.g64"))
+
+        let after = c64.emulationStatus
+        XCTAssertEqual(after.mountedDiskName, "good.d64")
+        XCTAssertEqual(after.mountedDiskFormat, .d64)
+        XCTAssertEqual(after.mediaCapabilities?.hasSyntheticGCR, true)
+        XCTAssertEqual(after.drive.hasDisk, true)
+        XCTAssertEqual(after.drive.hasNativeLowLevelImage, false)
+    }
+
+    private func decodedTrack1Sectors(d64ErrorCode: UInt8) throws -> [(Int, [UInt8])] {
+        let track1 = try syntheticTrack1(d64ErrorCode: d64ErrorCode)
+        return G64Parser.decodeSectors(from: track1, track: 1, expectedSectors: 21)
+    }
+
+    private func syntheticTrack1(d64ErrorCode: UInt8) throws -> [UInt8] {
+        var d64 = [UInt8](makeBlankD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = d64ErrorCode
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(d64)))
+        return try XCTUnwrap(disk.trackInfo(halfTrack: 0)?.bytes)
     }
 
     private func makeBlankD64() -> Data {
@@ -163,5 +449,15 @@ final class GCRDiskTests: XCTestCase {
         image[bamOffset + 0xA2] = 0x41
         image[bamOffset + 0xA3] = 0x42
         return Data(image)
+    }
+
+    private func makeEmptyG64Header(version: UInt8) -> [UInt8] {
+        var g64 = [UInt8]()
+        g64.append(contentsOf: Array("GCR-1541".utf8))
+        g64.append(version)
+        g64.append(84)
+        g64.append(0x04)
+        g64.append(0x00)
+        return g64
     }
 }

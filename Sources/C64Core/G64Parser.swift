@@ -38,7 +38,7 @@ public enum G64Parser {
     // MARK: - Public API
 
     /// Parse a G64 file and return decoded sector data as a flat byte array
-    /// compatible with D64 format (174848 bytes for 35 tracks).
+    /// compatible with D64 format.
     /// Returns nil if the file is not a valid G64.
     public static func decode(_ data: Data) -> [UInt8]? {
         let bytes = [UInt8](data)
@@ -76,13 +76,44 @@ public enum G64Parser {
                 | (Int(bytes[pos + 3]) << 24)
         }
 
-        // Build D64-compatible image: 35 tracks, standard sector counts
-        let d64Size = 174848
+        let maxWholeTrack = min(42, (numTracks + 1) / 2)
+        var highestWholeTrackWithData = 0
+        if maxWholeTrack > 0 {
+            for trackNum in 1...maxWholeTrack {
+                let halfTrackIndex = (trackNum - 1) * 2
+                if halfTrackIndex < numTracks && trackOffsets[halfTrackIndex] > 0 {
+                    highestWholeTrackWithData = trackNum
+                }
+            }
+        }
+
+        let decodedTrackCount: Int
+        switch max(35, highestWholeTrackWithData) {
+        case ...35:
+            decodedTrackCount = 35
+        case 36...40:
+            decodedTrackCount = 40
+        case 41:
+            decodedTrackCount = 41
+        default:
+            decodedTrackCount = 42
+        }
+
+        let d64Size: Int
+        switch decodedTrackCount {
+        case 35: d64Size = 174848
+        case 40: d64Size = 196608
+        case 41: d64Size = 200704
+        default: d64Size = 205312
+        }
+        guard let geometry = DiskDrive.d64Geometry(forByteCount: d64Size) else { return nil }
+
+        // Build D64-compatible image sized to the whole tracks present in the G64.
         var d64 = [UInt8](repeating: 0, count: d64Size)
         var totalDecoded = 0
 
         // Process whole tracks (indices 0, 2, 4, ... = tracks 1, 2, 3, ...)
-        for trackNum in 1...35 {
+        for trackNum in 1...decodedTrackCount {
             let halfTrackIndex = (trackNum - 1) * 2  // G64 stores half-tracks
             guard halfTrackIndex < numTracks else { continue }
 
@@ -122,7 +153,7 @@ public enum G64Parser {
             }
 
             // Decode all sectors from this track's GCR data
-            let expectedSectors = DiskDrive.sectorsPerTrack[trackNum]
+            let expectedSectors = geometry.sectorsPerTrack[trackNum]
             let sectors = decodeSectors(from: trackData, track: trackNum,
                                         expectedSectors: expectedSectors)
 
@@ -154,7 +185,7 @@ public enum G64Parser {
             // Copy decoded sectors into the D64 image
             for (sectorNum, sectorData) in sectors {
                 guard sectorNum >= 0 && sectorNum < expectedSectors else { continue }
-                let d64Offset = DiskDrive.trackOffset[trackNum] + sectorNum * 256
+                let d64Offset = geometry.trackOffsets[trackNum] + sectorNum * 256
                 guard d64Offset + 256 <= d64Size else { continue }
                 for i in 0..<256 {
                     d64[d64Offset + i] = sectorData[i]
@@ -162,11 +193,13 @@ public enum G64Parser {
             }
         }
 
-        g64log("G64: decoded \(totalDecoded)/683 total sectors")
+        let expectedTotalSectors = geometry.sectorsPerTrack[1...geometry.trackCount].reduce(0, +)
+        g64log("G64: decoded \(totalDecoded)/\(expectedTotalSectors) total sectors")
 
         // Sanity check: did we get any sectors at all?
         if totalDecoded == 0 {
             g64log("G64: WARNING — no sectors decoded, file may use non-standard format")
+            return nil
         }
 
         return d64
@@ -202,14 +235,15 @@ public enum G64Parser {
 
             // Decode sector header: 8 bytes = 80 bits of GCR after sync
             guard afterSync + 80 <= bits.count else { break }
-            let headerBytes = decodeGCRFromBits(bits, from: afterSync, count: 8)
+            let headerDecode = decodeGCRFromBitsWithValidity(bits, from: afterSync, count: 8)
+            let headerBytes = headerDecode.bytes
 
             if track == 18 && syncCount <= 5 {
                 let dec = headerBytes.map { String(format: "%02X", $0) }.joined(separator: " ")
                 g64log("G64: T\(track) sync#\(syncCount) @bit \(afterSync) → [\(dec)]")
             }
 
-            if headerBytes.count >= 6 && headerBytes[0] == 0x08 {
+            if headerDecode.isValid && headerBytes.count >= 6 && headerBytes[0] == 0x08 && headerChecksumIsValid(headerBytes) {
                 let sectorNum = Int(headerBytes[2])
                 let trackNum = Int(headerBytes[3])
 
@@ -220,9 +254,10 @@ public enum G64Parser {
                     let dataSyncBit = findSyncBit(in: bits, from: afterSync + 80)
                     // Data block: 260 bytes = 2600 bits of GCR
                     if dataSyncBit >= 0 && dataSyncBit + 2600 <= bits.count {
-                        let dataBytes = decodeGCRFromBits(bits, from: dataSyncBit, count: 260)
+                        let dataDecode = decodeGCRFromBitsWithValidity(bits, from: dataSyncBit, count: 260)
+                        let dataBytes = dataDecode.bytes
 
-                        if dataBytes.count >= 258 && dataBytes[0] == 0x07 {
+                        if dataDecode.isValid && dataBytes.count >= 258 && dataBytes[0] == 0x07 && dataChecksumIsValid(dataBytes) {
                             let sectorData = Array(dataBytes[1...256])
                             sectors.append((sectorNum, sectorData))
                             foundSectors.insert(sectorNum)
@@ -251,6 +286,20 @@ public enum G64Parser {
         }
 
         return sectors
+    }
+
+    private static func headerChecksumIsValid(_ header: [UInt8]) -> Bool {
+        guard header.count >= 6 else { return false }
+        return header[1] == (header[2] ^ header[3] ^ header[4] ^ header[5])
+    }
+
+    private static func dataChecksumIsValid(_ dataBlock: [UInt8]) -> Bool {
+        guard dataBlock.count >= 258 else { return false }
+        var checksum: UInt8 = 0
+        for byte in dataBlock[1...256] {
+            checksum ^= byte
+        }
+        return checksum == dataBlock[257]
     }
 
     // MARK: - Bit-level sync detection and GCR decoding
@@ -288,9 +337,18 @@ public enum G64Parser {
     /// Decode GCR data from a bit array starting at a given bit position.
     /// Every 10 bits (two 5-bit GCR nybbles) decode to 1 byte.
     static func decodeGCRFromBits(_ bits: [UInt8], from bitPos: Int, count expectedBytes: Int) -> [UInt8] {
+        decodeGCRFromBitsWithValidity(bits, from: bitPos, count: expectedBytes).bytes
+    }
+
+    private static func decodeGCRFromBitsWithValidity(
+        _ bits: [UInt8],
+        from bitPos: Int,
+        count expectedBytes: Int
+    ) -> (bytes: [UInt8], isValid: Bool) {
         var result = [UInt8]()
         result.reserveCapacity(expectedBytes)
         var pos = bitPos
+        var isValid = true
 
         while result.count < expectedBytes && pos + 10 <= bits.count {
             // Read high nybble (5 bits)
@@ -300,11 +358,18 @@ public enum G64Parser {
             var lo: UInt8 = 0
             for i in 0..<5 { lo = (lo << 1) | bits[pos + 5 + i] }
 
-            result.append((gcrDecode[Int(hi)] << 4) | gcrDecode[Int(lo)])
+            let decodedHi = gcrDecode[Int(hi)]
+            let decodedLo = gcrDecode[Int(lo)]
+            if decodedHi == 0xFF || decodedLo == 0xFF {
+                isValid = false
+                result.append(0xFF)
+            } else {
+                result.append((decodedHi << 4) | decodedLo)
+            }
             pos += 10
         }
 
-        return result
+        return (result, isValid && result.count == expectedBytes)
     }
 
     /// Legacy byte-aligned GCR decode (used by tests that build synthetic GCR data).

@@ -30,6 +30,21 @@ final class CompatibilityManifestTests: XCTestCase {
                 "hasNativeLowLevelImage": true,
                 "lastIECCommandContains": "28"
               },
+              "mediaStatus": {
+                "populatedHalfTrackCount": 84,
+                "nativeLowLevelTrackCount": 84,
+                "syntheticGCRTrackCount": 0,
+                "hasSyntheticGCR": false,
+                "isNativeLowLevel": true,
+                "preservesHalfTracks": true,
+                "preservesRawTrackLengths": true,
+                "preservesSpeedZones": true,
+                "preservesVariableSpeedZones": true,
+                "preservesSectorErrorInfo": true,
+                "supportsWraparoundReads": true,
+                "maxTrackSize": 7928,
+                "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
+              },
               "ramSignatures": [
                 { "address": 2049, "bytes": "01 08 a9 00" },
                 { "address": 49152, "bytes": [169, 66, 96] }
@@ -64,6 +79,19 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.hasDisk, true)
         XCTAssertEqual(milestone.driveStatus?.hasNativeLowLevelImage, true)
         XCTAssertEqual(milestone.driveStatus?.lastIECCommandContains, "28")
+        XCTAssertEqual(milestone.mediaStatus?.populatedHalfTrackCount, 84)
+        XCTAssertEqual(milestone.mediaStatus?.nativeLowLevelTrackCount, 84)
+        XCTAssertEqual(milestone.mediaStatus?.syntheticGCRTrackCount, 0)
+        XCTAssertEqual(milestone.mediaStatus?.hasSyntheticGCR, false)
+        XCTAssertEqual(milestone.mediaStatus?.isNativeLowLevel, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesHalfTracks, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesRawTrackLengths, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesSpeedZones, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesVariableSpeedZones, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesSectorErrorInfo, true)
+        XCTAssertEqual(milestone.mediaStatus?.supportsWraparoundReads, true)
+        XCTAssertEqual(milestone.mediaStatus?.maxTrackSize, 7928)
+        XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Write-back"])
         XCTAssertEqual(milestone.ramSignatures[0].bytes, [0x01, 0x08, 0xA9, 0x00])
         XCTAssertEqual(milestone.ramSignatures[1].bytes, [0xA9, 0x42, 0x60])
         XCTAssertEqual(milestone.screenRAMHash, "0123456789abcdef")
@@ -93,6 +121,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.command, "LOAD\"$\",8")
         XCTAssertNil(milestone.pcRange)
         XCTAssertNil(milestone.driveStatus)
+        XCTAssertNil(milestone.mediaStatus)
         XCTAssertEqual(milestone.ramSignatures, [])
     }
 

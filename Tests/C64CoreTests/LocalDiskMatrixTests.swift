@@ -318,6 +318,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             let driveExpectationMatches = milestone.driveStatus.map {
                 driveStatusMatches($0, snapshot: driveStatus, gcrReads: gcrReads, byteReady: byteReady, syncDetections: syncDetections)
             } ?? true
+            let mediaExpectationMatches = milestone.mediaStatus.map {
+                mediaStatusMatches($0, capabilities: c64.emulationStatus.mediaCapabilities)
+            } ?? true
             let ramMatches = milestone.ramSignatures.allSatisfy { signature in
                 let start = signature.address
                 let end = start + signature.bytes.count
@@ -328,7 +331,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
 
-            if pcReached && driveProgress && driveExpectationMatches && ramMatches && screenMatches {
+            if pcReached && driveProgress && driveExpectationMatches && mediaExpectationMatches && ramMatches && screenMatches {
                 return MatrixRunResult(passed: true, elapsedCycles: c64.cpu.totalCycles, reason: "named milestone reached")
             }
         }
@@ -362,6 +365,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
                 minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
                 driveStatus: nil,
+                mediaStatus: nil,
                 ramSignatures: [],
                 screenRAMHash: nil
             )
@@ -392,6 +396,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 minGCRReads: nonNegativeUInt64(entry.driveStatus?.minGCRReads ?? entry.minGCRReads ?? defaultMinGCRReads(for: driveMode)),
                 minByteReady: nonNegativeUInt64(entry.driveStatus?.minByteReady ?? entry.minByteReady ?? defaultMinByteReady(for: driveMode)),
                 driveStatus: entry.driveStatus,
+                mediaStatus: entry.mediaStatus,
                 ramSignatures: entry.ramSignatures,
                 screenRAMHash: entry.screenRAMHash
             )
@@ -459,6 +464,69 @@ final class LocalDiskMatrixTests: XCTestCase {
         return true
     }
 
+    private func mediaStatusMatches(
+        _ expectation: CompatibilityMediaStatus,
+        capabilities: DiskImage.Capabilities?
+    ) -> Bool {
+        guard let capabilities else { return false }
+        if let populatedHalfTrackCount = expectation.populatedHalfTrackCount,
+           capabilities.populatedHalfTrackCount != populatedHalfTrackCount {
+            return false
+        }
+        if let nativeLowLevelTrackCount = expectation.nativeLowLevelTrackCount,
+           capabilities.nativeLowLevelTrackCount != nativeLowLevelTrackCount {
+            return false
+        }
+        if let syntheticGCRTrackCount = expectation.syntheticGCRTrackCount,
+           capabilities.syntheticGCRTrackCount != syntheticGCRTrackCount {
+            return false
+        }
+        if let hasSyntheticGCR = expectation.hasSyntheticGCR,
+           capabilities.hasSyntheticGCR != hasSyntheticGCR {
+            return false
+        }
+        if let isNativeLowLevel = expectation.isNativeLowLevel,
+           capabilities.isNativeLowLevel != isNativeLowLevel {
+            return false
+        }
+        if let preservesHalfTracks = expectation.preservesHalfTracks,
+           capabilities.preservesHalfTracks != preservesHalfTracks {
+            return false
+        }
+        if let preservesRawTrackLengths = expectation.preservesRawTrackLengths,
+           capabilities.preservesRawTrackLengths != preservesRawTrackLengths {
+            return false
+        }
+        if let preservesSpeedZones = expectation.preservesSpeedZones,
+           capabilities.preservesSpeedZones != preservesSpeedZones {
+            return false
+        }
+        if let preservesVariableSpeedZones = expectation.preservesVariableSpeedZones,
+           capabilities.preservesVariableSpeedZones != preservesVariableSpeedZones {
+            return false
+        }
+        if let preservesSectorErrorInfo = expectation.preservesSectorErrorInfo,
+           capabilities.preservesSectorErrorInfo != preservesSectorErrorInfo {
+            return false
+        }
+        if let supportsWraparoundReads = expectation.supportsWraparoundReads,
+           capabilities.supportsWraparoundReads != supportsWraparoundReads {
+            return false
+        }
+        if let maxTrackSize = expectation.maxTrackSize,
+           capabilities.maxTrackSize != maxTrackSize {
+            return false
+        }
+        for expectedFeature in expectation.unsupportedFeaturesContains {
+            guard capabilities.unsupportedFeatures.contains(where: {
+                $0.localizedCaseInsensitiveContains(expectedFeature)
+            }) else {
+                return false
+            }
+        }
+        return true
+    }
+
     private func nonNegativeUInt64(_ value: Int) -> UInt64 {
         UInt64(max(0, value))
     }
@@ -516,6 +584,7 @@ private struct LocalMilestone {
     let minGCRReads: UInt64
     let minByteReady: UInt64
     let driveStatus: CompatibilityDriveStatus?
+    let mediaStatus: CompatibilityMediaStatus?
     let ramSignatures: [CompatibilityRAMSignature]
     let screenRAMHash: String?
 

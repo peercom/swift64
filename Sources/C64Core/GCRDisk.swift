@@ -27,6 +27,30 @@ public final class GCRDisk {
     /// Zone 3 = 26 cycles, Zone 2 = 28, Zone 1 = 30, Zone 0 = 32
     public static let cyclesPerByte = [32, 30, 28, 26]
 
+    private enum D64SectorErrorEffect {
+        case ok
+        case headerNotFound
+        case noSync
+        case dataBlockNotPresent
+        case dataChecksum
+        case byteDecode
+        case headerChecksum
+        case diskIDMismatch
+
+        init(code: UInt8) {
+            switch code {
+            case 20: self = .headerNotFound
+            case 21: self = .noSync
+            case 22: self = .dataBlockNotPresent
+            case 23: self = .dataChecksum
+            case 24: self = .byteDecode
+            case 27: self = .headerChecksum
+            case 29: self = .diskIDMismatch
+            default: self = .ok
+            }
+        }
+    }
+
     // MARK: - GCR encode table
 
     static let gcrEncode: [UInt8] = [
@@ -71,6 +95,9 @@ public final class GCRDisk {
         let sig = String(bytes: Array(bytes[0..<8]), encoding: .ascii)
         guard sig == "GCR-1541" else { return false }
 
+        let version = bytes[8]
+        guard version == 0 else { return false }
+
         let numTracks = Int(bytes[9])
         guard numTracks > 0 && numTracks <= 84 else { return false }
 
@@ -79,9 +106,8 @@ public final class GCRDisk {
         guard bytes.count >= speedTableStart + numTracks * 4 else { return false }
         let maxTrackSize = Int(bytes[10]) | (Int(bytes[11]) << 8)
 
-        // Clear existing data
-        tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
-        trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var newTracks: [[UInt8]?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var newTrackInfos: [DiskImage.Track?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
 
         for i in 0..<numTracks {
             let pos = offsetTableStart + i * 4
@@ -109,11 +135,15 @@ public final class GCRDisk {
                 speedZoneMap: speedInfo?.speedZoneMap,
                 isNativeLowLevel: true
             )
-            tracks[i] = info.bytes
-            trackInfos[i] = info
+            newTracks[i] = info.bytes
+            newTrackInfos[i] = info
         }
 
-        image = DiskImage(format: .g64, tracks: trackInfos, maxTrackSize: maxTrackSize)
+        guard newTracks.contains(where: { $0 != nil }) else { return false }
+
+        tracks = newTracks
+        trackInfos = newTrackInfos
+        image = DiskImage(format: .g64, tracks: newTrackInfos, maxTrackSize: maxTrackSize)
         return true
     }
 
@@ -122,23 +152,24 @@ public final class GCRDisk {
     /// Load from D64 data by GCR-encoding each track.
     public func loadD64(_ data: Data) -> Bool {
         let bytes = [UInt8](data)
-        guard DiskDrive.supportedD64Sizes.contains(bytes.count) else {
+        guard let geometry = DiskDrive.d64Geometry(forByteCount: bytes.count) else {
             return false
         }
 
         tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        let sectorErrorCodes = d64SectorErrorCodes(from: bytes, geometry: geometry)
 
-        for trackNum in 1...35 {
+        for trackNum in 1...geometry.trackCount {
             let halfTrack = (trackNum - 1) * 2
-            let sectorsPerTrack = DiskDrive.sectorsPerTrack[trackNum]
-            let trackOffset = DiskDrive.trackOffset[trackNum]
+            let sectorsPerTrack = geometry.sectorsPerTrack[trackNum]
+            let trackOffset = geometry.trackOffsets[trackNum]
 
             // Read all sectors for this track
             var sectors: [[UInt8]] = []
             for s in 0..<sectorsPerTrack {
                 let offset = trackOffset + s * 256
-                guard offset + 256 <= bytes.count else {
+                guard offset + 256 <= geometry.dataSize, offset + 256 <= bytes.count else {
                     sectors.append([UInt8](repeating: 0, count: 256))
                     continue
                 }
@@ -149,7 +180,8 @@ public final class GCRDisk {
             let encoded = encodeTrack(
                 trackNum: trackNum,
                 sectors: sectors,
-                diskID: extractDiskID(from: bytes)
+                diskID: extractDiskID(from: bytes),
+                sectorErrorCodes: sectorErrorCodesForTrack(trackNum, geometry: geometry, allCodes: sectorErrorCodes)
             )
             let info = DiskImage.Track(
                 halfTrack: halfTrack,
@@ -161,7 +193,11 @@ public final class GCRDisk {
             trackInfos[halfTrack] = info
         }
 
-        image = DiskImage(format: .d64, tracks: trackInfos)
+        image = DiskImage(
+            format: .d64,
+            tracks: trackInfos,
+            sectorErrorCodes: sectorErrorCodes
+        )
         return true
     }
 
@@ -213,6 +249,39 @@ public final class GCRDisk {
         return (dominantZone, speedZoneMap)
     }
 
+    private func d64SectorErrorCodes(from bytes: [UInt8], geometry: DiskDrive.D64Geometry) -> [UInt8]? {
+        guard let errorInfoOffset = geometry.errorInfoOffset,
+              errorInfoOffset < bytes.count else {
+            return nil
+        }
+
+        let expectedCount = geometry.sectorsPerTrack[1...geometry.trackCount].reduce(0, +)
+        guard bytes.count >= errorInfoOffset + expectedCount else { return nil }
+        return Array(bytes[errorInfoOffset..<(errorInfoOffset + expectedCount)])
+    }
+
+    private func sectorErrorCodesForTrack(
+        _ track: Int,
+        geometry: DiskDrive.D64Geometry,
+        allCodes: [UInt8]?
+    ) -> [UInt8]? {
+        guard let allCodes,
+              track >= 1,
+              track <= geometry.trackCount else {
+            return nil
+        }
+
+        var start = 0
+        if track > 1 {
+            for previousTrack in 1..<track {
+                start += geometry.sectorsPerTrack[previousTrack]
+            }
+        }
+        let count = geometry.sectorsPerTrack[track]
+        guard start + count <= allCodes.count else { return nil }
+        return Array(allCodes[start..<(start + count)])
+    }
+
     /// Extract disk ID bytes from D64 BAM (track 18, sector 0, offset $A2-$A3).
     private func extractDiskID(from d64: [UInt8]) -> (UInt8, UInt8) {
         let bamOffset = DiskDrive.trackOffset[18]
@@ -221,7 +290,12 @@ public final class GCRDisk {
     }
 
     /// GCR-encode an entire track.
-    func encodeTrack(trackNum: Int, sectors: [[UInt8]], diskID: (UInt8, UInt8)) -> [UInt8] {
+    func encodeTrack(
+        trackNum: Int,
+        sectors: [[UInt8]],
+        diskID: (UInt8, UInt8),
+        sectorErrorCodes: [UInt8]? = nil
+    ) -> [UInt8] {
         let zone = GCRDisk.speedZone(for: trackNum)
         let targetLen = GCRDisk.trackLengths[zone]
 
@@ -229,14 +303,31 @@ public final class GCRDisk {
         gcr.reserveCapacity(targetLen)
 
         for (sectorNum, sectorData) in sectors.enumerated() {
+            let errorEffect: D64SectorErrorEffect
+            if let sectorErrorCodes, sectorNum < sectorErrorCodes.count {
+                errorEffect = D64SectorErrorEffect(code: sectorErrorCodes[sectorNum])
+            } else {
+                errorEffect = .ok
+            }
+
             // Sync mark (5 bytes of $FF = 40 one-bits)
-            gcr.append(contentsOf: [UInt8](repeating: 0xFF, count: 5))
+            let headerSyncByte: UInt8 = errorEffect == .noSync ? 0x55 : 0xFF
+            gcr.append(contentsOf: [UInt8](repeating: headerSyncByte, count: 5))
 
             // Header block: $08, checksum, sector, track, id2, id1, $0F, $0F
-            let checksum = UInt8(sectorNum) ^ UInt8(trackNum) ^ diskID.1 ^ diskID.0
+            var checksum = UInt8(sectorNum) ^ UInt8(trackNum) ^ diskID.1 ^ diskID.0
+            if errorEffect == .headerChecksum {
+                checksum ^= 0xFF
+            }
+            let headerMarker: UInt8 = errorEffect == .headerNotFound ? 0x00 : 0x08
+            let headerID1 = errorEffect == .diskIDMismatch ? diskID.0 ^ 0xFF : diskID.0
+            let headerID2 = errorEffect == .diskIDMismatch ? diskID.1 ^ 0xFF : diskID.1
+            if errorEffect == .diskIDMismatch {
+                checksum = UInt8(sectorNum) ^ UInt8(trackNum) ^ headerID2 ^ headerID1
+            }
             let header: [UInt8] = [
-                0x08, checksum, UInt8(sectorNum), UInt8(trackNum),
-                diskID.1, diskID.0, 0x0F, 0x0F
+                headerMarker, checksum, UInt8(sectorNum), UInt8(trackNum),
+                headerID2, headerID1, 0x0F, 0x0F
             ]
             gcr.append(contentsOf: encodeGCRBytes(header))
 
@@ -249,14 +340,21 @@ public final class GCRDisk {
             // Data block: $07, 256 data bytes, checksum, $00, $00
             var dataBlock = [UInt8]()
             dataBlock.reserveCapacity(260)
-            dataBlock.append(0x07)
+            dataBlock.append(errorEffect == .dataBlockNotPresent ? 0x00 : 0x07)
             dataBlock.append(contentsOf: sectorData)
             var dataChecksum: UInt8 = 0
             for b in sectorData { dataChecksum ^= b }
+            if errorEffect == .dataChecksum {
+                dataChecksum ^= 0xFF
+            }
             dataBlock.append(dataChecksum)
             dataBlock.append(0x00)
             dataBlock.append(0x00)
-            gcr.append(contentsOf: encodeGCRBytes(dataBlock))
+            var encodedDataBlock = encodeGCRBytes(dataBlock)
+            if errorEffect == .byteDecode && encodedDataBlock.count > 6 {
+                encodedDataBlock[6] = 0x00
+            }
+            gcr.append(contentsOf: encodedDataBlock)
 
             // Inter-sector gap (varies, fill remaining space)
             let gapSize = 8

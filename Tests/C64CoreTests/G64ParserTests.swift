@@ -80,6 +80,12 @@ final class G64ParserTests: XCTestCase {
         XCTAssertNil(G64Parser.decode(data))
     }
 
+    func testDecodeReturnsNilWhenNoSectorsDecodeFromNativeTrackStream() {
+        let g64 = buildRawG64(track: 18, bytes: [0xDE, 0xAD, 0xBE, 0xEF])
+
+        XCTAssertNil(G64Parser.decode(Data(g64)))
+    }
+
     // MARK: - Test: Minimal G64 with one track
 
     func testMinimalG64Decode() {
@@ -100,6 +106,64 @@ final class G64ParserTests: XCTestCase {
         XCTAssertEqual(decoded[bamOffset + 1], 1, "BAM sector pointer should be 1")
     }
 
+    func testDecodePreservesWholeTracksBeyond35WhenPresent() throws {
+        var extraSector = [UInt8](repeating: 0, count: 256)
+        extraSector[0] = 0
+        extraSector[1] = 4
+        extraSector[2] = 0xA9
+        extraSector[3] = 0x2A
+
+        let g64 = buildG64(trackSectors: [
+            18: [(0, buildBAMSector())],
+            36: [(0, extraSector)],
+        ])
+        let decoded = try XCTUnwrap(G64Parser.decode(Data(g64)))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: decoded.count))
+        let track36Offset = geometry.trackOffsets[36]
+
+        XCTAssertEqual(decoded.count, 196608)
+        XCTAssertEqual(geometry.trackCount, 40)
+        XCTAssertEqual(decoded[track36Offset + 2], 0xA9)
+        XCTAssertEqual(decoded[track36Offset + 3], 0x2A)
+    }
+
+    func testDecodeSectorsRejectsBadHeaderChecksum() {
+        let trackData = buildGCRTrack(
+            track: 18,
+            sectors: [(0, buildBAMSector())],
+            corruptHeaderChecksumForSector: 0
+        )
+
+        let sectors = G64Parser.decodeSectors(from: trackData, track: 18, expectedSectors: 19)
+
+        XCTAssertEqual(sectors.count, 0)
+    }
+
+    func testDecodeSectorsRejectsBadDataChecksum() {
+        let trackData = buildGCRTrack(
+            track: 18,
+            sectors: [(0, buildBAMSector())],
+            corruptDataChecksumForSector: 0
+        )
+
+        let sectors = G64Parser.decodeSectors(from: trackData, track: 18, expectedSectors: 19)
+
+        XCTAssertEqual(sectors.count, 0)
+    }
+
+    func testDecodeSectorsRejectsInvalidGCRSymbolsEvenWhenChecksumCouldMatch() {
+        var trackData = buildGCRTrack(track: 18, sectors: [(0, buildBAMSector())])
+        let dataBlockOffset = tryDataBlockOffset(in: trackData)
+        XCTAssertNotNil(dataBlockOffset)
+        if let dataBlockOffset {
+            trackData[dataBlockOffset] = 0x00
+        }
+
+        let sectors = G64Parser.decodeSectors(from: trackData, track: 18, expectedSectors: 19)
+
+        XCTAssertEqual(sectors.count, 0)
+    }
+
     // MARK: - Test: Mount G64 via DiskDrive
 
     func testMountG64() {
@@ -115,6 +179,10 @@ final class G64ParserTests: XCTestCase {
         // We'll create a G64 with just track 18 (half-track index 34) containing
         // a BAM sector (sector 0) with directory pointer to 18/1.
 
+        buildG64(trackSectors: [18: [(0, buildBAMSector())]])
+    }
+
+    func buildG64(trackSectors: [Int: [(Int, [UInt8])]]) -> [UInt8] {
         let numTracks = 84  // standard
         var g64 = [UInt8]()
 
@@ -136,22 +204,51 @@ final class G64ParserTests: XCTestCase {
             g64.append(contentsOf: [0, 0, 0, 0])
         }
 
-        // Build track 18 data (half-track index 34)
+        for track in trackSectors.keys.sorted() {
+            let halfTrack = (track - 1) * 2
+            guard halfTrack >= 0 && halfTrack < numTracks,
+                  let sectors = trackSectors[track] else {
+                continue
+            }
+
+            let trackDataOffset = g64.count
+            let trackGCR = buildGCRTrack(track: track, sectors: sectors)
+            let trackLen = trackGCR.count
+            g64.append(UInt8(trackLen & 0xFF))
+            g64.append(UInt8(trackLen >> 8))
+            g64.append(contentsOf: trackGCR)
+
+            let offsetPos = offsetTablePos + halfTrack * 4
+            g64[offsetPos] = UInt8(trackDataOffset & 0xFF)
+            g64[offsetPos + 1] = UInt8((trackDataOffset >> 8) & 0xFF)
+            g64[offsetPos + 2] = UInt8((trackDataOffset >> 16) & 0xFF)
+            g64[offsetPos + 3] = UInt8((trackDataOffset >> 24) & 0xFF)
+        }
+
+        return g64
+    }
+
+    func buildRawG64(track: Int, bytes rawTrack: [UInt8]) -> [UInt8] {
+        let numTracks = 84
+        var g64 = [UInt8]()
+
+        g64.append(contentsOf: [0x47, 0x43, 0x52, 0x2D, 0x31, 0x35, 0x34, 0x31])
+        g64.append(0x00)
+        g64.append(UInt8(numTracks))
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+
+        let offsetTablePos = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+        g64.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+
+        let halfTrack = (track - 1) * 2
         let trackDataOffset = g64.count
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+        g64.append(contentsOf: rawTrack)
 
-        // Build a GCR-encoded sector 0 for track 18
-        let sectorData = buildBAMSector()
-        let trackGCR = buildGCRTrack(track: 18, sectors: [(0, sectorData)])
-
-        // Track data: 2-byte length + GCR data
-        let trackLen = trackGCR.count
-        g64.append(UInt8(trackLen & 0xFF))
-        g64.append(UInt8(trackLen >> 8))
-        g64.append(contentsOf: trackGCR)
-
-        // Patch the track offset for half-track 34 (track 18)
-        let halfTrack34 = 34
-        let offsetPos = offsetTablePos + halfTrack34 * 4
+        let offsetPos = offsetTablePos + halfTrack * 4
         g64[offsetPos] = UInt8(trackDataOffset & 0xFF)
         g64[offsetPos + 1] = UInt8((trackDataOffset >> 8) & 0xFF)
         g64[offsetPos + 2] = UInt8((trackDataOffset >> 16) & 0xFF)
@@ -168,7 +265,12 @@ final class G64ParserTests: XCTestCase {
         return sector
     }
 
-    func buildGCRTrack(track: Int, sectors: [(Int, [UInt8])]) -> [UInt8] {
+    func buildGCRTrack(
+        track: Int,
+        sectors: [(Int, [UInt8])],
+        corruptHeaderChecksumForSector: Int? = nil,
+        corruptDataChecksumForSector: Int? = nil
+    ) -> [UInt8] {
         var gcr = [UInt8]()
 
         for (sectorNum, data) in sectors {
@@ -178,7 +280,10 @@ final class G64ParserTests: XCTestCase {
             // Sector header: $08, checksum, sector, track, id2, id1, $0F, $0F
             let id1: UInt8 = 0x41
             let id2: UInt8 = 0x42
-            let checksum = UInt8(sectorNum) ^ UInt8(track) ^ id2 ^ id1
+            var checksum = UInt8(sectorNum) ^ UInt8(track) ^ id2 ^ id1
+            if corruptHeaderChecksumForSector == sectorNum {
+                checksum ^= 0xFF
+            }
             let header: [UInt8] = [0x08, checksum, UInt8(sectorNum), UInt8(track),
                                     id2, id1, 0x0F, 0x0F]
             gcr.append(contentsOf: Self.encodeGCRBytes(header))
@@ -195,6 +300,9 @@ final class G64ParserTests: XCTestCase {
             dataBlock.append(contentsOf: data)
             var dataChecksum: UInt8 = 0
             for b in data { dataChecksum ^= b }
+            if corruptDataChecksumForSector == sectorNum {
+                dataChecksum ^= 0xFF
+            }
             dataBlock.append(dataChecksum)
             dataBlock.append(0x00)
             dataBlock.append(0x00)
@@ -208,5 +316,15 @@ final class G64ParserTests: XCTestCase {
         }
 
         return gcr
+    }
+
+    private func tryDataBlockOffset(in trackData: [UInt8]) -> Int? {
+        guard let headerSync = trackData.firstIndex(where: { $0 == 0xFF }) else { return nil }
+        let dataSyncSearchStart = headerSync + 5 + 10 + 9
+        guard dataSyncSearchStart < trackData.count else { return nil }
+        guard let relativeDataSync = trackData[dataSyncSearchStart...].firstIndex(where: { $0 == 0xFF }) else {
+            return nil
+        }
+        return relativeDataSync + 5
     }
 }

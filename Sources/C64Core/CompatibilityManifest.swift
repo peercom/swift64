@@ -67,6 +67,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let minGCRReads: Int?
     public let minByteReady: Int?
     public let driveStatus: CompatibilityDriveStatus?
+    public let mediaStatus: CompatibilityMediaStatus?
     public let ramSignatures: [CompatibilityRAMSignature]
     public let screenRAMHash: String?
     public let screenshotName: String?
@@ -84,6 +85,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case minGCRReads
         case minByteReady
         case driveStatus
+        case mediaStatus
         case ramSignatures
         case screenRAMHash
         case screenshotName
@@ -101,6 +103,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
+        mediaStatus: CompatibilityMediaStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         screenRAMHash: String? = nil,
         screenshotName: String? = nil
@@ -116,6 +119,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
+        self.mediaStatus = mediaStatus
         self.ramSignatures = ramSignatures
         self.screenRAMHash = screenRAMHash
         self.screenshotName = screenshotName
@@ -133,6 +137,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
+        mediaStatus: CompatibilityMediaStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         screenRAMHash: String? = nil,
         screenshotName: String? = nil
@@ -148,6 +153,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
+        self.mediaStatus = mediaStatus
         self.ramSignatures = ramSignatures
         self.screenRAMHash = screenRAMHash
         self.screenshotName = screenshotName
@@ -177,6 +183,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minGCRReads = try container.decodeIfPresent(Int.self, forKey: .minGCRReads)
         minByteReady = try container.decodeIfPresent(Int.self, forKey: .minByteReady)
         driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
+        mediaStatus = try container.decodeIfPresent(CompatibilityMediaStatus.self, forKey: .mediaStatus)
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
         screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
@@ -189,6 +196,85 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public var pcRange: ClosedRange<UInt16>? {
         guard let pcStart, let pcEnd else { return nil }
         return UInt16(pcStart)...UInt16(pcEnd)
+    }
+}
+
+public struct CompatibilityMediaStatus: Decodable, Equatable {
+    public let populatedHalfTrackCount: Int?
+    public let nativeLowLevelTrackCount: Int?
+    public let syntheticGCRTrackCount: Int?
+    public let hasSyntheticGCR: Bool?
+    public let isNativeLowLevel: Bool?
+    public let preservesHalfTracks: Bool?
+    public let preservesRawTrackLengths: Bool?
+    public let preservesSpeedZones: Bool?
+    public let preservesVariableSpeedZones: Bool?
+    public let preservesSectorErrorInfo: Bool?
+    public let supportsWraparoundReads: Bool?
+    public let maxTrackSize: Int?
+    public let unsupportedFeaturesContains: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case populatedHalfTrackCount
+        case nativeLowLevelTrackCount
+        case syntheticGCRTrackCount
+        case hasSyntheticGCR
+        case isNativeLowLevel
+        case preservesHalfTracks
+        case preservesRawTrackLengths
+        case preservesSpeedZones
+        case preservesVariableSpeedZones
+        case preservesSectorErrorInfo
+        case supportsWraparoundReads
+        case maxTrackSize
+        case unsupportedFeaturesContains
+    }
+
+    public init(
+        populatedHalfTrackCount: Int? = nil,
+        nativeLowLevelTrackCount: Int? = nil,
+        syntheticGCRTrackCount: Int? = nil,
+        hasSyntheticGCR: Bool? = nil,
+        isNativeLowLevel: Bool? = nil,
+        preservesHalfTracks: Bool? = nil,
+        preservesRawTrackLengths: Bool? = nil,
+        preservesSpeedZones: Bool? = nil,
+        preservesVariableSpeedZones: Bool? = nil,
+        preservesSectorErrorInfo: Bool? = nil,
+        supportsWraparoundReads: Bool? = nil,
+        maxTrackSize: Int? = nil,
+        unsupportedFeaturesContains: [String] = []
+    ) {
+        self.populatedHalfTrackCount = populatedHalfTrackCount
+        self.nativeLowLevelTrackCount = nativeLowLevelTrackCount
+        self.syntheticGCRTrackCount = syntheticGCRTrackCount
+        self.hasSyntheticGCR = hasSyntheticGCR
+        self.isNativeLowLevel = isNativeLowLevel
+        self.preservesHalfTracks = preservesHalfTracks
+        self.preservesRawTrackLengths = preservesRawTrackLengths
+        self.preservesSpeedZones = preservesSpeedZones
+        self.preservesVariableSpeedZones = preservesVariableSpeedZones
+        self.preservesSectorErrorInfo = preservesSectorErrorInfo
+        self.supportsWraparoundReads = supportsWraparoundReads
+        self.maxTrackSize = maxTrackSize
+        self.unsupportedFeaturesContains = unsupportedFeaturesContains
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        populatedHalfTrackCount = try container.decodeIfPresent(Int.self, forKey: .populatedHalfTrackCount)
+        nativeLowLevelTrackCount = try container.decodeIfPresent(Int.self, forKey: .nativeLowLevelTrackCount)
+        syntheticGCRTrackCount = try container.decodeIfPresent(Int.self, forKey: .syntheticGCRTrackCount)
+        hasSyntheticGCR = try container.decodeIfPresent(Bool.self, forKey: .hasSyntheticGCR)
+        isNativeLowLevel = try container.decodeIfPresent(Bool.self, forKey: .isNativeLowLevel)
+        preservesHalfTracks = try container.decodeIfPresent(Bool.self, forKey: .preservesHalfTracks)
+        preservesRawTrackLengths = try container.decodeIfPresent(Bool.self, forKey: .preservesRawTrackLengths)
+        preservesSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesSpeedZones)
+        preservesVariableSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesVariableSpeedZones)
+        preservesSectorErrorInfo = try container.decodeIfPresent(Bool.self, forKey: .preservesSectorErrorInfo)
+        supportsWraparoundReads = try container.decodeIfPresent(Bool.self, forKey: .supportsWraparoundReads)
+        maxTrackSize = try container.decodeIfPresent(Int.self, forKey: .maxTrackSize)
+        unsupportedFeaturesContains = try container.decodeIfPresent([String].self, forKey: .unsupportedFeaturesContains) ?? []
     }
 }
 

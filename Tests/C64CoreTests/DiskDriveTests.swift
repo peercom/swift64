@@ -97,6 +97,19 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(drive.directory.first?.typeName, "PRG")
     }
 
+    func testDirectoryParsingStopsOnCyclicSectorChain() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        let dirOffset = DiskDrive.trackOffset[18] + 1 * 256
+        image[dirOffset] = 18
+        image[dirOffset + 1] = 1
+
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertEqual(drive.directory.count, 1)
+        XCTAssertEqual(drive.directory.first?.filename, "hello")
+    }
+
     func testMountExtendedD64SizeWithStandardDirectory() {
         let drive = DiskDrive()
         var image = [UInt8](makeMinimalD64())
@@ -105,6 +118,116 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.mount(Data(image)))
         XCTAssertTrue(drive.isMounted)
         XCTAssertEqual(drive.directory.first?.filename, "hello")
+    }
+
+    func testD64GeometryRecognizesExtendedImagesWithErrorTables() throws {
+        let cases: [(size: Int, dataSize: Int, tracks: Int, sectorCount: Int, errorOffset: Int?)] = [
+            (174848, 174848, 35, 683, nil),
+            (175531, 174848, 35, 683, 174848),
+            (196608, 196608, 40, 768, nil),
+            (197376, 196608, 40, 768, 196608),
+            (200704, 200704, 41, 784, nil),
+            (201488, 200704, 41, 784, 200704),
+            (205312, 205312, 42, 802, nil),
+            (206114, 205312, 42, 802, 205312),
+        ]
+
+        for geometryCase in cases {
+            let geometry = try XCTUnwrap(
+                DiskDrive.d64Geometry(forByteCount: geometryCase.size),
+                "Expected \(geometryCase.size)-byte D64 geometry"
+            )
+            let sectorCount = geometry.sectorsPerTrack[1...geometry.trackCount].reduce(0, +)
+
+            XCTAssertEqual(geometry.dataSize, geometryCase.dataSize)
+            XCTAssertEqual(geometry.trackCount, geometryCase.tracks)
+            XCTAssertEqual(sectorCount, geometryCase.sectorCount)
+            XCTAssertEqual(geometry.errorInfoOffset, geometryCase.errorOffset)
+        }
+    }
+
+    func testExtendedD64CanReadFileDataFromTrack36() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64(fileBlocks: 1))
+        image.append(contentsOf: [UInt8](repeating: 0, count: 196608 - image.count))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+
+        let dirOffset = DiskDrive.trackOffset[18] + 1 * 256
+        image[dirOffset + 3] = 36
+        image[dirOffset + 4] = 0
+
+        let fileOffset = geometry.trackOffsets[36]
+        image[fileOffset + 0] = 0
+        image[fileOffset + 1] = 4
+        image[fileOffset + 2] = 0xA9
+        image[fileOffset + 3] = 0x2A
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        let entry = try XCTUnwrap(drive.findFile("HELLO"))
+
+        XCTAssertEqual(drive.readFileData(entry), [0xA9, 0x2A])
+    }
+
+    func testFileReadStopsOnCyclicSectorChain() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64(fileBlocks: 1))
+
+        let fileOffset = DiskDrive.trackOffset[1]
+        image[fileOffset] = 1
+        image[fileOffset + 1] = 0
+        image[fileOffset + 2] = 0x01
+        image[fileOffset + 3] = 0x08
+        image[fileOffset + 4] = 0xA9
+        image[fileOffset + 5] = 0x2A
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        let entry = try XCTUnwrap(drive.findFile("HELLO"))
+        let data = drive.readFileData(entry)
+
+        XCTAssertEqual(data.count, 254)
+        XCTAssertEqual(Array(data.prefix(4)), [0x01, 0x08, 0xA9, 0x2A])
+    }
+
+    func testPlainD64DoesNotExposeSectorErrorInfo() {
+        let drive = DiskDrive()
+
+        XCTAssertTrue(drive.mount(makeMinimalD64()))
+
+        XCTAssertFalse(drive.hasSectorErrorInfo)
+        XCTAssertNil(drive.readSectorErrorCode(track: 1, sector: 0))
+    }
+
+    func testD64WithSectorErrorBytesPreservesErrorCodes() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset] = 0x05
+        image[errorOffset + 358] = 0x0B // Track 18, sector 1.
+
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.hasSectorErrorInfo)
+        XCTAssertEqual(drive.readSectorErrorCode(track: 1, sector: 0), 0x05)
+        XCTAssertEqual(drive.readSectorErrorCode(track: 18, sector: 1), 0x0B)
+        XCTAssertNil(drive.readSectorErrorCode(track: 36, sector: 0))
+    }
+
+    func testExtendedD64WithSectorErrorBytesPreservesTrack41ErrorCodes() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200704 - image.count))
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset + 783] = 0x0F
+
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.hasSectorErrorInfo)
+        XCTAssertEqual(drive.readSectorErrorCode(track: 41, sector: 15), 0x0F)
+        XCTAssertNil(drive.readSectorErrorCode(track: 41, sector: 16))
     }
 
     func testGenerateDirectoryListing() {

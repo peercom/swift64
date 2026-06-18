@@ -125,13 +125,6 @@ public final class KernalTraps {
 
         debugLog("[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)")
 
-        if verifying {
-            // VERIFY: just pretend it worked
-            setStatus(memory: memory, value: 0)
-            doRTS(cpu: cpu, memory: memory)
-            return true
-        }
-
         // Print "SEARCHING FOR <filename>" like the real Kernal
         printToScreen(memory: memory, text: "\rSEARCHING FOR \(filename)\r")
 
@@ -161,9 +154,6 @@ public final class KernalTraps {
             return true
         }
 
-        // Print "LOADING" on success
-        printToScreen(memory: memory, text: "LOADING\r")
-
         // First 2 bytes = load address
         let fileLoadAddr = UInt16(data[0]) | (UInt16(data[1]) << 8)
 
@@ -175,21 +165,46 @@ public final class KernalTraps {
             loadAddr = fileLoadAddr
         }
 
+        let payload = Array(data[2...])
+        let endAddr = loadAddr &+ UInt16(payload.count)
+
+        if verifying {
+            printToScreen(memory: memory, text: "VERIFYING\r")
+            let matches = payload.enumerated().allSatisfy { index, byte in
+                let addr = Int(loadAddr) + index
+                return addr < 0x10000 && memory.ram[addr] == byte
+            }
+
+            if matches {
+                setStatus(memory: memory, value: 0)
+                cpu.a = 0
+                cpu.x = UInt8(endAddr & 0xFF)
+                cpu.y = UInt8(endAddr >> 8)
+                cpu.setFlag(Flags.carry, false)
+            } else {
+                setStatus(memory: memory, value: 0x10)  // VERIFY mismatch.
+                cpu.a = 0x10
+                cpu.setFlag(Flags.carry, true)
+            }
+            doRTS(cpu: cpu, memory: memory)
+            return true
+        }
+
+        // Print "LOADING" on success
+        printToScreen(memory: memory, text: "LOADING\r")
+
         // Save the return address from the stack BEFORE writing file data,
         // because the file data may overwrite the stack area ($0100-$01FF).
         let savedRetLo = memory.ram[0x0100 + Int(cpu.sp &+ 1)]
         let savedRetHi = memory.ram[0x0100 + Int(cpu.sp &+ 2)]
 
         // Copy data to RAM
-        let payload = Array(data[2...])
         for (i, byte) in payload.enumerated() {
             let addr = Int(loadAddr) + i
             if addr < 0x10000 {
                 memory.ram[addr] = byte
             }
         }
-
-        let endAddr = loadAddr &+ UInt16(payload.count)
 
         // Restore the return address on the stack (in case file data overwrote it)
         memory.ram[0x0100 + Int(cpu.sp &+ 1)] = savedRetLo
@@ -224,10 +239,10 @@ public final class KernalTraps {
     // MARK: - SAVE trap
 
     func handleSave(cpu: CPU6502, memory: MemoryMap) -> Bool {
-        // For now, save is not supported — return error
-        setStatus(memory: memory, value: 0)
-        cpu.a = 0
-        cpu.setFlag(Flags.carry, false)
+        debugLog("[TRAP] SAVE: write-back is not supported")
+        setStatus(memory: memory, value: 0x80)  // Device not present / write path unavailable.
+        cpu.a = 5  // DEVICE NOT PRESENT
+        cpu.setFlag(Flags.carry, true)
         doRTS(cpu: cpu, memory: memory)
         return true
     }

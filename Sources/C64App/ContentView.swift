@@ -559,13 +559,21 @@ private struct DriveStatusPopover: View {
 
     private var capabilityDescription: String {
         guard let caps = status.mediaCapabilities else { return "none" }
+        var suffixes: [String] = []
+        if caps.preservesVariableSpeedZones {
+            suffixes.append("variable speed")
+        }
+        if caps.preservesSectorErrorInfo {
+            suffixes.append("error table")
+        }
+        let suffix = suffixes.isEmpty ? "" : ", \(suffixes.joined(separator: ", "))"
         if caps.isNativeLowLevel {
-            return "Native G64, \(caps.populatedHalfTrackCount) halftracks"
+            return "Native G64, \(caps.populatedHalfTrackCount) halftracks\(suffix)"
         }
         if caps.hasSyntheticGCR {
-            return "Synthetic GCR, \(caps.populatedHalfTrackCount) halftracks"
+            return "Synthetic GCR, \(caps.populatedHalfTrackCount) halftracks\(suffix)"
         }
-        return "\(caps.populatedHalfTrackCount) halftracks"
+        return "\(caps.populatedHalfTrackCount) halftracks\(suffix)"
     }
 
     private func onOff(_ value: Bool) -> String {

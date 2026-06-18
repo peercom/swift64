@@ -34,9 +34,63 @@ public final class DiskDrive {
     static let supportedD64Sizes: Set<Int> = [
         174848, 175531,  // 35 tracks: no error bytes / with error bytes
         196608, 197376,  // 40 tracks
-        200704,          // 41 tracks
+        200704, 201488,  // 41 tracks
         205312, 206114,  // 42 tracks
     ]
+
+    struct D64Geometry {
+        let dataSize: Int
+        let errorInfoOffset: Int?
+        let trackCount: Int
+        let sectorsPerTrack: [Int]
+        let trackOffsets: [Int]
+    }
+
+    static func d64Geometry(forByteCount byteCount: Int) -> D64Geometry? {
+        let trackCount: Int
+        let dataSize: Int
+        switch byteCount {
+        case 174848, 175531:
+            trackCount = 35
+            dataSize = 174848
+        case 196608, 197376:
+            trackCount = 40
+            dataSize = 196608
+        case 200704, 201488:
+            trackCount = 41
+            dataSize = 200704
+        case 205312, 206114:
+            trackCount = 42
+            dataSize = 205312
+        default:
+            return nil
+        }
+
+        var sectors = sectorsPerTrack
+        if trackCount >= 40 {
+            sectors.append(contentsOf: [Int](repeating: 17, count: 5))
+        }
+        if trackCount == 41 {
+            sectors.append(16)
+        } else if trackCount == 42 {
+            sectors.append(contentsOf: [17, 17])
+        }
+
+        var offsets = [0]
+        var offset = 0
+        for track in 1...trackCount {
+            offsets.append(offset)
+            offset += sectors[track] * 256
+        }
+
+        return D64Geometry(
+            dataSize: dataSize,
+            errorInfoOffset: byteCount > dataSize ? dataSize : nil,
+            trackCount: trackCount,
+            sectorsPerTrack: sectors,
+            trackOffsets: offsets
+        )
+    }
 
     // MARK: - Directory entry
 
@@ -96,6 +150,12 @@ public final class DiskDrive {
     /// Disk ID
     public private(set) var diskID: String = ""
 
+    var mountedGeometry: D64Geometry?
+
+    public var hasSectorErrorInfo: Bool {
+        mountedGeometry?.errorInfoOffset != nil
+    }
+
     // MARK: - Init
 
     public init() {}
@@ -104,10 +164,11 @@ public final class DiskDrive {
 
     /// Mount a D64 image.
     public func mount(_ data: Data) -> Bool {
-        guard Self.supportedD64Sizes.contains(data.count) else {
+        guard let geometry = Self.d64Geometry(forByteCount: data.count) else {
             return false
         }
         imageData = [UInt8](data)
+        mountedGeometry = geometry
         parseDirectory()
         return true
     }
@@ -116,6 +177,7 @@ public final class DiskDrive {
     public func mountG64(_ data: Data) -> Bool {
         guard let decoded = G64Parser.decode(data) else { return false }
         imageData = decoded
+        mountedGeometry = Self.d64Geometry(forByteCount: decoded.count)
         parseDirectory()
         return true
     }
@@ -136,6 +198,7 @@ public final class DiskDrive {
 
     public func unmount() {
         imageData = nil
+        mountedGeometry = nil
         directory = []
         diskName = ""
         diskID = ""
@@ -149,12 +212,41 @@ public final class DiskDrive {
     /// Read a 256-byte sector from the image.
     func readSector(track: Int, sector: Int) -> [UInt8]? {
         guard let image = imageData,
-              track >= 1 && track <= 35,
-              sector >= 0 && sector < DiskDrive.sectorsPerTrack[track] else { return nil }
+              let geometry = mountedGeometry,
+              track >= 1 && track <= geometry.trackCount,
+              sector >= 0 && sector < geometry.sectorsPerTrack[track] else { return nil }
 
-        let offset = DiskDrive.trackOffset[track] + sector * 256
-        guard offset + 256 <= image.count else { return nil }
+        let offset = geometry.trackOffsets[track] + sector * 256
+        guard offset + 256 <= geometry.dataSize, offset + 256 <= image.count else { return nil }
         return Array(image[offset..<offset + 256])
+    }
+
+    public func readSectorErrorCode(track: Int, sector: Int) -> UInt8? {
+        guard let image = imageData,
+              let geometry = mountedGeometry,
+              let errorInfoOffset = geometry.errorInfoOffset,
+              let ordinal = sectorOrdinal(track: track, sector: sector, geometry: geometry) else {
+            return nil
+        }
+
+        let offset = errorInfoOffset + ordinal
+        guard offset < image.count else { return nil }
+        return image[offset]
+    }
+
+    private func sectorOrdinal(track: Int, sector: Int, geometry: D64Geometry) -> Int? {
+        guard track >= 1 && track <= geometry.trackCount,
+              sector >= 0 && sector < geometry.sectorsPerTrack[track] else {
+            return nil
+        }
+
+        var ordinal = sector
+        if track > 1 {
+            for previousTrack in 1..<track {
+                ordinal += geometry.sectorsPerTrack[previousTrack]
+            }
+        }
+        return ordinal
     }
 
     // MARK: - Directory parsing
@@ -170,8 +262,13 @@ public final class DiskDrive {
         // Directory starts at track 18, sector 1
         var track = 18
         var sector = 1
+        var visitedSectors = Set<Int>()
 
         while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { break }
+            visitedSectors.insert(key)
+
             guard let data = readSector(track: track, sector: sector) else { break }
 
             // 8 directory entries per sector (32 bytes each)
@@ -225,8 +322,13 @@ public final class DiskDrive {
         var data: [UInt8] = []
         var track = Int(entry.firstTrack)
         var sector = Int(entry.firstSector)
+        var visitedSectors = Set<Int>()
 
         while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { break }
+            visitedSectors.insert(key)
+
             guard let sectorData = readSector(track: track, sector: sector) else { break }
 
             let nextTrack = Int(sectorData[0])
@@ -247,6 +349,10 @@ public final class DiskDrive {
         }
 
         return data
+    }
+
+    private func sectorChainKey(track: Int, sector: Int) -> Int {
+        (track << 8) | sector
     }
 
     /// Generate a directory listing as a BASIC program (like LOAD"$",8).
