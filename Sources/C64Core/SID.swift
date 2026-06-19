@@ -47,6 +47,7 @@ public final class SID {
         var waveSawtooth: Bool { control & 0x20 != 0 }
         var wavePulse: Bool { control & 0x40 != 0 }
         var waveNoise: Bool { control & 0x80 != 0 }
+        var hasWaveform: Bool { control & 0xF0 != 0 }
         var ringMod: Bool { control & 0x04 != 0 }
         var sync: Bool { control & 0x02 != 0 }
         var testBit: Bool { control & 0x08 != 0 }
@@ -70,12 +71,14 @@ public final class SID {
     var filterResonance: UInt8 = 0   // $D417
     var filterControl: UInt8 = 0     // $D418 low nibble: voice routing
     var volumeFilter: UInt8 = 0      // $D418
+    var externalAudioInput: Int32 = 0
 
     var volume: UInt8 { volumeFilter & 0x0F }
     var filterLP: Bool { volumeFilter & 0x10 != 0 }
     var filterBP: Bool { volumeFilter & 0x20 != 0 }
     var filterHP: Bool { volumeFilter & 0x40 != 0 }
     var voice3Off: Bool { volumeFilter & 0x80 != 0 }
+    var externalInputFiltered: Bool { filterControl & 0x08 != 0 }
     var voiceOutputScale: Double {
         model == .mos6581 ? 1.0 : 0.82
     }
@@ -165,6 +168,7 @@ public final class SID {
         filterResonance = 0
         filterControl = 0
         volumeFilter = 0
+        externalAudioInput = 0
         paddleX = 0xFF
         paddleY = 0xFF
         dataBusLatch = 0
@@ -329,67 +333,87 @@ public final class SID {
     // MARK: - Waveform generation
 
     func oscillatorOutput(_ v: Int) -> UInt16 {
-        let acc = voices[v].accumulator
-
-        if voices[v].waveNoise {
-            let sr = voices[v].shiftRegister
-            var noiseBits: UInt32 = 0
-            noiseBits |= ((sr >> 22) & 1) << 11
-            noiseBits |= ((sr >> 20) & 1) << 10
-            noiseBits |= ((sr >> 16) & 1) << 9
-            noiseBits |= ((sr >> 13) & 1) << 8
-            noiseBits |= ((sr >> 11) & 1) << 7
-            noiseBits |= ((sr >> 7) & 1) << 6
-            noiseBits |= ((sr >> 4) & 1) << 5
-            noiseBits |= ((sr >> 2) & 1) << 4
-            return UInt16(noiseBits)
-        }
+        let noiseOutput = voices[v].waveNoise ? noiseWaveformOutput(v) : nil
 
         var output: UInt16 = 0
         var hasOutput = false
 
         if voices[v].waveTriangle {
-            let msb = acc >> 23
-            var triangle: UInt16
-            if msb != 0 {
-                triangle = UInt16(~acc >> 11) & 0xFFF
-            } else {
-                triangle = UInt16(acc >> 11) & 0xFFF
-            }
-            if voices[v].ringMod {
-                let syncSource = (v + 2) % 3
-                if voices[syncSource].accumulator & 0x800000 != 0 {
-                    triangle ^= 0xFFF
-                }
-            }
+            let triangle = triangleWaveformOutput(v)
             output = triangle
             hasOutput = true
         }
 
         if voices[v].waveSawtooth {
-            let sawtooth = UInt16(acc >> 12)
+            let sawtooth = sawtoothWaveformOutput(v)
             output = hasOutput ? output & sawtooth : sawtooth
             hasOutput = true
         }
 
         if voices[v].wavePulse {
-            let pulseWidth = min(voices[v].pulseWidth, 0x0FFF)
-            let pulse: UInt16
-            if pulseWidth == 0 {
-                pulse = 0
-            } else if pulseWidth == 0x0FFF {
-                pulse = 0xFFF
-            } else {
-                let phase = UInt16(acc >> 12)
-                pulse = phase >= pulseWidth ? 0xFFF : 0
-            }
+            let pulse = pulseWaveformOutput(v)
             output = hasOutput ? output & pulse : pulse
+            hasOutput = true
+        }
+
+        if let noiseOutput {
+            return hasOutput ? noiseOutput & output : noiseOutput
         }
 
         return output
     }
 
+    func triangleWaveformOutput(_ v: Int) -> UInt16 {
+        let acc = voices[v].accumulator
+        let msb = acc >> 23
+        var triangle: UInt16
+        if msb != 0 {
+            triangle = UInt16((~acc >> 11) & 0xFFF)
+        } else {
+            triangle = UInt16(acc >> 11) & 0xFFF
+        }
+        if voices[v].ringMod {
+            let syncSource = (v + 2) % 3
+            if voices[syncSource].accumulator & 0x800000 != 0 {
+                triangle ^= 0xFFF
+            }
+        }
+        return triangle
+    }
+
+    func sawtoothWaveformOutput(_ v: Int) -> UInt16 {
+        UInt16(voices[v].accumulator >> 12)
+    }
+
+    func pulseWaveformOutput(_ v: Int) -> UInt16 {
+        let pulseWidth = min(voices[v].pulseWidth, 0x0FFF)
+        if pulseWidth == 0 {
+            return 0
+        }
+        if pulseWidth == 0x0FFF {
+            return 0xFFF
+        }
+        let phase = UInt16(voices[v].accumulator >> 12)
+        return phase >= pulseWidth ? 0xFFF : 0
+    }
+
+    func noiseWaveformOutput(_ v: Int) -> UInt16 {
+        let sr = voices[v].shiftRegister
+        var noiseBits: UInt32 = 0
+        noiseBits |= ((sr >> 22) & 1) << 11
+        noiseBits |= ((sr >> 20) & 1) << 10
+        noiseBits |= ((sr >> 16) & 1) << 9
+        noiseBits |= ((sr >> 13) & 1) << 8
+        noiseBits |= ((sr >> 11) & 1) << 7
+        noiseBits |= ((sr >> 7) & 1) << 6
+        noiseBits |= ((sr >> 4) & 1) << 5
+        noiseBits |= ((sr >> 2) & 1) << 4
+        return UInt16(noiseBits)
+    }
+
     func waveformOutput(_ v: Int) -> Int16 {
+        guard voices[v].hasWaveform else { return 0 }
+
         let centeredOutput = Int32(oscillatorOutput(v)) - 2048
 
         // Apply envelope after centering the 12-bit waveform. With a zero
@@ -413,6 +437,12 @@ public final class SID {
             } else if !(v == 2 && voice3Off) {
                 directOutput += voiceOut
             }
+        }
+
+        if externalInputFiltered {
+            filterInput += externalAudioInput
+        } else {
+            directOutput += externalAudioInput
         }
 
         var output = directOutput + applyFilter(input: filterInput)
@@ -454,10 +484,14 @@ public final class SID {
     }
 
     var filterInputEnabled: Bool {
-        filterControl & 0x07 != 0
+        filterControl & 0x0F != 0
     }
 
     // MARK: - Register access
+
+    public func setExternalAudioInput(_ value: Int32) {
+        externalAudioInput = Int32(max(-32768, min(32767, value)))
+    }
 
     public func setPaddle(x: UInt8, y: UInt8) {
         paddleX = x

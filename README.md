@@ -100,10 +100,14 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
 - SID voice routing now feeds a bounded state-variable filter with model-specific cutoff scaling and correct voice-3-off direct-output behavior
+- SID external audio input is clamped to audio range and can now be mixed directly or routed through the filter through `$D417` bit 3
 - SID ADSR decay/release now use the exponential counter thresholds instead of decrementing linearly at every rate tick
 - SID sustain state now responds to lowered sustain levels by resuming decay instead of freezing at the old level
 - SID noise generation now clocks the LFSR on accumulator bit 19 and maps the documented shift-register taps into OSC/noise output bits
+- SID combined noise waveforms now mask noise output with selected triangle/saw/pulse output instead of ignoring the other waveform bits
+- SID triangle ring modulation now follows the sync-source oscillator MSB and leaves non-triangle waveforms unaffected
 - SID pulse waveforms now handle zero/max pulse-width edge cases and compare against the top 12 accumulator bits
+- SID voices with no waveform selected now contribute silence instead of a spurious centered negative signal
 - SID TEST-bit handling now keeps noise cleared while held and reseeds the noise shift register when released
 - SID direct chip reads now model a decaying local data-bus latch while memory-mapped write-only SID reads still preserve C64 CPU open-bus behavior
 - SID ADSR timing now uses a 15-bit equality-based rate counter, exposing the classic delay-bug behavior when switching to faster envelope rates after the counter has already passed the new period

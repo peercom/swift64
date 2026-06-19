@@ -11,6 +11,7 @@ final class SIDTests: XCTestCase {
         sid.voices[0].accumulator = 0xABCDEF
         sid.voices[2].envelopeLevel = 0x77
         sid.writeRegister(0x18, value: 0x0F)
+        sid.setExternalAudioInput(0x1234)
         sid.setPaddle(x: 0x12, y: 0x34)
         sid.sampleBuffer[0] = 0.5
         sid.sampleWritePos = 10
@@ -31,6 +32,7 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.readRegister(0x19), 0xFF)
         XCTAssertEqual(sid.readRegister(0x1A), 0xFF)
         XCTAssertEqual(sid.volumeFilter, 0)
+        XCTAssertEqual(sid.externalAudioInput, 0)
         XCTAssertEqual(sid.dataBusLatch, 0xFF)
         XCTAssertEqual(sid.dataBusLatchCyclesRemaining, SID.dataBusLatchHoldCycles)
         XCTAssertEqual(sid.sampleBuffer[0], 0)
@@ -158,6 +160,40 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.oscillatorOutput(0), 0x890)
     }
 
+    func testCombinedNoiseSawMasksNoiseWithSawtoothOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0xA0
+        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
+            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].accumulator = 0x0F0000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x0F0)
+    }
+
+    func testCombinedNoiseTriangleMasksNoiseWithTriangleOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0x90
+        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
+            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].accumulator = 0x100000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x200)
+    }
+
+    func testCombinedNoisePulseMasksNoiseWithPulseOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0xC0
+        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
+            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].pulseWidth = 0x0800
+
+        sid.voices[0].accumulator = 0x700000
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+
+        sid.voices[0].accumulator = 0x900000
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xFF0)
+    }
+
     func testPulseWaveformWidthZeroIsSilentAndMaxIsHigh() {
         let sid = SID()
         sid.voices[0].control = 0x40
@@ -195,6 +231,53 @@ final class SIDTests: XCTestCase {
         sid.voices[0].accumulator = 0x900000
 
         XCTAssertEqual(sid.oscillatorOutput(0), 0x900)
+    }
+
+    func testCombinedTriangleSawMasksTriangleWithSawtoothOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0x30
+        sid.voices[0].accumulator = 0x180000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x100)
+    }
+
+    func testCombinedTrianglePulseMasksTriangleWithPulseOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0x50
+        sid.voices[0].pulseWidth = 0x0800
+
+        sid.voices[0].accumulator = 0x100000
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+
+        sid.voices[0].accumulator = 0x900000
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xDFF)
+    }
+
+    func testTriangleRingModInvertsWhenSyncSourceMSBIsHigh() {
+        let sid = SID()
+        sid.voices[0].control = 0x14
+        sid.voices[0].accumulator = 0x100000
+        sid.voices[2].accumulator = 0x800000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xDFF)
+    }
+
+    func testTriangleRingModDoesNotInvertWhenSyncSourceMSBIsLow() {
+        let sid = SID()
+        sid.voices[0].control = 0x14
+        sid.voices[0].accumulator = 0x100000
+        sid.voices[2].accumulator = 0x7FFFFF
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x200)
+    }
+
+    func testRingModBitDoesNotAffectSawtoothWithoutTriangle() {
+        let sid = SID()
+        sid.voices[0].control = 0x24
+        sid.voices[0].accumulator = 0x100000
+        sid.voices[2].accumulator = 0x800000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x100)
     }
 
     func testEnvelopeRateCounterWrapsInsteadOfCrashing() {
@@ -356,6 +439,29 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.waveformOutput(0), 0)
     }
 
+    func testVoiceWithNoWaveformSelectedContributesSilence() {
+        let sid = SID()
+        sid.voices[0].control = 0x01
+        sid.voices[0].accumulator = 0xFFFFFF
+        sid.voices[0].envelopeLevel = 0xFF
+
+        XCTAssertEqual(sid.waveformOutput(0), 0)
+    }
+
+    func testNoWaveformVoiceDoesNotCreateNegativeMixedSample() {
+        let sid = SID()
+        sid.model = .mos8580
+        sid.voices[0].control = 0x01
+        sid.voices[0].accumulator = 0xFFFFFF
+        sid.voices[0].envelopeLevel = 0xFF
+        sid.writeRegister(0x18, value: 0x0F)
+
+        sid.generateSample()
+
+        XCTAssertGreaterThanOrEqual(sid.sampleBuffer[0], 0)
+        XCTAssertLessThan(sid.sampleBuffer[0], 0.02)
+    }
+
     func testSIDModelsUseDifferentVolumeDACOffsets() {
         let sid6581 = SID()
         sid6581.model = .mos6581
@@ -441,6 +547,48 @@ final class SIDTests: XCTestCase {
 
         XCTAssertLessThan(mutedDirect.sampleBuffer[0], 0.02)
         XCTAssertGreaterThan(filteredVoice3.sampleBuffer[0], 0.8)
+    }
+
+    func testExternalAudioInputMixesDirectWhenNotFiltered() {
+        let sid = SID()
+        sid.model = .mos8580
+        sid.setExternalAudioInput(12_000)
+        sid.writeRegister(0x18, value: 0x0F)
+
+        sid.generateSample()
+
+        XCTAssertGreaterThan(sid.sampleBuffer[0], 0.25)
+    }
+
+    func testExternalAudioInputIsClampedToAudioRange() {
+        let sid = SID()
+
+        sid.setExternalAudioInput(100_000)
+        XCTAssertEqual(sid.externalAudioInput, 32767)
+
+        sid.setExternalAudioInput(-100_000)
+        XCTAssertEqual(sid.externalAudioInput, -32768)
+    }
+
+    func testExternalAudioInputRoutesThroughFilterWhenEnabled() {
+        let direct = SID()
+        direct.model = .mos8580
+        direct.setExternalAudioInput(12_000)
+        direct.writeRegister(0x18, value: 0x0F)
+
+        let filtered = SID()
+        filtered.model = .mos8580
+        filtered.setExternalAudioInput(12_000)
+        filtered.writeRegister(0x15, value: 0x00)
+        filtered.writeRegister(0x16, value: 0x08)
+        filtered.writeRegister(0x17, value: 0x08)
+        filtered.writeRegister(0x18, value: 0x1F)
+
+        direct.generateSample()
+        filtered.generateSample()
+
+        XCTAssertLessThan(filtered.sampleBuffer[0], direct.sampleBuffer[0] * 0.25)
+        XCTAssertNotEqual(filtered.filterBand, 0)
     }
 
     func testOscillatorSyncResetsOnSourceMSBRisingEdge() {
