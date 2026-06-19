@@ -54,6 +54,10 @@ struct ContentView: View {
                         Button("Open Disk Image...") { openDisk() }
                         Button("Export Modified D64...") { exportModifiedD64() }
                             .disabled(!status.canExportModifiedD64 || !status.diskHasUnsavedChanges)
+                        Button("Export Captured TAP...") { exportCapturedTAP() }
+                            .disabled(!status.canExportCapturedTAP)
+                        Button("Export Saved T64...") { exportSavedT64() }
+                            .disabled(!status.canExportSavedT64 || !status.tapeHasUnsavedChanges)
                         Button("Open Tape Image...") { openTape() }
                         Button("Load Program...") { loadPRG() }
                         Button("Open Cartridge Image...") { openCartridge() }
@@ -136,12 +140,41 @@ struct ContentView: View {
         }
     }
 
+    func exportCapturedTAP() {
+        let panel = NSSavePanel()
+        panel.title = "Export Captured TAP"
+        panel.allowedContentTypes = [.init(filenameExtension: "tap")].compactMap { $0 }
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = emulator.suggestedCapturedTAPName
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try emulator.exportCapturedTAP(to: url)
+            } catch {
+                print("Could not export captured TAP: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func exportSavedT64() {
+        let panel = NSSavePanel()
+        panel.title = "Export Saved T64"
+        panel.allowedContentTypes = [.init(filenameExtension: "t64")].compactMap { $0 }
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = emulator.suggestedSavedT64Name
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try emulator.exportSavedT64(to: url)
+            } catch {
+                print("Could not export saved T64: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func openTape() {
         openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
-            if emulator.c64.mountTape(url) {
-                emulator.refreshStatus()
-                print("Tape mounted: \(url.lastPathComponent)")
-            }
+            emulator.mountTape(url)
         }
     }
 
@@ -223,7 +256,7 @@ private struct C64SidebarView: View {
                 )
                 SidebarActionRow(
                     title: "Tape",
-                    detail: "T64 or TAP",
+                    detail: status.mountedTapeName ?? "T64 or TAP",
                     systemImage: "cassette",
                     action: openTape
                 )
@@ -531,10 +564,14 @@ private struct DriveStatusPopover: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 StatusRow(label: "Image", value: status.mountedDiskName ?? "none")
+                StatusRow(label: "Tape", value: status.mountedTapeName ?? "none")
                 StatusRow(label: "Cartridge", value: status.mountedCartridgeName ?? "none")
                 StatusRow(label: "Media", value: mediaDescription)
                 StatusRow(label: "Fast Media", value: highLevelMediaDescription)
                 StatusRow(label: "Modified", value: modifiedDescription)
+                StatusRow(label: "Tape Capture", value: tapeCaptureDescription)
+                StatusRow(label: "Tape Save", value: tapeSaveDescription)
+                StatusRow(label: "Tape Decode", value: tapeDecodeDescription)
                 StatusRow(label: "Capability", value: capabilityDescription)
                 StatusRow(label: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")")
             }
@@ -586,6 +623,46 @@ private struct DriveStatusPopover: View {
             return status.canExportModifiedD64 ? "yes, exportable D64" : "yes"
         }
         return "no"
+    }
+
+    private var tapeCaptureDescription: String {
+        if status.tapeHasCapturedWritePulses {
+            return status.canExportCapturedTAP ? "yes, exportable TAP" : "yes"
+        }
+        return "no"
+    }
+
+    private var tapeSaveDescription: String {
+        if status.tapeHasUnsavedChanges {
+            return status.canExportSavedT64 ? "yes, exportable T64" : "yes"
+        }
+        return "no"
+    }
+
+    private var tapeDecodeDescription: String {
+        switch status.tapeDecodeStatus {
+        case .none:
+            return "none"
+        case let .rawPulsesOnly(pulseCount):
+            return "raw pulses, \(pulseCount)"
+        case let .decodedPrograms(programCount, pulseCount):
+            return "\(programCount) program\(programCount == 1 ? "" : "s"), \(pulseCount) pulses"
+        case let .standardCBMNoPrograms(blockCount, reason):
+            return "\(blockCount) block\(blockCount == 1 ? "" : "s"), \(tapeFailureDescription(reason))"
+        }
+    }
+
+    private func tapeFailureDescription(_ reason: TapeUnit.TAPDecodeFailureReason) -> String {
+        switch reason {
+        case .noStandardBlocks:
+            return "no CBM blocks"
+        case .malformedStandardBlocks:
+            return "malformed blocks"
+        case .incompleteHeaderData:
+            return "incomplete data"
+        case .conflictingDuplicateData:
+            return "conflicting copies"
+        }
     }
 
     private var capabilityDescription: String {
@@ -664,6 +741,20 @@ final class EmulatorController: ObservableObject {
         return "\(base)-modified.d64"
     }
 
+    var suggestedCapturedTAPName: String {
+        "captured-tape.tap"
+    }
+
+    var suggestedSavedT64Name: String {
+        guard let name = c64.emulationStatus.mountedTapeName else {
+            return "saved-tape.t64"
+        }
+
+        let url = URL(fileURLWithPath: name)
+        let base = url.deletingPathExtension().lastPathComponent
+        return "\(base)-saved.t64"
+    }
+
     init() {
         migrateLegacyPreferencesIfNeeded()
         applyEmulationPreferences(reset: false, powerDrive: false)
@@ -685,10 +776,7 @@ final class EmulatorController: ObservableObject {
         case "d64", "g64":
             mountDisk(url)
         case "t64", "tap":
-            if c64.mountTape(url) {
-                refreshStatus()
-                print("Tape mounted: \(url.lastPathComponent)")
-            }
+            mountTape(url)
         case "prg", "p00":
             c64.loadPRG(url, autoRun: true)
             refreshStatus()
@@ -732,6 +820,20 @@ final class EmulatorController: ObservableObject {
         }
     }
 
+    func mountTape(_ url: URL) {
+        do {
+            let data = try readUserSelectedFile(url)
+            guard c64.mountTape(data, fileName: url.lastPathComponent) else {
+                print("Could not mount tape image: \(url.lastPathComponent)")
+                return
+            }
+            refreshStatus()
+            print("Tape mounted: \(url.lastPathComponent)")
+        } catch {
+            print("Could not read tape image \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+
     func exportModifiedD64(to url: URL) throws {
         guard let data = c64.exportedD64Image else {
             throw CocoaError(.fileNoSuchFile)
@@ -748,6 +850,42 @@ final class EmulatorController: ObservableObject {
         c64.markExportedD64ImageSaved()
         refreshStatus()
         print("Modified D64 exported: \(url.lastPathComponent)")
+    }
+
+    func exportCapturedTAP(to url: URL) throws {
+        guard let data = c64.exportedCapturedTAPImage() else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        try data.write(to: url, options: .atomic)
+        c64.clearCapturedTapeWritePulses()
+        refreshStatus()
+        print("Captured TAP exported: \(url.lastPathComponent)")
+    }
+
+    func exportSavedT64(to url: URL) throws {
+        guard let data = c64.exportedT64Image else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        try data.write(to: url, options: .atomic)
+        c64.markExportedT64ImageSaved()
+        refreshStatus()
+        print("Saved T64 exported: \(url.lastPathComponent)")
     }
 
     private func readUserSelectedFile(_ url: URL) throws -> Data {

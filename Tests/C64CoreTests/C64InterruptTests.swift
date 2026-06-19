@@ -213,12 +213,59 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 1)
     }
 
+    func testCassetteWriteLineEdgesAreCapturedWhileMotorRuns() {
+        let c64 = C64()
+
+        c64.memory.write(0x0000, value: 0x28)
+        c64.memory.write(0x0001, value: 0x00)
+        tickCycles(c64, 4)
+        c64.memory.write(0x0001, value: 0x08)
+        tickCycles(c64, 5)
+        c64.memory.write(0x0001, value: 0x00)
+        c64.memory.write(0x0001, value: 0x28)
+        tickCycles(c64, 3)
+        c64.memory.write(0x0001, value: 0x20)
+
+        XCTAssertEqual(c64.tapeUnit.writePulses, [
+            .init(cyclesSincePreviousEdge: 0, levelHigh: true),
+            .init(cyclesSincePreviousEdge: 5, levelHigh: false)
+        ])
+        XCTAssertTrue(c64.emulationStatus.tapeHasCapturedWritePulses)
+        XCTAssertTrue(c64.emulationStatus.canExportCapturedTAP)
+        XCTAssertNotNil(c64.exportedCapturedTAPImage())
+    }
+
+    func testCapturedTapeExportStatusAndClearAreExposedAtMachineLevel() {
+        let c64 = C64()
+
+        c64.memory.write(0x0000, value: 0x28)
+        c64.memory.write(0x0001, value: 0x00)
+        c64.memory.write(0x0001, value: 0x08)
+
+        XCTAssertTrue(c64.emulationStatus.tapeHasCapturedWritePulses)
+        XCTAssertFalse(c64.emulationStatus.canExportCapturedTAP)
+        XCTAssertNil(c64.exportedCapturedTAPImage())
+
+        tickCycles(c64, 8)
+        c64.memory.write(0x0001, value: 0x00)
+
+        XCTAssertTrue(c64.emulationStatus.canExportCapturedTAP)
+        XCTAssertNotNil(c64.exportedCapturedTAPImage(version: 0))
+
+        c64.clearCapturedTapeWritePulses()
+
+        XCTAssertFalse(c64.emulationStatus.tapeHasCapturedWritePulses)
+        XCTAssertFalse(c64.emulationStatus.canExportCapturedTAP)
+        XCTAssertNil(c64.exportedCapturedTAPImage())
+    }
+
     func testUnmountTapeClearsRawPlaybackAndRestoresSenseAndFlagLines() {
         let c64 = C64()
 
-        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01])))
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01]), fileName: "sample.tap"))
         XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
         XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+        XCTAssertEqual(c64.emulationStatus.mountedTapeName, "sample.tap")
 
         c64.unmountTape()
 
@@ -226,6 +273,21 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
         XCTAssertTrue(c64.memory.cassetteSenseLineHigh)
         XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertNil(c64.emulationStatus.mountedTapeName)
+    }
+
+    func testMountTapeFromDataReportsDefaultTapeName() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01])))
+
+        XCTAssertEqual(c64.emulationStatus.mountedTapeName, "memory.tap")
+    }
+
+    private func tickCycles(_ c64: C64, _ count: Int) {
+        for _ in 0..<count {
+            c64.tickOneCycle()
+        }
     }
 
     private func makeTAP(payload: [UInt8]) -> Data {

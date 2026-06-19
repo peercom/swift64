@@ -48,12 +48,31 @@ struct C64App: App {
                 .keyboardShortcut("s", modifiers: [.command])
                 .disabled(!(emulator.emulationStatus?.canExportModifiedD64 ?? false) || !(emulator.emulationStatus?.diskHasUnsavedChanges ?? false))
 
+                Button("Export Captured TAP...") {
+                    saveFile(type: "tap", title: "Export Captured TAP", defaultName: emulator.suggestedCapturedTAPName) { url in
+                        do {
+                            try emulator.exportCapturedTAP(to: url)
+                        } catch {
+                            print("Could not export captured TAP: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .disabled(!(emulator.emulationStatus?.canExportCapturedTAP ?? false))
+
+                Button("Export Saved T64...") {
+                    saveFile(type: "t64", title: "Export Saved T64", defaultName: emulator.suggestedSavedT64Name) { url in
+                        do {
+                            try emulator.exportSavedT64(to: url)
+                        } catch {
+                            print("Could not export saved T64: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .disabled(!(emulator.emulationStatus?.canExportSavedT64 ?? false) || !(emulator.emulationStatus?.tapeHasUnsavedChanges ?? false))
+
                 Button("Open Tape Image (T64/TAP)...") {
                     openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
-                        if emulator.c64.mountTape(url) {
-                            emulator.refreshStatus()
-                            print("Tape mounted: \(url.lastPathComponent)")
-                        }
+                        emulator.mountTape(url)
                     }
                 }
                 .keyboardShortcut("t", modifiers: [.command])

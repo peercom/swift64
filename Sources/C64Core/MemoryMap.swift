@@ -55,6 +55,12 @@ public final class MemoryMap: Bus {
         !cassetteMotorLineHigh
     }
 
+    /// Called when the effective cassette write output level changes.
+    public var onCassetteWriteLineChange: ((Bool) -> Void)?
+
+    /// Called when the effective cassette motor-control output level changes.
+    public var onCassetteMotorLineChange: ((Bool) -> Void)?
+
     /// Last value driven on the CPU data bus, used for simple open-bus reads.
     var cpuDataBus: UInt8 = 0xFF
 
@@ -93,8 +99,14 @@ public final class MemoryMap: Bus {
     }
 
     public func resetCPUPort() {
+        let previousWriteLine = cassetteWriteLineHigh
+        let previousMotorLine = cassetteMotorLineHigh
         portDirection = 0x2F
         portData = 0x37
+        notifyCassetteOutputChanges(
+            previousWriteLine: previousWriteLine,
+            previousMotorLine: previousMotorLine
+        )
     }
 
     public func resetCartridge() {
@@ -178,11 +190,23 @@ public final class MemoryMap: Bus {
 
         // CPU port registers
         if addr == 0x0000 {
+            let previousWriteLine = cassetteWriteLineHigh
+            let previousMotorLine = cassetteMotorLineHigh
             portDirection = value
+            notifyCassetteOutputChanges(
+                previousWriteLine: previousWriteLine,
+                previousMotorLine: previousMotorLine
+            )
             return
         }
         if addr == 0x0001 {
+            let previousWriteLine = cassetteWriteLineHigh
+            let previousMotorLine = cassetteMotorLineHigh
             portData = value
+            notifyCassetteOutputChanges(
+                previousWriteLine: previousWriteLine,
+                previousMotorLine: previousMotorLine
+            )
             return
         }
 
@@ -211,6 +235,18 @@ public final class MemoryMap: Bus {
             dbg.notifyRead(address, value: value)
         }
         return value
+    }
+
+    func notifyCassetteOutputChanges(previousWriteLine: Bool, previousMotorLine: Bool) {
+        let currentWriteLine = cassetteWriteLineHigh
+        if currentWriteLine != previousWriteLine {
+            onCassetteWriteLineChange?(currentWriteLine)
+        }
+
+        let currentMotorLine = cassetteMotorLineHigh
+        if currentMotorLine != previousMotorLine {
+            onCassetteMotorLineChange?(currentMotorLine)
+        }
     }
 
     func readUltimax(_ address: UInt16) -> UInt8 {

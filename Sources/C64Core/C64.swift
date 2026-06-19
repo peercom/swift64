@@ -41,11 +41,17 @@ public final class C64 {
         public let cpuJammed: Bool
         public let totalCycles: UInt64
         public let mountedDiskName: String?
+        public let mountedTapeName: String?
         public let mountedCartridgeName: String?
         public let mountedDiskFormat: DiskImage.Format?
         public let highLevelDiskFormat: DiskImage.Format?
         public let diskHasUnsavedChanges: Bool
         public let canExportModifiedD64: Bool
+        public let tapeHasCapturedWritePulses: Bool
+        public let canExportCapturedTAP: Bool
+        public let tapeHasUnsavedChanges: Bool
+        public let canExportSavedT64: Bool
+        public let tapeDecodeStatus: TapeUnit.TAPDecodeStatus
         public let mediaCapabilities: DiskImage.Capabilities?
         public let drive: Drive1541.StatusSnapshot
         public let lastFailureReason: String?
@@ -105,6 +111,9 @@ public final class C64 {
 
     /// Display name of the most recently mounted disk image, if any.
     public private(set) var mountedDiskName: String?
+
+    /// Display name of the mounted tape image, if any.
+    public private(set) var mountedTapeName: String?
 
     /// Display name of the mounted cartridge image, if any.
     public private(set) var mountedCartridgeName: String?
@@ -176,6 +185,20 @@ public final class C64 {
         // Expansion-port cartridges can drive NMI too.
         memory.onCartridgeNMIChange = { [weak self] _ in
             self?.updateNMI()
+        }
+
+        // CPU port cassette outputs → datasette write capture.
+        memory.onCassetteWriteLineChange = { [weak self] high in
+            guard let self = self else { return }
+            self.tapeUnit.observeCassetteWriteLine(
+                high: high,
+                atCycle: self.cpu.totalCycles,
+                motorEnabled: self.memory.cassetteMotorEnabled
+            )
+        }
+        memory.onCassetteMotorLineChange = { [weak self] _ in
+            guard let self = self else { return }
+            self.tapeUnit.observeCassetteMotor(enabled: self.memory.cassetteMotorEnabled)
         }
 
         // VIC → CPU IRQ
@@ -304,6 +327,22 @@ public final class C64 {
         diskDrive.markChangesSaved()
     }
 
+    public func exportedCapturedTAPImage(version: UInt8 = 1) -> Data? {
+        tapeUnit.capturedWriteTAP(version: version)
+    }
+
+    public func clearCapturedTapeWritePulses() {
+        tapeUnit.clearWriteCapture()
+    }
+
+    public var exportedT64Image: Data? {
+        tapeUnit.exportedT64Image
+    }
+
+    public func markExportedT64ImageSaved() {
+        tapeUnit.markChangesSaved()
+    }
+
     public var emulationStatus: EmulationStatus {
         EmulationStatus(
             running: running,
@@ -312,11 +351,17 @@ public final class C64 {
             cpuJammed: cpu.jammed,
             totalCycles: cpu.totalCycles,
             mountedDiskName: mountedDiskName,
+            mountedTapeName: effectiveMountedTapeName,
             mountedCartridgeName: mountedCartridgeName,
             mountedDiskFormat: mountedDiskImage?.format,
             highLevelDiskFormat: diskDrive.mountedFormat,
             diskHasUnsavedChanges: diskDrive.hasUnsavedChanges,
             canExportModifiedD64: diskDrive.exportedD64Image != nil,
+            tapeHasCapturedWritePulses: !tapeUnit.writePulses.isEmpty,
+            canExportCapturedTAP: tapeUnit.capturedWriteTAP() != nil,
+            tapeHasUnsavedChanges: tapeUnit.hasUnsavedChanges,
+            canExportSavedT64: tapeUnit.exportedT64Image != nil,
+            tapeDecodeStatus: tapeUnit.tapDecodeStatus,
             mediaCapabilities: mountedDiskImage?.capabilities,
             drive: drive1541.statusSnapshot,
             lastFailureReason: lastFailureReason ?? drive1541.lastFailureReason
@@ -357,13 +402,14 @@ public final class C64 {
     /// Mount a T64/TAP tape image.
     public func mountTape(_ url: URL) -> Bool {
         guard let data = try? Data(contentsOf: url) else { return false }
-        return mountTape(data)
+        return mountTape(data, fileName: url.lastPathComponent)
     }
 
     /// Mount a T64/TAP tape image from data.
     @discardableResult
-    public func mountTape(_ data: Data) -> Bool {
+    public func mountTape(_ data: Data, fileName: String? = nil) -> Bool {
         guard tapeUnit.mount(data) else { return false }
+        mountedTapeName = fileName ?? defaultTapeName(for: tapeUnit.format)
         prepareMountedTape()
         clearFailureStatus()
         return true
@@ -371,6 +417,7 @@ public final class C64 {
 
     public func unmountTape() {
         tapeUnit.unmount()
+        mountedTapeName = nil
         memory.cassetteSenseLineHigh = true
         cia1.setFlagLine(high: true)
         clearFailureStatus()
@@ -382,6 +429,24 @@ public final class C64 {
 
         if tapeUnit.format == .tap && tapeUnit.startRawPlayback() {
             memory.cassetteSenseLineHigh = false
+        }
+    }
+
+    private var effectiveMountedTapeName: String? {
+        if let mountedTapeName {
+            return mountedTapeName
+        }
+        if tapeUnit.format == .t64 {
+            return "saved-tape.t64"
+        }
+        return defaultTapeName(for: tapeUnit.format)
+    }
+
+    private func defaultTapeName(for format: TapeUnit.Format?) -> String? {
+        switch format {
+        case .t64: return "memory.t64"
+        case .tap: return "memory.tap"
+        case nil: return nil
         }
     }
 
@@ -510,6 +575,7 @@ public final class C64 {
 
         // Set default CPU port
         memory.resetCPUPort()
+        tapeUnit.clearWriteCapture()
         memory.resetCartridge()
 
         // Reset CPU
@@ -531,6 +597,7 @@ public final class C64 {
         cia1.reset()
         cia2.reset()
         memory.resetCPUPort()
+        tapeUnit.clearWriteCapture()
         memory.resetCartridge()
         updateIRQ()
         updateNMI()

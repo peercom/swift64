@@ -250,7 +250,7 @@ public final class KernalTraps {
 
     func handleSave(cpu: CPU6502, memory: MemoryMap) -> Bool {
         let deviceNum = memory.ram[Int(KernalTraps.device)]
-        guard (8...11).contains(deviceNum) else { return false }
+        guard deviceNum == 1 || (8...11).contains(deviceNum) else { return false }
 
         let filename = loadRequestFilename(memory: memory)
         let startPointer = Int(cpu.a)
@@ -266,18 +266,61 @@ public final class KernalTraps {
             return true
         }
 
+        let payload = [UInt8(startAddress & 0xFF), UInt8(startAddress >> 8)] + Array(memory.ram[Int(startAddress)..<Int(endAddress)])
+
+        if deviceNum == 1 {
+            return saveToTape(
+                cpu: cpu,
+                memory: memory,
+                filename: filename,
+                payload: payload,
+                startAddress: startAddress,
+                endAddress: endAddress
+            )
+        }
+
         guard let drive = diskDrive, drive.isMounted else {
             debugLog("[TRAP] SAVE: device \(deviceNum) has no mounted disk")
             failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
             return true
         }
 
-        let payload = [UInt8(startAddress & 0xFF), UInt8(startAddress >> 8)] + Array(memory.ram[Int(startAddress)..<Int(endAddress)])
         debugLog("[TRAP] SAVE: device=\(deviceNum) filename=\"\(filename)\" start=$\(String(startAddress, radix: 16, uppercase: true)) end=$\(String(endAddress, radix: 16, uppercase: true)) bytes=\(payload.count)")
         printToScreen(memory: memory, text: "\rSAVING \(filename)\r")
 
         guard drive.savePRG(filename: filename, data: payload) else {
             debugLog("[TRAP] SAVE failed: filename=\"\(filename)\" mounted=\(drive.isMounted)")
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.x = UInt8(endAddress & 0xFF)
+        cpu.y = UInt8(endAddress >> 8)
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    private func saveToTape(
+        cpu: CPU6502,
+        memory: MemoryMap,
+        filename: String,
+        payload: [UInt8],
+        startAddress: UInt16,
+        endAddress: UInt16
+    ) -> Bool {
+        guard let tape = tapeUnit else {
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        debugLog("[TRAP] TAPE SAVE: filename=\"\(filename)\" start=$\(String(startAddress, radix: 16, uppercase: true)) end=$\(String(endAddress, radix: 16, uppercase: true)) bytes=\(payload.count)")
+        printToScreen(memory: memory, text: "\rSAVING \(filename)\r")
+
+        guard tape.savePRG(filename: filename, data: payload) else {
+            debugLog("[TRAP] TAPE SAVE failed: filename=\"\(filename)\" format=\(String(describing: tape.format))")
             failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
             return true
         }

@@ -148,6 +148,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
 - TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
 - TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
+- Stock CBM TAP files now decode short/medium/long pulse pairs into parity-checked bytes for raw PRG-like blocks, header+data block pairs, multiple named programs per TAP, duplicate header/data layouts, clean duplicate data fallback after a parity-damaged first copy, cross-copy byte voting when duplicate data copies have different parity-damaged bytes, and conservative rejection of conflicting duplicate data copies
+- TAP mounts now expose decode diagnostics through emulator status, distinguishing raw pulse-only playback, decoded standard CBM programs, malformed/parity-damaged blocks, incomplete header/data pairs, and conflicting duplicate data copies
+- The 6510 cassette write and motor-control outputs now emit effective line-change callbacks, and the datasette captures motor-gated write pulse timing with C64 status/API visibility, TAP v0/v1 export, and macOS File/toolbar export actions for future SAVE/write support
+- Kernal-trap SAVE to tape device 1 now creates or appends to a virtual T64 image with C64 status/API visibility and macOS export actions, while mounted TAP images are left untouched
+- Mounted tape names now surface through C64 status and the macOS sidebar/popover, and virtual T64 SAVE output round-trips through the tape LOAD trap
+- macOS tape opens now use the same sandbox-safe user-selected file path as disk images, covering menu opens, toolbar opens, and drag/drop
 - Tape image replacement now clears stale raw TAP playback cursors, signal level, and pulse data so T64/TAP swaps cannot inherit the previous tape's signal path
 - T64 mounting now rejects directory entries whose payload ranges fall outside the image, preventing mounted-but-unreadable tape state after corrupt media swaps
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks

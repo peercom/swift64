@@ -70,6 +70,41 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertTrue(memory.cassetteMotorEnabled)
     }
 
+    func testCPUDataPortNotifiesCassetteOutputLineChanges() {
+        let memory = MemoryMap()
+        var writeLevels: [Bool] = []
+        var motorLevels: [Bool] = []
+        memory.onCassetteWriteLineChange = { writeLevels.append($0) }
+        memory.onCassetteMotorLineChange = { motorLevels.append($0) }
+
+        memory.write(0x0000, value: 0x28)
+        memory.write(0x0001, value: 0x08)
+        memory.write(0x0001, value: 0x28)
+        memory.write(0x0001, value: 0x28)
+        memory.write(0x0001, value: 0x00)
+
+        XCTAssertEqual(writeLevels, [true, false])
+        XCTAssertEqual(motorLevels, [false, true, false])
+    }
+
+    func testCPUDataDirectionChangesNotifyEffectiveCassetteOutputLevels() {
+        let memory = MemoryMap()
+        var writeLevels: [Bool] = []
+        var motorLevels: [Bool] = []
+        memory.onCassetteWriteLineChange = { writeLevels.append($0) }
+        memory.onCassetteMotorLineChange = { motorLevels.append($0) }
+
+        memory.write(0x0001, value: 0x08)
+        writeLevels.removeAll()
+        motorLevels.removeAll()
+
+        memory.write(0x0000, value: 0x00)
+        memory.write(0x0000, value: 0x28)
+
+        XCTAssertEqual(writeLevels, [false, true])
+        XCTAssertEqual(motorLevels, [true, false])
+    }
+
     func testROMBankingReadsROMsAndWritesRAMUnderneath() {
         let memory = MemoryMap()
         memory.basicROM[0] = 0xBA
