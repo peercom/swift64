@@ -7,9 +7,11 @@ final class VIA6522Tests: XCTestCase {
         var irqStates: [Bool] = []
         var ca2States: [Bool] = []
         var cb2States: [Bool] = []
+        var cb1States: [Bool] = []
         via.onInterrupt = { irqStates.append($0) }
         via.onCA2Change = { ca2States.append($0) }
         via.onCB2Change = { cb2States.append($0) }
+        via.onCB1Change = { cb1States.append($0) }
 
         via.portAInput = 0xA5
         via.portBInput = 0x5A
@@ -38,9 +40,11 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ier, 0)
         XCTAssertTrue(via.ca2OutputState)
         XCTAssertTrue(via.cb2OutputState)
+        XCTAssertTrue(via.cb1OutputState)
         XCTAssertEqual(irqStates.last, false)
         XCTAssertEqual(ca2States.last, true)
         XCTAssertEqual(cb2States.last, true)
+        XCTAssertEqual(cb1States.last, true)
     }
 
     func testCA1PositiveEdgeSetsIFRAndIRQWhenEnabled() {
@@ -482,6 +486,219 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, 0)
     }
 
+    func testShiftRegisterExternalCB1OutputShiftsMSBFirstAndSetsInterrupt() {
+        let via = VIA6522()
+        var irqStates: [Bool] = []
+        via.onInterrupt = { irqStates.append($0) }
+        via.writeRegister(0x0B, value: 0x1C) // SR mode 7: shift out under external CB1 clock
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0xA5)
+
+        let states = pulseExternalShiftOutput(via, count: 8)
+
+        XCTAssertEqual(states, [true, false, true, false, false, true, false, true])
+        XCTAssertEqual(via.shiftRegister, 0x00)
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
+        XCTAssertEqual(irqStates.last, true)
+    }
+
+    func testShiftRegisterExternalCB1OutputNotifiesCB2Changes() {
+        let via = VIA6522()
+        var states: [Bool] = []
+        via.onCB2Change = { states.append($0) }
+        via.writeRegister(0x0B, value: 0x1C)
+        via.writeRegister(0x0A, value: 0x55)
+
+        _ = pulseExternalShiftOutput(via, count: 8)
+
+        XCTAssertEqual(states, [false, true, false, true, false, true, false, true])
+    }
+
+    func testShiftRegisterWriteResetsExternalCB1OutputCounter() {
+        let via = VIA6522()
+        via.writeRegister(0x0B, value: 0x1C)
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0xF0)
+        _ = pulseExternalShiftOutput(via, count: 4)
+
+        via.writeRegister(0x0A, value: 0x0F)
+
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        _ = pulseExternalShiftOutput(via, count: 4)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, 0)
+
+        _ = pulseExternalShiftOutput(via, count: 4)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+    }
+
+    func testShiftRegisterPhi2InputShiftsCB2BitsAndStopsAfterByte() {
+        let via = VIA6522()
+        var irqStates: [Bool] = []
+        via.onInterrupt = { irqStates.append($0) }
+        via.writeRegister(0x0B, value: 0x08) // SR mode 2: shift in under PHI2
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0x00)
+
+        shiftPhi2Input(via, bits: [true, false, true, false, false, true, false, true])
+
+        XCTAssertEqual(via.shiftRegister, 0xA5)
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        XCTAssertFalse(via.shiftRegisterPhi2Active)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
+        XCTAssertEqual(irqStates.last, true)
+
+        via.cb2 = false
+        via.tick()
+        XCTAssertEqual(via.shiftRegister, 0xA5)
+    }
+
+    func testShiftRegisterPhi2OutputShiftsMSBFirstAndStopsAfterByte() {
+        let via = VIA6522()
+        via.writeRegister(0x0B, value: 0x18) // SR mode 6: shift out under PHI2
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0xA5)
+
+        let states = shiftPhi2Output(via, count: 8)
+
+        XCTAssertEqual(states, [true, false, true, false, false, true, false, true])
+        XCTAssertEqual(via.shiftRegister, 0x00)
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        XCTAssertFalse(via.shiftRegisterPhi2Active)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+
+        via.tick()
+        XCTAssertTrue(via.cb2OutputState)
+    }
+
+    func testShiftRegisterReadStartsPhi2InputTransferAndClearsInterrupt() {
+        let via = VIA6522()
+        via.writeRegister(0x0B, value: 0x08)
+        via.writeRegister(0x0E, value: 0x84)
+        via.setIFR(VIA6522.IRQ.sr)
+
+        _ = via.readRegister(0x0A)
+
+        XCTAssertTrue(via.shiftRegisterPhi2Active)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, 0)
+    }
+
+    func testShiftRegisterPhi2ModesEmitCB1OutputClockPulses() {
+        let via = VIA6522()
+        var states: [Bool] = []
+        via.onCB1Change = { states.append($0) }
+        via.writeRegister(0x0B, value: 0x08)
+        via.writeRegister(0x0A, value: 0x00)
+
+        via.tick()
+        via.tick()
+
+        XCTAssertEqual(states, [false, true, false, true])
+        XCTAssertTrue(via.cb1OutputState)
+    }
+
+    func testShiftRegisterTimer2InputShiftsCB2BitsAndStopsAfterByte() {
+        let via = VIA6522()
+        via.writeRegister(0x08, value: 0x00)
+        via.writeRegister(0x0B, value: 0x04) // SR mode 1: shift in under T2 control
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0x00)
+
+        shiftTimer2Input(via, bits: [true, false, true, false, false, true, false, true])
+
+        XCTAssertEqual(via.shiftRegister, 0xA5)
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        XCTAssertFalse(via.shiftRegisterTimer2Active)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+
+        via.cb2 = false
+        via.tick()
+        XCTAssertEqual(via.shiftRegister, 0xA5)
+    }
+
+    func testShiftRegisterTimer2OutputShiftsMSBFirstAndStopsAfterByte() {
+        let via = VIA6522()
+        via.writeRegister(0x08, value: 0x00)
+        via.writeRegister(0x0B, value: 0x14) // SR mode 5: shift out under T2 control
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0xA5)
+
+        let states = shiftTimer2Output(via, count: 8)
+
+        XCTAssertEqual(states, [true, false, true, false, false, true, false, true])
+        XCTAssertEqual(via.shiftRegister, 0x00)
+        XCTAssertEqual(via.shiftRegisterBitCount, 0)
+        XCTAssertFalse(via.shiftRegisterTimer2Active)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, VIA6522.IRQ.sr)
+    }
+
+    func testShiftRegisterTimer2FreeRunOutputRecirculatesWithoutInterrupt() {
+        let via = VIA6522()
+        via.writeRegister(0x08, value: 0x00)
+        via.writeRegister(0x0B, value: 0x10) // SR mode 4: free-running shift out under T2 control
+        via.writeRegister(0x0E, value: 0x84)
+        via.writeRegister(0x0A, value: 0xA5)
+
+        let firstByte = shiftTimer2Output(via, count: 8)
+        let secondByte = shiftTimer2Output(via, count: 8)
+
+        XCTAssertEqual(firstByte, [true, false, true, false, false, true, false, true])
+        XCTAssertEqual(secondByte, firstByte)
+        XCTAssertEqual(via.shiftRegister, 0xA5)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.sr, 0)
+        XCTAssertTrue(via.shiftRegisterTimer2Active)
+    }
+
+    func testShiftRegisterTimer2ModesEmitCB1OutputClockPulses() {
+        let via = VIA6522()
+        var states: [Bool] = []
+        via.onCB1Change = { states.append($0) }
+        via.writeRegister(0x08, value: 0x00)
+        via.writeRegister(0x0B, value: 0x10)
+        via.writeRegister(0x0A, value: 0xA5)
+
+        via.tick()
+        via.tick()
+
+        XCTAssertEqual(states, [false, true, false, true])
+        XCTAssertTrue(via.cb1OutputState)
+    }
+
+    func testShiftRegisterExternalCB1ModesDoNotEmitCB1OutputClockPulses() {
+        let via = VIA6522()
+        var states: [Bool] = []
+        via.onCB1Change = { states.append($0) }
+        via.writeRegister(0x0B, value: 0x0C)
+        via.writeRegister(0x0A, value: 0x00)
+
+        pulseExternalShiftInput(via, bits: [true, false, true, false])
+
+        via.writeRegister(0x0B, value: 0x1C)
+        via.writeRegister(0x0A, value: 0xF0)
+        _ = pulseExternalShiftOutput(via, count: 4)
+
+        XCTAssertEqual(states, [])
+        XCTAssertTrue(via.cb1OutputState)
+    }
+
+    func testShiftRegisterTimer2ClockUsesLatchLowDelay() {
+        let via = VIA6522()
+        via.writeRegister(0x08, value: 0x01)
+        via.writeRegister(0x0B, value: 0x04)
+        via.writeRegister(0x0A, value: 0x00)
+
+        via.cb2 = true
+        via.tick()
+        XCTAssertEqual(via.shiftRegister, 0x00)
+        XCTAssertEqual(via.shiftRegisterTimer2Counter, 0x00)
+
+        via.tick()
+        XCTAssertEqual(via.shiftRegister, 0x01)
+        XCTAssertEqual(via.shiftRegisterTimer2Counter, 0x01)
+    }
+
     func testCA2HandshakeModeTransitionsOnPortARead() {
         let via = VIA6522()
         var states: [Bool] = []
@@ -587,5 +804,49 @@ final class VIA6522Tests: XCTestCase {
             via.cb1 = true
             via.tick()
         }
+    }
+
+    private func pulseExternalShiftOutput(_ via: VIA6522, count: Int) -> [Bool] {
+        var states: [Bool] = []
+        for _ in 0..<count {
+            via.cb1 = false
+            via.tick()
+            via.cb1 = true
+            via.tick()
+            states.append(via.cb2OutputState)
+        }
+        return states
+    }
+
+    private func shiftPhi2Input(_ via: VIA6522, bits: [Bool]) {
+        for bit in bits {
+            via.cb2 = bit
+            via.tick()
+        }
+    }
+
+    private func shiftPhi2Output(_ via: VIA6522, count: Int) -> [Bool] {
+        var states: [Bool] = []
+        for _ in 0..<count {
+            via.tick()
+            states.append(via.cb2OutputState)
+        }
+        return states
+    }
+
+    private func shiftTimer2Input(_ via: VIA6522, bits: [Bool]) {
+        for bit in bits {
+            via.cb2 = bit
+            via.tick()
+        }
+    }
+
+    private func shiftTimer2Output(_ via: VIA6522, count: Int) -> [Bool] {
+        var states: [Bool] = []
+        for _ in 0..<count {
+            via.tick()
+            states.append(via.cb2OutputState)
+        }
+        return states
     }
 }

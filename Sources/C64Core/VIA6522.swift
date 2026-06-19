@@ -70,6 +70,9 @@ public final class VIA6522 {
 
     var shiftRegister: UInt8 = 0x00
     var shiftRegisterBitCount: Int = 0
+    var shiftRegisterPhi2Active: Bool = false
+    var shiftRegisterTimer2Active: Bool = false
+    var shiftRegisterTimer2Counter: UInt8 = 0xFF
 
     // MARK: - Control registers
 
@@ -122,6 +125,9 @@ public final class VIA6522 {
     /// Callback when CB2 output state changes.
     public var onCB2Change: ((Bool) -> Void)?
 
+    /// Callback when CB1 output clock state changes in shift-register output-clock modes.
+    public var onCB1Change: ((Bool) -> Void)?
+
     /// Callback when port A is read (used by Drive1541 to clear byte-ready)
     public var onPortARead: (() -> Void)?
 
@@ -130,6 +136,9 @@ public final class VIA6522 {
 
     /// CB2 output state (for output modes in PCR bits 5-7)
     public var cb2OutputState: Bool = true
+
+    /// CB1 output clock state for internally clocked shift-register modes.
+    public var cb1OutputState: Bool = true
 
     // MARK: - Handshake lines
 
@@ -176,12 +185,16 @@ public final class VIA6522 {
 
         shiftRegister = 0x00
         shiftRegisterBitCount = 0
+        shiftRegisterPhi2Active = false
+        shiftRegisterTimer2Active = false
+        shiftRegisterTimer2Counter = 0xFF
         acr = 0x00
         pcr = 0x00
         ifr = 0x00
         ier = 0x00
         ca2OutputState = true
         cb2OutputState = true
+        cb1OutputState = true
 
         ca1Prev = ca1
         ca2Prev = ca2
@@ -194,6 +207,7 @@ public final class VIA6522 {
         onPortBWrite?()
         onCA2Change?(ca2OutputState)
         onCB2Change?(cb2OutputState)
+        onCB1Change?(cb1OutputState)
     }
 
     // MARK: - Tick
@@ -226,6 +240,8 @@ public final class VIA6522 {
         if acr & 0x20 == 0 {
             countTimer2()
         }
+        clockShiftRegisterTimer2()
+        clockShiftRegisterPhi2()
 
         // Check handshake line edges
         checkCA1Edge()
@@ -373,15 +389,121 @@ public final class VIA6522 {
 
     func resetShiftRegisterCounter() {
         shiftRegisterBitCount = 0
+        shiftRegisterTimer2Counter = timer2LatchLow
+    }
+
+    func beginShiftRegisterTransferIfNeeded() {
+        switch shiftRegisterMode() {
+        case 0x01, 0x05:
+            shiftRegisterPhi2Active = false
+            shiftRegisterTimer2Active = true
+            shiftRegisterTimer2Counter = timer2LatchLow
+        case 0x02, 0x06:
+            shiftRegisterPhi2Active = true
+            shiftRegisterTimer2Active = false
+        case 0x04:
+            shiftRegisterPhi2Active = false
+            shiftRegisterTimer2Active = true
+            shiftRegisterTimer2Counter = timer2LatchLow
+        default:
+            shiftRegisterPhi2Active = false
+            shiftRegisterTimer2Active = false
+        }
+    }
+
+    func clockShiftRegisterTimer2() {
+        guard shiftRegisterTimer2Active else { return }
+
+        if shiftRegisterTimer2Counter > 0 {
+            shiftRegisterTimer2Counter &-= 1
+            return
+        }
+
+        shiftRegisterTimer2Counter = timer2LatchLow
+        switch shiftRegisterMode() {
+        case 0x01:
+            pulseShiftRegisterCB1OutputClock()
+            shiftRegister = (shiftRegister << 1) | (cb2 ? 1 : 0)
+            advanceShiftRegisterCounter(stopAfterByte: true)
+
+        case 0x04:
+            pulseShiftRegisterCB1OutputClock()
+            shiftOutRegisterBitToCB2(recirculate: true)
+
+        case 0x05:
+            pulseShiftRegisterCB1OutputClock()
+            shiftOutRegisterBitToCB2()
+            advanceShiftRegisterCounter(stopAfterByte: true)
+
+        default:
+            shiftRegisterTimer2Active = false
+        }
+    }
+
+    func clockShiftRegisterPhi2() {
+        guard shiftRegisterPhi2Active else { return }
+
+        switch shiftRegisterMode() {
+        case 0x02:
+            pulseShiftRegisterCB1OutputClock()
+            shiftRegister = (shiftRegister << 1) | (cb2 ? 1 : 0)
+            advanceShiftRegisterCounter(stopAfterByte: true)
+
+        case 0x06:
+            pulseShiftRegisterCB1OutputClock()
+            shiftOutRegisterBitToCB2()
+            advanceShiftRegisterCounter(stopAfterByte: true)
+
+        default:
+            shiftRegisterPhi2Active = false
+        }
     }
 
     func clockShiftRegisterExternalCB1() {
-        guard shiftRegisterMode() == 0x03 else { return }
+        switch shiftRegisterMode() {
+        case 0x03:
+            shiftRegister = (shiftRegister << 1) | (cb2 ? 1 : 0)
+            advanceShiftRegisterCounter(stopAfterByte: false)
 
-        shiftRegister = (shiftRegister << 1) | (cb2 ? 1 : 0)
+        case 0x07:
+            shiftOutRegisterBitToCB2()
+            advanceShiftRegisterCounter(stopAfterByte: false)
+
+        default:
+            break
+        }
+    }
+
+    func setCB1OutputState(_ state: Bool) {
+        guard cb1OutputState != state else { return }
+        cb1OutputState = state
+        onCB1Change?(state)
+    }
+
+    func pulseShiftRegisterCB1OutputClock() {
+        setCB1OutputState(false)
+        setCB1OutputState(true)
+    }
+
+    func shiftOutRegisterBitToCB2(recirculate: Bool = false) {
+        let nextBit = shiftRegister & 0x80 != 0
+        if cb2OutputState != nextBit {
+            cb2OutputState = nextBit
+            onCB2Change?(nextBit)
+        }
+        shiftRegister = recirculate
+            ? ((shiftRegister << 1) | (nextBit ? 1 : 0))
+            : (shiftRegister << 1)
+    }
+
+    func advanceShiftRegisterCounter(stopAfterByte: Bool) {
         shiftRegisterBitCount += 1
         if shiftRegisterBitCount >= 8 {
             shiftRegisterBitCount = 0
+            if stopAfterByte {
+                shiftRegisterPhi2Active = false
+                shiftRegisterTimer2Active = false
+            }
             setIFR(IRQ.sr)
         }
     }
@@ -463,6 +585,7 @@ public final class VIA6522 {
         case 0x0A:
             clearIFR(IRQ.sr)
             resetShiftRegisterCounter()
+            beginShiftRegisterTransferIfNeeded()
             return shiftRegister
         case 0x0B: return acr
         case 0x0C: return pcr
@@ -534,12 +657,15 @@ public final class VIA6522 {
             shiftRegister = value
             resetShiftRegisterCounter()
             clearIFR(IRQ.sr)
+            beginShiftRegisterTransferIfNeeded()
         case 0x0B:
             let previousShiftMode = shiftRegisterMode()
             let previousPortBOut = portBOut
             acr = value
             if shiftRegisterMode() != previousShiftMode {
                 resetShiftRegisterCounter()
+                shiftRegisterPhi2Active = false
+                shiftRegisterTimer2Active = false
             }
             if shiftRegisterMode() == 0x00 {
                 clearIFR(IRQ.sr)

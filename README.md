@@ -52,7 +52,8 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
 - VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
-- VIA 6522 shift-register mode 3 now shifts CB2 data on external CB1 rising edges and raises the SR interrupt every eight pulses
+- VIA 6522 shift-register modes 1-7 now shift CB2 data in/out under Timer 2, PHI2, or external CB1 clock control, including free-running T2 output recirculation and eight-pulse SR interrupts
+- VIA 6522 internally clocked shift-register modes now expose CB1 output-clock pulses for peripherals that observe the generated serial clock
 - VIA 6522 Timer 1 now drives and notifies PB7 output changes from underflows and ACR mode changes when PB7 is configured as an output, while preserving external PB7 input reads for SYNC/write-protect style wiring
 - VIA 6522 Port A output changes now have observable callbacks on ORA/DDRA writes, giving disk/peripheral integrations the same kind of immediate pin-update hook already used on Port B
 - VIA 6522 CA2 handshake and pulse output modes now respond to ORA writes as well as ORA reads
