@@ -58,6 +58,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - NMI can now hijack BRK/IRQ vector fetches before the low vector byte is read, while late NMIs are prevented from half-hijacking only the high byte; held late NMIs are deferred until after the first handler opcode, and released transients are missed
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
+- SID 6581 combined noise waveforms now approximate DAC-bit drain toward noise LFSR lockup while 8580 preserves the cleaner digital combined-noise path; TEST-bit reseeding covers recovery from the locked state
+- SID waveform DAC output now floats briefly after all waveforms are disabled, preserving short sample-trick output windows before the latch decays to silence
+- SID 6581 saw+pulse combined waveform output now uses the saw/triangle DAC-mix approximation, while 8580 keeps pulse-gated digital saw masking
+- SID ADSR attack now switches to decay on the same envelope step that reaches maximum level instead of waiting for an extra attack period
+- SID ADSR decay now enters sustain on the same envelope decrement that reaches the current sustain level
+- SID output-stage volume DAC now uses model-specific curves: a stronger non-linear 6581 DC offset path and a smaller near-linear 8580 path
 - VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
 - VIA 6522 shift-register modes 1-7 now shift CB2 data in/out under Timer 2, PHI2, or external CB1 clock control, including free-running T2 output recirculation and eight-pulse SR interrupts
 - VIA 6522 internally clocked shift-register modes now expose CB1 output-clock pulses for peripherals that observe the generated serial clock

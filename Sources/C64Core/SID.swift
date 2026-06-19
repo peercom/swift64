@@ -42,6 +42,8 @@ public final class SID {
         var holdZero: Bool = false
         var gate: Bool = false
         var rateCounter: UInt16 = 0
+        var waveformDACOutput: UInt16 = 0
+        var waveformDACHoldCyclesRemaining: Int = 0
 
         var waveTriangle: Bool { control & 0x10 != 0 }
         var waveSawtooth: Bool { control & 0x20 != 0 }
@@ -83,7 +85,12 @@ public final class SID {
         model == .mos6581 ? 1.0 : 0.82
     }
     var volumeDACOffset: Int32 {
-        Int32(volume) * (model == .mos6581 ? 220 : 20)
+        switch model {
+        case .mos6581:
+            return Self.volumeDAC6581[Int(volume)]
+        case .mos8580:
+            return Self.volumeDAC8580[Int(volume)]
+        }
     }
     var normalizedFilterCutoff: Double {
         let normalized = Double(filterCutoff) / 2047.0
@@ -138,6 +145,17 @@ public final class SID {
 
     static let dataBusLatchHoldCycles = 0x2000
     static let envelopeRateCounterMask: UInt16 = 0x7FFF
+    static let waveformDACHoldCycles = 128
+
+    static let volumeDAC6581: [Int32] = [
+        0, 80, 170, 285, 425, 590, 780, 1_000,
+        1_245, 1_515, 1_805, 2_115, 2_450, 2_805, 3_175, 3_560
+    ]
+
+    static let volumeDAC8580: [Int32] = [
+        0, 18, 37, 57, 78, 100, 122, 144,
+        166, 188, 210, 232, 253, 274, 294, 314
+    ]
 
     static func exponentialPeriod(for envelopeLevel: UInt8) -> UInt16 {
         switch envelopeLevel {
@@ -212,6 +230,8 @@ public final class SID {
     func clockOscillator(_ v: Int) {
         let prevMSB = voices[v].accumulator & 0x800000
         let prevNoiseClock = voices[v].accumulator & 0x080000
+        let wasNoiseCombined = voices[v].waveNoise &&
+            (voices[v].waveTriangle || voices[v].waveSawtooth || voices[v].wavePulse)
 
         if voices[v].testBit {
             voices[v].accumulator = 0
@@ -231,6 +251,34 @@ public final class SID {
             let bit17 = (voices[v].shiftRegister >> 17) & 1
             let newBit = bit22 ^ bit17
             voices[v].shiftRegister = ((voices[v].shiftRegister << 1) | newBit) & 0x7FFFFF
+            if wasNoiseCombined && model == .mos6581 {
+                age6581CombinedNoiseRegister(v)
+            }
+        }
+
+        updateWaveformDACLatch(v)
+    }
+
+    func age6581CombinedNoiseRegister(_ v: Int) {
+        // The 6581's combined noise waveforms feed analog pull-down effects
+        // back into the noise generator. This deterministic approximation
+        // drains the DAC-tapped bits, so repeated clocks can lock the LFSR at
+        // zero until TEST reseeds it.
+        let dacTappedBits: UInt32 =
+            (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
+            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        voices[v].shiftRegister &= ~dacTappedBits
+    }
+
+    func updateWaveformDACLatch(_ v: Int) {
+        if voices[v].hasWaveform && !voices[v].testBit {
+            voices[v].waveformDACOutput = oscillatorOutput(v)
+            voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACHoldCycles
+        } else if voices[v].waveformDACHoldCyclesRemaining > 0 {
+            voices[v].waveformDACHoldCyclesRemaining -= 1
+            if voices[v].waveformDACHoldCyclesRemaining == 0 {
+                voices[v].waveformDACOutput = 0
+            }
         }
     }
 
@@ -288,12 +336,13 @@ public final class SID {
 
         switch voices[v].envelopeState {
         case .attack:
+            if voices[v].envelopeLevel < 0xFF {
+                voices[v].envelopeLevel &+= 1
+                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+            }
             if voices[v].envelopeLevel == 0xFF {
                 voices[v].envelopeState = .decay
                 voices[v].exponentialCounter = 0
-                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
-            } else {
-                voices[v].envelopeLevel &+= 1
                 voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
             }
         case .decay:
@@ -302,6 +351,9 @@ public final class SID {
                 break
             }
             clockExponentialDecayStep(v)
+            if voices[v].envelopeLevel <= sustainLevel(for: v) {
+                voices[v].envelopeState = .sustain
+            }
         case .sustain:
             break
         case .release:
@@ -334,6 +386,14 @@ public final class SID {
 
     func oscillatorOutput(_ v: Int) -> UInt16 {
         let noiseOutput = voices[v].waveNoise ? noiseWaveformOutput(v) : nil
+
+        if model == .mos6581 &&
+            voices[v].waveSawtooth &&
+            voices[v].wavePulse &&
+            !voices[v].waveTriangle &&
+            !voices[v].waveNoise {
+            return sawtoothWaveformOutput(v) & triangleWaveformOutput(v)
+        }
 
         var output: UInt16 = 0
         var hasOutput = false
@@ -412,9 +472,16 @@ public final class SID {
     }
 
     func waveformOutput(_ v: Int) -> Int16 {
-        guard voices[v].hasWaveform else { return 0 }
+        let rawOutput: UInt16
+        if voices[v].hasWaveform {
+            rawOutput = oscillatorOutput(v)
+        } else if voices[v].waveformDACHoldCyclesRemaining > 0 {
+            rawOutput = voices[v].waveformDACOutput
+        } else {
+            return 0
+        }
 
-        let centeredOutput = Int32(oscillatorOutput(v)) - 2048
+        let centeredOutput = Int32(rawOutput) - 2048
 
         // Apply envelope after centering the 12-bit waveform. With a zero
         // envelope the voice contributes silence, not a DC offset.
