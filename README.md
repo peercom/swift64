@@ -21,7 +21,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 |-----------|--------|
 | 6502 CPU | Cycle-accurate, 222 opcodes including undocumented |
 | VIC-II | Rasterline rendering, sprites, bad-line and sprite BA/AEC phases, low-phase VIC access decoding, two-cycle sprite DMA slots, CPU stalls, raster/collision IRQs |
-| SID | 3 voices, ADSR envelopes, waveforms, basic filter |
+| SID | 3 voices, ADSR envelopes with exponential decay/release, waveforms/noise LFSR, model-aware routed filter foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
@@ -34,7 +34,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - True-drive 1541 compatibility is read-focused and still being validated against protected G64/custom-loader disks
 - True-drive GCR writes, persistent disk-image write-back, and 1541 format support are deferred until read compatibility is stable
 - NIB/P64/flux-level media import and G64 write-back are not implemented; weak/random bit readback is available for low-level tracks that provide weak-bit ranges
-- SID filter is simplified
+- SID filter is simplified and not yet calibrated to measured 6581/8580 curves
 - Freezer button CPU-state capture, Super Snapshot V5 32K RAM-expansion setting, COMAL-80 grey-revision mode selection, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
 - Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
 
@@ -99,6 +99,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - EasyFlash CRT cartridges now parse type 32 images, switch banks through `$DE00`, control 8K/16K/Ultimax/off modes through `$DE02`, and expose the `$DF00` RAM page
 - RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
 - SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
+- SID voice routing now feeds a bounded state-variable filter with model-specific cutoff scaling and correct voice-3-off direct-output behavior
+- SID ADSR decay/release now use the exponential counter thresholds instead of decrementing linearly at every rate tick
+- SID sustain state now responds to lowered sustain levels by resuming decay instead of freezing at the old level
+- SID noise generation now clocks the LFSR on accumulator bit 19 and maps the documented shift-register taps into OSC/noise output bits
+- SID pulse waveforms now handle zero/max pulse-width edge cases and compare against the top 12 accumulator bits
+- SID TEST-bit handling now keeps noise cleared while held and reseeds the noise shift register when released
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
 - CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
 - CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source

@@ -15,6 +15,7 @@ final class SIDTests: XCTestCase {
         sid.sampleBuffer[0] = 0.5
         sid.sampleWritePos = 10
         sid.oscillatorMSBRose[1] = true
+        sid.noiseClockRose[2] = true
 
         sid.reset()
 
@@ -31,6 +32,7 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.sampleBuffer[0], 0)
         XCTAssertEqual(sid.sampleWritePos, 0)
         XCTAssertFalse(sid.oscillatorMSBRose.contains(true))
+        XCTAssertFalse(sid.noiseClockRose.contains(true))
     }
 
     func testPaddleRegistersReadLatchedAnalogValues() {
@@ -82,6 +84,58 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(memory.read(0xD41C), 0x42)
     }
 
+    func testNoiseWaveformMapsSIDShiftRegisterOutputBits() {
+        let sid = SID()
+        sid.voices[0].control = 0x80
+        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
+            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xFF0)
+
+        sid.voices[0].shiftRegister = (1 << 22) | (1 << 11) | (1 << 2)
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x890)
+    }
+
+    func testPulseWaveformWidthZeroIsSilentAndMaxIsHigh() {
+        let sid = SID()
+        sid.voices[0].control = 0x40
+        sid.voices[0].accumulator = 0xFFFFFF
+        sid.voices[0].pulseWidth = 0
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+
+        sid.voices[0].accumulator = 0
+        sid.voices[0].pulseWidth = 0x0FFF
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF)
+    }
+
+    func testPulseWaveformComparesTopTwelveAccumulatorBits() {
+        let sid = SID()
+        sid.voices[0].control = 0x40
+        sid.voices[0].pulseWidth = 0x0800
+
+        sid.voices[0].accumulator = 0x7FFFFF
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+
+        sid.voices[0].accumulator = 0x800000
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF)
+    }
+
+    func testCombinedSawPulseMasksSawtoothWithPulseOutput() {
+        let sid = SID()
+        sid.voices[0].control = 0x60
+        sid.voices[0].pulseWidth = 0x0800
+        sid.voices[0].accumulator = 0x700000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+
+        sid.voices[0].accumulator = 0x900000
+
+        XCTAssertEqual(sid.oscillatorOutput(0), 0x900)
+    }
+
     func testEnvelopeRateCounterWrapsInsteadOfCrashing() {
         let sid = SID()
         sid.voices[0].rateCounter = UInt16.max
@@ -92,6 +146,114 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.voices[0].rateCounter, 0)
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+    }
+
+    func testEnvelopeExponentialPeriodChangesAtSIDThresholds() {
+        XCTAssertEqual(SID.exponentialPeriod(for: 0xFF), 1)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x5D), 2)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x36), 4)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x1A), 8)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x0E), 16)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x06), 30)
+        XCTAssertEqual(SID.exponentialPeriod(for: 0x00), 1)
+    }
+
+    func testDecayUsesExponentialCounterBelowThreshold() {
+        let sid = SID()
+        sid.voices[0].envelopeState = .decay
+        sid.voices[0].envelopeLevel = 0x5D
+        sid.voices[0].exponentialPeriod = SID.exponentialPeriod(for: 0x5D)
+        sid.voices[0].sustainRelease = 0x00
+        sid.voices[0].attackDecay = 0x00
+        sid.voices[0].rateCounter = 8
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0x5D)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 1)
+
+        sid.voices[0].rateCounter = 8
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0x5C)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 0)
+        XCTAssertEqual(sid.voices[0].exponentialPeriod, 4)
+    }
+
+    func testSustainStateHoldsWhenEnvelopeIsAtCurrentSustainLevel() {
+        let sid = SID()
+        sid.voices[0].envelopeState = .sustain
+        sid.voices[0].envelopeLevel = 0x88
+        sid.voices[0].sustainRelease = 0x80
+        sid.voices[0].attackDecay = 0x00
+        sid.voices[0].rateCounter = 8
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeState, .sustain)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0x88)
+        XCTAssertEqual(sid.voices[0].rateCounter, 8)
+    }
+
+    func testLoweringSustainLevelResumesDecayFromSustainState() {
+        let sid = SID()
+        sid.voices[0].envelopeState = .sustain
+        sid.voices[0].envelopeLevel = 0x88
+        sid.voices[0].sustainRelease = 0x70
+        sid.voices[0].attackDecay = 0x00
+        sid.voices[0].rateCounter = 8
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeState, .decay)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0x88)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 1)
+        XCTAssertEqual(sid.voices[0].exponentialPeriod, 2)
+
+        sid.voices[0].rateCounter = 8
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeState, .decay)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0x87)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 0)
+        XCTAssertEqual(sid.voices[0].exponentialPeriod, 2)
+    }
+
+    func testReleaseHoldsZeroAfterEnvelopeReachesSilence() {
+        let sid = SID()
+        sid.voices[0].envelopeState = .release
+        sid.voices[0].envelopeLevel = 1
+        sid.voices[0].exponentialPeriod = 1
+        sid.voices[0].sustainRelease = 0x00
+        sid.voices[0].rateCounter = 8
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+        XCTAssertTrue(sid.voices[0].holdZero)
+
+        sid.voices[0].rateCounter = 8
+        sid.voices[0].exponentialCounter = 0
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 0)
+    }
+
+    func testGateAttackClearsHoldZeroAndExponentialDelay() {
+        let sid = SID()
+        sid.voices[0].control = 0x01
+        sid.voices[0].holdZero = true
+        sid.voices[0].envelopeState = .release
+        sid.voices[0].exponentialCounter = 12
+        sid.voices[0].exponentialPeriod = 30
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeState, .attack)
+        XCTAssertFalse(sid.voices[0].holdZero)
+        XCTAssertEqual(sid.voices[0].exponentialCounter, 0)
+        XCTAssertEqual(sid.voices[0].exponentialPeriod, 1)
     }
 
     func testZeroEnvelopeVoiceContributesSilenceToWaveformOutput() {
@@ -122,6 +284,74 @@ final class SIDTests: XCTestCase {
         XCTAssertGreaterThan(sample6581, sample8580 * 5)
     }
 
+    func testFilterRoutingProcessesSelectedVoicesInsteadOfPassingThrough() {
+        let direct = SID()
+        direct.voices[0].control = 0x20
+        direct.voices[0].accumulator = 0xFFFFFF
+        direct.voices[0].envelopeLevel = 0xFF
+        direct.writeRegister(0x18, value: 0x0F)
+
+        let filtered = SID()
+        filtered.voices[0].control = 0x20
+        filtered.voices[0].accumulator = 0xFFFFFF
+        filtered.voices[0].envelopeLevel = 0xFF
+        filtered.writeRegister(0x15, value: 0x00)
+        filtered.writeRegister(0x16, value: 0x08)
+        filtered.writeRegister(0x17, value: 0x01)
+        filtered.writeRegister(0x18, value: 0x1F)
+
+        direct.generateSample()
+        filtered.generateSample()
+
+        XCTAssertGreaterThan(direct.sampleBuffer[0], 0.9)
+        XCTAssertLessThan(filtered.sampleBuffer[0], direct.sampleBuffer[0] * 0.25)
+        XCTAssertNotEqual(filtered.filterBand, 0)
+    }
+
+    func testFilterCutoffResponseDiffersBySIDModel() {
+        let sid6581 = SID()
+        sid6581.model = .mos6581
+        sid6581.writeRegister(0x15, value: 0x00)
+        sid6581.writeRegister(0x16, value: 0x40)
+        sid6581.writeRegister(0x17, value: 0x01)
+        sid6581.writeRegister(0x18, value: 0x20)
+
+        let sid8580 = SID()
+        sid8580.model = .mos8580
+        sid8580.writeRegister(0x15, value: 0x00)
+        sid8580.writeRegister(0x16, value: 0x40)
+        sid8580.writeRegister(0x17, value: 0x01)
+        sid8580.writeRegister(0x18, value: 0x20)
+
+        let response6581 = sid6581.applyFilter(input: 20_000)
+        let response8580 = sid8580.applyFilter(input: 20_000)
+
+        XCTAssertGreaterThan(response8580, response6581)
+    }
+
+    func testVoice3OffMutesDirectVoiceButNotFilteredVoice3Path() {
+        let mutedDirect = SID()
+        mutedDirect.model = .mos8580
+        mutedDirect.voices[2].control = 0x20
+        mutedDirect.voices[2].accumulator = 0xFFFFFF
+        mutedDirect.voices[2].envelopeLevel = 0xFF
+        mutedDirect.writeRegister(0x18, value: 0x8F)
+
+        let filteredVoice3 = SID()
+        filteredVoice3.model = .mos8580
+        filteredVoice3.voices[2].control = 0x20
+        filteredVoice3.voices[2].accumulator = 0xFFFFFF
+        filteredVoice3.voices[2].envelopeLevel = 0xFF
+        filteredVoice3.writeRegister(0x17, value: 0x04)
+        filteredVoice3.writeRegister(0x18, value: 0xCF)
+
+        mutedDirect.generateSample()
+        filteredVoice3.generateSample()
+
+        XCTAssertLessThan(mutedDirect.sampleBuffer[0], 0.02)
+        XCTAssertGreaterThan(filteredVoice3.sampleBuffer[0], 0.8)
+    }
+
     func testOscillatorSyncResetsOnSourceMSBRisingEdge() {
         let sid = SID()
         sid.voices[0].control = 0x02
@@ -148,18 +378,70 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].accumulator, 0x123456)
     }
 
+    func testNoiseShiftRegisterClocksOnAccumulatorBit19RisingEdge() {
+        let sid = SID()
+        sid.voices[0].accumulator = 0x07FFFF
+        sid.voices[0].frequency = 1
+        sid.voices[0].shiftRegister = 0x400000
+
+        sid.clockOscillator(0)
+
+        XCTAssertTrue(sid.noiseClockRose[0])
+        XCTAssertEqual(sid.voices[0].shiftRegister, 1)
+        XCTAssertFalse(sid.oscillatorMSBRose[0])
+    }
+
+    func testNoiseShiftRegisterDoesNotClockOnAccumulatorMSBOnly() {
+        let sid = SID()
+        sid.voices[0].accumulator = 0x7FFFFF
+        sid.voices[0].frequency = 1
+        sid.voices[0].shiftRegister = 0x400000
+
+        sid.clockOscillator(0)
+
+        XCTAssertTrue(sid.oscillatorMSBRose[0])
+        XCTAssertFalse(sid.noiseClockRose[0])
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x400000)
+    }
+
     func testTestBitImmediatelyResetsOscillatorState() {
         let sid = SID()
         sid.voices[2].control = 0x20
         sid.voices[2].accumulator = 0xFFFFFF
         sid.voices[2].shiftRegister = 0x123456
         sid.oscillatorMSBRose[2] = true
+        sid.noiseClockRose[2] = true
 
         sid.writeRegister(0x12, value: 0x08)
 
         XCTAssertEqual(sid.voices[2].accumulator, 0)
         XCTAssertEqual(sid.voices[2].shiftRegister, 0)
         XCTAssertFalse(sid.oscillatorMSBRose[2])
+        XCTAssertFalse(sid.noiseClockRose[2])
         XCTAssertEqual(sid.readRegister(0x1B), 0)
+    }
+
+    func testHoldingTestBitKeepsNoiseShiftRegisterCleared() {
+        let sid = SID()
+        sid.voices[0].frequency = 0xFFFF
+        sid.writeRegister(0x04, value: 0x88)
+
+        sid.clockOscillator(0)
+        sid.clockOscillator(0)
+
+        XCTAssertEqual(sid.voices[0].accumulator, 0)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0)
+        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+    }
+
+    func testReleasingTestBitSeedsNoiseShiftRegister() {
+        let sid = SID()
+        sid.writeRegister(0x04, value: 0x88)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0)
+
+        sid.writeRegister(0x04, value: 0x80)
+
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
+        XCTAssertNotEqual(sid.oscillatorOutput(0), 0)
     }
 }

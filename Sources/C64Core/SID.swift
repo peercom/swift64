@@ -1,5 +1,11 @@
 import Foundation
 
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
 /// MOS 6581 SID (Sound Interface Device) emulation.
 /// Simplified but functional: 3 voices with waveforms, ADSR, and filter.
 public final class SID {
@@ -76,6 +82,18 @@ public final class SID {
     var volumeDACOffset: Int32 {
         Int32(volume) * (model == .mos6581 ? 220 : 20)
     }
+    var normalizedFilterCutoff: Double {
+        let normalized = Double(filterCutoff) / 2047.0
+        switch model {
+        case .mos6581:
+            return 0.003 + pow(normalized, 1.7) * 0.18
+        case .mos8580:
+            return 0.004 + normalized * 0.28
+        }
+    }
+    var filterDamping: Double {
+        max(0.35, 1.35 - Double(filterResonance) * 0.055)
+    }
 
     /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
     var paddleX: UInt8 = 0xFF
@@ -91,6 +109,8 @@ public final class SID {
 
     /// Per-cycle oscillator MSB rising-edge flags used for hard sync.
     var oscillatorMSBRose = [Bool](repeating: false, count: 3)
+    /// Per-cycle accumulator bit-19 rising-edge flags used to clock noise LFSRs.
+    var noiseClockRose = [Bool](repeating: false, count: 3)
 
     /// Ring buffer for audio output
     public var sampleBuffer = [Float](repeating: 0, count: 8192)
@@ -109,6 +129,25 @@ public final class SID {
         392, 977, 1954, 3126, 3907, 11720, 19532, 31251
     ]
 
+    static func exponentialPeriod(for envelopeLevel: UInt8) -> UInt16 {
+        switch envelopeLevel {
+        case 0xFF:
+            return 1
+        case 0x5D...0xFE:
+            return 2
+        case 0x36...0x5C:
+            return 4
+        case 0x1A...0x35:
+            return 8
+        case 0x0E...0x19:
+            return 16
+        case 0x06...0x0D:
+            return 30
+        default:
+            return 1
+        }
+    }
+
     // MARK: - Init
 
     public init() {}
@@ -126,6 +165,7 @@ public final class SID {
         filterHigh = 0
         sampleCycleCounter = 0
         oscillatorMSBRose = [Bool](repeating: false, count: 3)
+        noiseClockRose = [Bool](repeating: false, count: 3)
         sampleWritePos = 0
         sampleReadPos = 0
         sampleBuffer = [Float](repeating: 0, count: sampleBuffer.count)
@@ -156,6 +196,7 @@ public final class SID {
 
     func clockOscillator(_ v: Int) {
         let prevMSB = voices[v].accumulator & 0x800000
+        let prevNoiseClock = voices[v].accumulator & 0x080000
 
         if voices[v].testBit {
             voices[v].accumulator = 0
@@ -164,10 +205,13 @@ public final class SID {
             voices[v].accumulator = (voices[v].accumulator + UInt32(voices[v].frequency)) & 0xFFFFFF
         }
 
-        // Noise shift register clock on bit 19 transition
         let newMSB = voices[v].accumulator & 0x800000
         oscillatorMSBRose[v] = prevMSB == 0 && newMSB != 0
-        if prevMSB == 0 && newMSB != 0 {
+
+        // Noise shift register clock on accumulator bit 19 rising edge.
+        let newNoiseClock = voices[v].accumulator & 0x080000
+        noiseClockRose[v] = prevNoiseClock == 0 && newNoiseClock != 0
+        if noiseClockRose[v] {
             let bit22 = (voices[v].shiftRegister >> 22) & 1
             let bit17 = (voices[v].shiftRegister >> 17) & 1
             let newBit = bit22 ^ bit17
@@ -191,10 +235,24 @@ public final class SID {
         if gateOn && !voices[v].gate {
             voices[v].envelopeState = .attack
             voices[v].holdZero = false
+            voices[v].exponentialCounter = 0
+            voices[v].exponentialPeriod = 1
         } else if !gateOn && voices[v].gate {
             voices[v].envelopeState = .release
+            voices[v].exponentialCounter = 0
+            voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
         }
         voices[v].gate = gateOn
+
+        if voices[v].envelopeState == .sustain {
+            if voices[v].envelopeLevel > sustainLevel(for: v) {
+                voices[v].envelopeState = .decay
+                voices[v].exponentialCounter = 0
+                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+            } else {
+                return
+            }
+        }
 
         voices[v].rateCounter &+= 1
 
@@ -217,24 +275,43 @@ public final class SID {
         case .attack:
             if voices[v].envelopeLevel == 0xFF {
                 voices[v].envelopeState = .decay
+                voices[v].exponentialCounter = 0
+                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
             } else {
                 voices[v].envelopeLevel &+= 1
+                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
             }
         case .decay:
-            let sustainLevel = voices[v].sustain * 17  // 0-15 → 0-255
-            if voices[v].envelopeLevel > sustainLevel {
-                if voices[v].envelopeLevel > 0 {
-                    voices[v].envelopeLevel -= 1
-                }
-            } else {
+            if voices[v].envelopeLevel <= sustainLevel(for: v) {
                 voices[v].envelopeState = .sustain
+                break
             }
+            clockExponentialDecayStep(v)
         case .sustain:
             break
         case .release:
-            if voices[v].envelopeLevel > 0 {
-                voices[v].envelopeLevel -= 1
-            }
+            clockExponentialDecayStep(v)
+        }
+    }
+
+    func sustainLevel(for v: Int) -> UInt8 {
+        voices[v].sustain * 17  // 0-15 -> 0-255
+    }
+
+    func clockExponentialDecayStep(_ v: Int) {
+        guard !voices[v].holdZero else { return }
+
+        voices[v].exponentialCounter &+= 1
+        guard voices[v].exponentialCounter >= voices[v].exponentialPeriod else { return }
+        voices[v].exponentialCounter = 0
+
+        if voices[v].envelopeLevel > 0 {
+            voices[v].envelopeLevel -= 1
+            voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+        }
+        if voices[v].envelopeLevel == 0 {
+            voices[v].holdZero = true
+            voices[v].exponentialPeriod = 1
         }
     }
 
@@ -246,14 +323,14 @@ public final class SID {
         if voices[v].waveNoise {
             let sr = voices[v].shiftRegister
             var noiseBits: UInt32 = 0
-            noiseBits |= (sr >> 15) & 0x800
-            noiseBits |= (sr >> 14) & 0x400
-            noiseBits |= (sr >> 11) & 0x200
-            noiseBits |= (sr >> 9)  & 0x100
-            noiseBits |= (sr >> 8)  & 0x080
-            noiseBits |= (sr >> 5)  & 0x040
-            noiseBits |= (sr >> 3)  & 0x020
-            noiseBits |= (sr >> 2)  & 0x010
+            noiseBits |= ((sr >> 22) & 1) << 11
+            noiseBits |= ((sr >> 20) & 1) << 10
+            noiseBits |= ((sr >> 16) & 1) << 9
+            noiseBits |= ((sr >> 13) & 1) << 8
+            noiseBits |= ((sr >> 11) & 1) << 7
+            noiseBits |= ((sr >> 7) & 1) << 6
+            noiseBits |= ((sr >> 4) & 1) << 5
+            noiseBits |= ((sr >> 2) & 1) << 4
             return UInt16(noiseBits)
         }
 
@@ -285,8 +362,16 @@ public final class SID {
         }
 
         if voices[v].wavePulse {
-            let threshold = UInt32(voices[v].pulseWidth) << 12
-            let pulse: UInt16 = (acc >= threshold) ? 0xFFF : 0
+            let pulseWidth = min(voices[v].pulseWidth, 0x0FFF)
+            let pulse: UInt16
+            if pulseWidth == 0 {
+                pulse = 0
+            } else if pulseWidth == 0x0FFF {
+                pulse = 0xFFF
+            } else {
+                let phase = UInt16(acc >> 12)
+                pulse = phase >= pulseWidth ? 0xFFF : 0
+            }
             output = hasOutput ? output & pulse : pulse
         }
 
@@ -305,22 +390,21 @@ public final class SID {
     }
 
     func generateSample() {
-        var output: Int32 = 0
+        var directOutput: Int32 = 0
+        var filterInput: Int32 = 0
 
         for v in 0..<3 {
-            if v == 2 && voice3Off { continue }
             let voiceOut = Int32(waveformOutput(v))
-
-            // Apply filter routing
             let filtered = filterControl & (1 << v) != 0
+
             if filtered {
-                // Route through filter
-                output += voiceOut  // Simplified: actual filter applied below
-            } else {
-                output += voiceOut
+                filterInput += voiceOut
+            } else if !(v == 2 && voice3Off) {
+                directOutput += voiceOut
             }
         }
 
+        var output = directOutput + applyFilter(input: filterInput)
         output = Int32(Double(output) * voiceOutputScale)
         output += volumeDACOffset
 
@@ -334,6 +418,32 @@ public final class SID {
         // Write to ring buffer
         sampleBuffer[sampleWritePos] = sample
         sampleWritePos = (sampleWritePos + 1) % sampleBuffer.count
+    }
+
+    func applyFilter(input: Int32) -> Int32 {
+        guard filterInputEnabled || filterLP || filterBP || filterHP else { return input }
+
+        let inputDouble = Double(input)
+        let cutoff = normalizedFilterCutoff
+        let damping = filterDamping
+
+        filterLow += cutoff * filterBand
+        filterHigh = inputDouble - filterLow - damping * filterBand
+        filterBand += cutoff * filterHigh
+
+        filterLow = filterLow.clamped(to: -32768...32767)
+        filterBand = filterBand.clamped(to: -32768...32767)
+        filterHigh = filterHigh.clamped(to: -32768...32767)
+
+        var output = 0.0
+        if filterLP { output += filterLow }
+        if filterBP { output += filterBand }
+        if filterHP { output += filterHigh }
+        return Int32(output.clamped(to: -32768...32767))
+    }
+
+    var filterInputEnabled: Bool {
+        filterControl & 0x07 != 0
     }
 
     // MARK: - Register access
@@ -382,11 +492,17 @@ public final class SID {
     }
 
     func writeControlRegister(voice: Int, value: UInt8) {
+        let wasTestSet = voices[voice].testBit
         voices[voice].control = value
-        if value & 0x08 != 0 {
+        let isTestSet = value & 0x08 != 0
+
+        if isTestSet {
             voices[voice].accumulator = 0
             voices[voice].shiftRegister = 0
             oscillatorMSBRose[voice] = false
+            noiseClockRose[voice] = false
+        } else if wasTestSet && voices[voice].shiftRegister == 0 {
+            voices[voice].shiftRegister = 0x7FFFF8
         }
     }
 }
