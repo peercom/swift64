@@ -435,6 +435,42 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.readRegister(0x01), 0b1111_1011)
     }
 
+    func testKeyboardMatrixGhostsColumnsThroughPressedKeyBridge() {
+        let cia = CIA(isCIA1: true)
+        cia.keyboardMatrix[1] = 0b1111_1011
+        cia.keyboardMatrix[3] = 0b1101_1011
+        cia.writeRegister(0x02, value: 0xFF)
+        cia.writeRegister(0x00, value: 0b1111_1101)
+
+        XCTAssertEqual(cia.readRegister(0x01), 0b1101_1011)
+    }
+
+    func testKeyboardMatrixGhostsRowsThroughPressedKeyBridge() {
+        let cia = CIA(isCIA1: true)
+        cia.keyboardMatrix[1] = 0b1101_1011
+        cia.keyboardMatrix[3] = 0b1101_1111
+        cia.writeRegister(0x03, value: 0xFF)
+        cia.writeRegister(0x01, value: 0b1111_1011)
+
+        XCTAssertEqual(cia.readRegister(0x00), 0b1111_0101)
+    }
+
+    func testJoystickPort2LowRowsPropagateThroughKeyboardMatrix() {
+        let cia = CIA(isCIA1: true)
+        cia.keyboardMatrix[1] = 0b1111_1011
+        cia.joystickPort2 = 0b1111_1101
+
+        XCTAssertEqual(cia.readRegister(0x01), 0b1111_1011)
+    }
+
+    func testJoystickPort1LowColumnsPropagateThroughKeyboardMatrix() {
+        let cia = CIA(isCIA1: true)
+        cia.keyboardMatrix[3] = 0b1111_1011
+        cia.joystickPort1 = 0b1111_1011
+
+        XCTAssertEqual(cia.readRegister(0x00), 0b1111_0111)
+    }
+
     func testCIA1PortAReadReflectsConfiguredOutputs() {
         let cia = CIA(isCIA1: true)
         cia.writeRegister(0x02, value: 0b0000_1111)
@@ -576,6 +612,36 @@ final class CIATests: XCTestCase {
         shiftedBits.append(cia.spLineHigh)
 
         XCTAssertEqual(shiftedBits, [true, false, true, false, false, true, false, true])
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x89)
+        XCTAssertFalse(cia.interruptActive)
+    }
+
+    func testSerialOutputWrittenBeforeOutputModeStartsWhenModeEnabled() {
+        let cia = CIA(isCIA1: true)
+
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x88)
+        cia.writeRegister(0x0C, value: 0b1100_0011)
+
+        XCTAssertEqual(cia.serialOutputBitsRemaining, 0)
+
+        cia.writeRegister(0x0E, value: 0x41)
+
+        XCTAssertEqual(cia.serialOutputBitsRemaining, 8)
+
+        var shiftedBits: [Bool] = []
+        for _ in 0..<7 {
+            tickTimerAUnderflow(cia)
+            shiftedBits.append(cia.spLineHigh)
+            XCTAssertFalse(cia.interruptActive)
+        }
+
+        tickTimerAUnderflow(cia)
+        shiftedBits.append(cia.spLineHigh)
+
+        XCTAssertEqual(shiftedBits, [true, true, false, false, false, false, true, true])
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.readRegister(0x0D), 0x89)
         XCTAssertFalse(cia.interruptActive)

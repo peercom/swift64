@@ -48,6 +48,15 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
 - CIA CNT line rising edges now drive Timer A/Timer B CNT counting and SP serial input shifts, improving pin-level serial/timer compatibility for loaders and peripherals
+- CIA serial output now preserves SDR writes made before output mode is enabled and starts shifting the pending byte when CRA serial-output mode is selected
+- CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
+- CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
+- VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
+- VIA 6522 shift-register mode 3 now shifts CB2 data on external CB1 rising edges and raises the SR interrupt every eight pulses
+- VIA 6522 Timer 1 now drives and notifies PB7 output changes from underflows and ACR mode changes when PB7 is configured as an output, while preserving external PB7 input reads for SYNC/write-protect style wiring
+- VIA 6522 Port A output changes now have observable callbacks on ORA/DDRA writes, giving disk/peripheral integrations the same kind of immediate pin-update hook already used on Port B
+- VIA 6522 CA2 handshake and pulse output modes now respond to ORA writes as well as ORA reads
+- VIA 6522 CB2 manual, handshake, and pulse output modes now track PCR and Port B access with observable output-state callbacks, including CB1-edge handshake release
 - High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
 - High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, and status-channel readback
 - The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
@@ -114,6 +123,9 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
 - CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
 - CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source
+- CIA serial output now keeps SDR bytes pending across output-mode changes so software can prime the serial register before enabling CRA bit 6
+- CIA keyboard matrix reads now include multi-key bridge/phantom behavior instead of only direct key intersections
+- CIA joystick port 1/2 switch lows now feed the same keyboard matrix bridge model instead of only affecting final port bits
 - CIA timer output now drives PB6/PB7 pulse and toggle modes for software that observes user-port/timer pins
 - SID oscillator sync now resets voices on source MSB rising edges instead of source level, improving hard-sync behavior
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work

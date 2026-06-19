@@ -134,6 +134,7 @@ public final class CIA {
     var serialInputBitsReceived: Int = 0
     var serialOutputShift: UInt8 = 0
     var serialOutputBitsRemaining: Int = 0
+    var serialOutputPending: Bool = false
 
     // MARK: - Init
 
@@ -195,6 +196,7 @@ public final class CIA {
         serialInputBitsReceived = 0
         serialOutputShift = 0
         serialOutputBitsRemaining = 0
+        serialOutputPending = false
 
         onPortAWrite?(portA)
     }
@@ -410,6 +412,7 @@ public final class CIA {
         serialOutputBitsRemaining -= 1
 
         if serialOutputBitsRemaining == 0 {
+            serialOutputPending = false
             interruptData |= 0x08
             checkInterrupt()
         }
@@ -633,6 +636,7 @@ public final class CIA {
         case 0x0C:
             serialData = value
             serialOutputShift = value
+            serialOutputPending = true
             serialOutputBitsRemaining = serialOutputMode ? 8 : 0
 
         case 0x0D:
@@ -650,11 +654,16 @@ public final class CIA {
             // Timer A control
             let forceLoad = value & 0x10 != 0
             let startRisingEdge = timerAControl & 0x01 == 0 && value & 0x01 != 0
+            let serialOutputRisingEdge = timerAControl & 0x40 == 0 && value & 0x40 != 0
             timerAControl = value & ~0x10  // bit 4 is strobe only
             updateTODFrequencyFromControl()
             if startRisingEdge {
                 timerAOutputHigh = true
                 timerAPulseCyclesRemaining = 0
+            }
+            if serialOutputRisingEdge && serialOutputPending {
+                serialOutputShift = serialData
+                serialOutputBitsRemaining = 8
             }
             if forceLoad {
                 timerA = timerALatch
@@ -684,33 +693,53 @@ public final class CIA {
     /// Read keyboard from Port A. This supports the less common reverse scan:
     /// Port B drives columns, Port A reads rows.
     func readKeyboardPortA() -> UInt8 {
-        let columnSelect = portBOut
-        var result = portAOut
-
-        for row in 0..<8 {
-            for column in 0..<8 where columnSelect & (1 << column) == 0 {
-                if keyboardMatrix[row] & (1 << column) == 0 {
-                    result &= ~(1 << row)
-                }
-            }
-        }
-
-        return result
+        let (lowRows, _) = keyboardMatrixLowLines(
+            initialRows: ~portAOut | ~joystickPort2,
+            initialColumns: ~portBOut | ~joystickPort1
+        )
+        return portAOut & joystickPort2 & ~lowRows
     }
 
     /// Read keyboard from Port B. Port A drives rows, Port B reads columns.
     /// When a row bit in Port A is 0, all pressed keys in that row show as 0 in Port B.
     func readKeyboardPortB() -> UInt8 {
-        let rowSelect = portAOut
-        var result = portBOut
+        let (_, lowColumns) = keyboardMatrixLowLines(
+            initialRows: ~portAOut | ~joystickPort2,
+            initialColumns: ~portBOut | ~joystickPort1
+        )
+        return portBOut & joystickPort1 & ~lowColumns
+    }
 
-        // For each row that is selected (driven low), OR in the pressed keys
-        for row in 0..<8 {
-            if rowSelect & (1 << row) == 0 {
-                result &= keyboardMatrix[row]
+    func keyboardMatrixLowLines(initialRows: UInt8, initialColumns: UInt8) -> (rows: UInt8, columns: UInt8) {
+        var rows = initialRows
+        var columns = initialColumns
+        var changed = true
+
+        while changed {
+            let previousRows = rows
+            let previousColumns = columns
+
+            for row in 0..<8 where rows & UInt8(1 << row) != 0 {
+                columns |= pressedColumns(inRow: row)
             }
+
+            rows |= keyboardRowsConnected(toColumns: columns)
+
+            changed = rows != previousRows || columns != previousColumns
         }
 
-        return result
+        return (rows, columns)
+    }
+
+    func pressedColumns(inRow row: Int) -> UInt8 {
+        ~keyboardMatrix[row]
+    }
+
+    func keyboardRowsConnected(toColumns columns: UInt8) -> UInt8 {
+        var rows: UInt8 = 0
+        for row in 0..<8 where pressedColumns(inRow: row) & columns != 0 {
+            rows |= UInt8(1 << row)
+        }
+        return rows
     }
 }

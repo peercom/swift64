@@ -29,7 +29,7 @@ public final class VIA6522 {
 
     /// Effective output of port B
     public var portBOut: UInt8 {
-        (portB & ddrb) | (portBInput & ~ddrb)
+        portBValue(input: portBInput)
     }
 
     private var portAReadValue: UInt8 {
@@ -37,7 +37,7 @@ public final class VIA6522 {
     }
 
     private var portBReadValue: UInt8 {
-        (portB & ddrb) | ((portBInputLatch ?? portBInput) & ~ddrb)
+        portBValue(input: portBInputLatch ?? portBInput)
     }
 
     // MARK: - Timers
@@ -52,6 +52,8 @@ public final class VIA6522 {
     var pendingT1IRQ: Bool = false
     /// Latched high byte captured by reading Timer 1 low.
     var timer1HighLatched: UInt8?
+    /// Timer 1 output state when ACR routes Timer 1 to PB7.
+    var timer1PB7OutputHigh: Bool = false
 
     /// Timer 2 counter
     public var timer2Counter: UInt16 = 0xFFFF
@@ -67,6 +69,7 @@ public final class VIA6522 {
     // MARK: - Shift register
 
     var shiftRegister: UInt8 = 0x00
+    var shiftRegisterBitCount: Int = 0
 
     // MARK: - Control registers
 
@@ -79,9 +82,9 @@ public final class VIA6522 {
     public var acr: UInt8 = 0x00
 
     /// Peripheral Control Register
-    /// Bit 3-1: CB2 control
+    /// Bit 3-1: CA2 control
     /// Bit 0: CB1 edge (0=negative, 1=positive)
-    /// Bit 7-5: CA2 control
+    /// Bit 7-5: CB2 control
     /// Bit 4: CA1 edge (0=negative, 1=positive)
     public var pcr: UInt8 = 0x00
 
@@ -107,17 +110,26 @@ public final class VIA6522 {
     /// Callback when interrupt state changes
     public var onInterrupt: ((Bool) -> Void)?
 
+    /// Callback when effective port A output may have changed.
+    public var onPortAWrite: (() -> Void)?
+
     /// Callback when port B is written (used by Drive1541 to update bus immediately)
     public var onPortBWrite: (() -> Void)?
 
-    /// Callback when CA2 output state changes (used by Drive1541 for byte-ready gating)
+    /// Callback when CA2 output state changes (used by Drive1541 for byte-ready gating).
     public var onCA2Change: ((Bool) -> Void)?
+
+    /// Callback when CB2 output state changes.
+    public var onCB2Change: ((Bool) -> Void)?
 
     /// Callback when port A is read (used by Drive1541 to clear byte-ready)
     public var onPortARead: (() -> Void)?
 
     /// CA2 output state (for output modes in PCR bits 1-3)
     public var ca2OutputState: Bool = true
+
+    /// CB2 output state (for output modes in PCR bits 5-7)
+    public var cb2OutputState: Bool = true
 
     // MARK: - Handshake lines
 
@@ -154,6 +166,7 @@ public final class VIA6522 {
         timer1Fired = false
         pendingT1IRQ = false
         timer1HighLatched = nil
+        timer1PB7OutputHigh = false
 
         timer2Counter = 0xFFFF
         timer2LatchLow = 0xFF
@@ -162,11 +175,13 @@ public final class VIA6522 {
         pb6LineHigh = true
 
         shiftRegister = 0x00
+        shiftRegisterBitCount = 0
         acr = 0x00
         pcr = 0x00
         ifr = 0x00
         ier = 0x00
         ca2OutputState = true
+        cb2OutputState = true
 
         ca1Prev = ca1
         ca2Prev = ca2
@@ -175,8 +190,10 @@ public final class VIA6522 {
         ca1DebugCount = 0
 
         onInterrupt?(false)
+        onPortAWrite?()
         onPortBWrite?()
         onCA2Change?(ca2OutputState)
+        onCB2Change?(cb2OutputState)
     }
 
     // MARK: - Tick
@@ -193,6 +210,7 @@ public final class VIA6522 {
         timer1Counter &-= 1
         if timer1Counter == 0xFFFF {
             if !timer1Fired {
+                updateTimer1PB7Output()
                 ifr |= IRQ.timer1
                 updateIRQBit7()     // update bit 7 for correct IFR reads
                 pendingT1IRQ = true // delay IRQ line assertion by 1 cycle
@@ -231,6 +249,44 @@ public final class VIA6522 {
         }
     }
 
+    func portBValue(input: UInt8) -> UInt8 {
+        var value = (portB & ddrb) | (input & ~ddrb)
+        if acr & 0x80 != 0 && ddrb & 0x80 != 0 {
+            value = timer1PB7OutputHigh ? (value | 0x80) : (value & 0x7F)
+        }
+        return value
+    }
+
+    func updateTimer1PB7Output() {
+        guard acr & 0x80 != 0 else { return }
+
+        let previousPortBOut = portBOut
+        if acr & 0x40 != 0 {
+            timer1PB7OutputHigh.toggle()
+        } else {
+            timer1PB7OutputHigh = true
+        }
+        notifyPortBChanged(from: previousPortBOut)
+    }
+
+    func clearTimer1PB7OutputIfActive() {
+        guard acr & 0x80 != 0 else { return }
+
+        let previousPortBOut = portBOut
+        timer1PB7OutputHigh = false
+        notifyPortBChanged(from: previousPortBOut)
+    }
+
+    func notifyPortBChanged(from previousValue: UInt8) {
+        guard portBOut != previousValue else { return }
+        onPortBWrite?()
+    }
+
+    func notifyPortAChanged(from previousValue: UInt8) {
+        guard portAOut != previousValue else { return }
+        onPortAWrite?()
+    }
+
     // MARK: - Handshake edge detection
 
     /// Debug counter for CA1 edge logging
@@ -264,11 +320,19 @@ public final class VIA6522 {
     private func checkCB1Edge() {
         let positiveEdge = pcr & 0x10 != 0
         let triggered = positiveEdge ? (!cb1Prev && cb1) : (cb1Prev && !cb1)
+        if !cb1Prev && cb1 {
+            clockShiftRegisterExternalCB1()
+        }
         if triggered {
             if acr & 0x02 != 0 {
                 portBInputLatch = portBInput
             }
             setIFR(IRQ.cb1)
+            let cb2Mode = (pcr >> 5) & 0x07
+            if (cb2Mode == 4 || cb2Mode == 5) && !cb2OutputState {
+                cb2OutputState = true
+                onCB2Change?(true)
+            }
         }
         cb1Prev = cb1
     }
@@ -301,6 +365,25 @@ public final class VIA6522 {
             setIFR(IRQ.cb2)
         }
         cb2Prev = cb2
+    }
+
+    func shiftRegisterMode() -> UInt8 {
+        (acr >> 2) & 0x07
+    }
+
+    func resetShiftRegisterCounter() {
+        shiftRegisterBitCount = 0
+    }
+
+    func clockShiftRegisterExternalCB1() {
+        guard shiftRegisterMode() == 0x03 else { return }
+
+        shiftRegister = (shiftRegister << 1) | (cb2 ? 1 : 0)
+        shiftRegisterBitCount += 1
+        if shiftRegisterBitCount >= 8 {
+            shiftRegisterBitCount = 0
+            setIFR(IRQ.sr)
+        }
     }
 
     // MARK: - Interrupt management
@@ -336,25 +419,14 @@ public final class VIA6522 {
         case 0x00:  // ORB/IRB - Port B
             clearIFR(IRQ.cb1 | IRQ.cb2)
             let value = portBReadValue
+            handleCB2PortBHandshakeAccess()
             portBInputLatch = nil
             return value
 
         case 0x01:  // ORA/IRA - Port A (with handshake)
             clearIFR(IRQ.ca1 | IRQ.ca2)
             let value = portAReadValue
-            // CA2 handshake output: set CA2 low on port A read
-            let ca2Mode01 = (pcr >> 1) & 0x07
-            if ca2Mode01 == 4 && ca2OutputState {  // handshake: go low
-                ca2OutputState = false
-                onCA2Change?(false)
-            } else if ca2Mode01 == 5 {  // pulse: briefly low then high
-                if ca2OutputState {
-                    ca2OutputState = false
-                    onCA2Change?(false)
-                }
-                ca2OutputState = true
-                onCA2Change?(true)
-            }
+            handleCA2PortAHandshakeAccess()
             onPortARead?()
             portAInputLatch = nil
             return value
@@ -388,7 +460,10 @@ public final class VIA6522 {
             }
             return UInt8(timer2Counter >> 8)
 
-        case 0x0A: return shiftRegister
+        case 0x0A:
+            clearIFR(IRQ.sr)
+            resetShiftRegisterCounter()
+            return shiftRegister
         case 0x0B: return acr
         case 0x0C: return pcr
         case 0x0D: return ifr
@@ -407,16 +482,23 @@ public final class VIA6522 {
         case 0x00:  // ORB - Port B
             portB = value
             clearIFR(IRQ.cb1 | IRQ.cb2)
+            handleCB2PortBHandshakeAccess()
             onPortBWrite?()
 
         case 0x01:  // ORA - Port A (with handshake)
+            let previousPortAOut = portAOut
             portA = value
             clearIFR(IRQ.ca1 | IRQ.ca2)
+            handleCA2PortAHandshakeAccess()
+            notifyPortAChanged(from: previousPortAOut)
 
         case 0x02:
             ddrb = value
             onPortBWrite?()
-        case 0x03: ddra = value
+        case 0x03:
+            let previousPortAOut = portAOut
+            ddra = value
+            notifyPortAChanged(from: previousPortAOut)
 
         case 0x04:  // T1L-L (write to latch low)
             timer1Latch = (timer1Latch & 0xFF00) | UInt16(value)
@@ -427,6 +509,7 @@ public final class VIA6522 {
             timer1Fired = false
             pendingT1IRQ = false
             timer1HighLatched = nil
+            clearTimer1PB7OutputIfActive()
             clearIFR(IRQ.timer1)
 
         case 0x06:  // T1L-L
@@ -447,11 +530,23 @@ public final class VIA6522 {
             timer2HighLatched = nil
             clearIFR(IRQ.timer2)
 
-        case 0x0A: shiftRegister = value
+        case 0x0A:
+            shiftRegister = value
+            resetShiftRegisterCounter()
+            clearIFR(IRQ.sr)
         case 0x0B:
+            let previousShiftMode = shiftRegisterMode()
+            let previousPortBOut = portBOut
             acr = value
+            if shiftRegisterMode() != previousShiftMode {
+                resetShiftRegisterCounter()
+            }
+            if shiftRegisterMode() == 0x00 {
+                clearIFR(IRQ.sr)
+            }
             if value & 0x01 == 0 { portAInputLatch = nil }
             if value & 0x02 == 0 { portBInputLatch = nil }
+            notifyPortBChanged(from: previousPortBOut)
         case 0x0C:
             pcr = value
             // Update CA2 output state based on new PCR mode
@@ -465,6 +560,18 @@ public final class VIA6522 {
                 if ca2OutputState { ca2OutputState = false; onCA2Change?(false) }
             case 5: // pulse output: normally high
                 if !ca2OutputState { ca2OutputState = true; onCA2Change?(true) }
+            default: break // input modes
+            }
+            let cb2Mode0C = (value >> 5) & 0x07
+            switch cb2Mode0C {
+            case 6: // manual output low
+                if cb2OutputState { cb2OutputState = false; onCB2Change?(false) }
+            case 7: // manual output high
+                if !cb2OutputState { cb2OutputState = true; onCB2Change?(true) }
+            case 4: // handshake output: initially low
+                if cb2OutputState { cb2OutputState = false; onCB2Change?(false) }
+            case 5: // pulse output: normally high
+                if !cb2OutputState { cb2OutputState = true; onCB2Change?(true) }
             default: break // input modes
             }
 
@@ -481,9 +588,41 @@ public final class VIA6522 {
             updateIRQ()
 
         case 0x0F:  // ORA (no handshake)
+            let previousPortAOut = portAOut
             portA = value
+            notifyPortAChanged(from: previousPortAOut)
 
         default: break
+        }
+    }
+
+    func handleCA2PortAHandshakeAccess() {
+        let mode = (pcr >> 1) & 0x07
+        if mode == 4 && ca2OutputState {
+            ca2OutputState = false
+            onCA2Change?(false)
+        } else if mode == 5 {
+            if ca2OutputState {
+                ca2OutputState = false
+                onCA2Change?(false)
+            }
+            ca2OutputState = true
+            onCA2Change?(true)
+        }
+    }
+
+    func handleCB2PortBHandshakeAccess() {
+        let mode = (pcr >> 5) & 0x07
+        if mode == 4 && cb2OutputState {
+            cb2OutputState = false
+            onCB2Change?(false)
+        } else if mode == 5 {
+            if cb2OutputState {
+                cb2OutputState = false
+                onCB2Change?(false)
+            }
+            cb2OutputState = true
+            onCB2Change?(true)
         }
     }
 
