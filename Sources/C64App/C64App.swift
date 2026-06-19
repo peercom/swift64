@@ -36,6 +36,18 @@ struct C64App: App {
                 }
                 .keyboardShortcut("d", modifiers: [.command])
 
+                Button("Export Modified D64...") {
+                    saveFile(type: "d64", title: "Export Modified D64", defaultName: emulator.suggestedModifiedD64Name) { url in
+                        do {
+                            try emulator.exportModifiedD64(to: url)
+                        } catch {
+                            print("Could not export modified D64: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .keyboardShortcut("s", modifiers: [.command])
+                .disabled(!(emulator.emulationStatus?.canExportModifiedD64 ?? false) || !(emulator.emulationStatus?.diskHasUnsavedChanges ?? false))
+
                 Button("Open Tape Image (T64/TAP)...") {
                     openFile(types: ["t64", "tap"], title: "Open Tape Image") { url in
                         if emulator.c64.mountTape(url) {
@@ -114,6 +126,18 @@ struct C64App: App {
         }
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            handler(url)
+        }
+    }
+
+    func saveFile(type: String, title: String, defaultName: String, handler: @escaping (URL) -> Void) {
+        let panel = NSSavePanel()
+        panel.title = title
+        panel.allowedContentTypes = [.init(filenameExtension: type)].compactMap { $0 }
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = defaultName
 
         if panel.runModal() == .OK, let url = panel.url {
             handler(url)

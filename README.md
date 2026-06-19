@@ -9,7 +9,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Boots to the C64 BASIC screen
 - Keyboard input, joystick (numpad)
 - Audio output (SID chip)
-- Loads PRG, D64, G64, T64, TAP, standard CRT cartridge files, Action Replay, Action Replay 3, Action Replay 4, Final Cartridge I, Final Cartridge Plus, Final Cartridge III, Simon's BASIC, C64 Game System/System 3, Warp Speed, Magic Formel, Magic Desk, Ocean type 1, Fun Play/Power Play, Epyx FastLoad, Westermann Learning, Rex Utility, and EasyFlash CRTs
+- Loads PRG, D64, G64, T64, TAP, standard CRT cartridge files, Action Replay, KCS Power, Atomic Power/Nordic Power, Action Replay 3, Action Replay 4, Final Cartridge I, Final Cartridge Plus, Final Cartridge III, Simon's BASIC, Super Games, C64 Game System/System 3, Warp Speed, Stardos, Game Killer, Prophet64, EXOS, Freeze Frame, Freeze Machine, Snapshot64, Super Explode V5, Super Snapshot V5, MACH 5, Dinamic, Zaxxon/Super Zaxxon, COMAL-80, Structured BASIC, Ross, Dela EP64, Dela EP7x8, Dela EP256, Rex EP256, Mikro Assembler, Magic Formel, Magic Desk, Ocean type 1, Fun Play/Power Play, Epyx FastLoad, Westermann Learning, Rex Utility, and EasyFlash CRTs
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
 - Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
@@ -20,22 +20,22 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 | Component | Status |
 |-----------|--------|
 | 6502 CPU | Cycle-accurate, 222 opcodes including undocumented |
-| VIC-II | Rasterline rendering, sprites, bad-line CPU stalls, raster/collision IRQs |
+| VIC-II | Rasterline rendering, sprites, bad-line and sprite BA/AEC phases, low-phase VIC access decoding, two-cycle sprite DMA slots, CPU stalls, raster/collision IRQs |
 | SID | 3 voices, ADSR envelopes, waveforms, basic filter |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
-| Disk Drive | D64/G64 via Kernal traps, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
+| Disk Drive | D64/G64 via Kernal traps, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
-| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Action Replay bank/RAM/IO2 mapping, Action Replay 3 mirrored ROML/ROMH mapping, Action Replay 4 bank/control/IO2 mapping, Final Cartridge I IO-toggle mapping, Final Cartridge Plus segmented ROM/control mapping, Final Cartridge III 16K bank/control/NMI mapping, Simon's BASIC upper-ROM control, C64 Game System/System 3 IO1-address bank switching, Warp Speed IO mirroring and ROM-window control, Magic Formel `$E000` bank switching, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, Epyx FastLoad ROM/IO2/capacitor-gate behavior, EasyFlash bank/control/RAM mapping, and normal-mapped Westermann/Rex cartridge aliases |
+| Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Action Replay bank/RAM/IO2 mapping, KCS Power ROM/IO/RAM mode control, Atomic Power/Nordic Power ROM/RAM/Ultimax mode control, Action Replay 3 mirrored ROML/ROMH mapping, Action Replay 4 bank/control/IO2 mapping, Final Cartridge I IO-toggle mapping, Final Cartridge Plus segmented ROM/control mapping, Final Cartridge III 16K bank/control/NMI mapping, Simon's BASIC upper-ROM control, Super Games 16K bank/control latch, C64 Game System/System 3 IO1-address bank switching, Warp Speed IO mirroring and ROM-window control, Stardos capacitor-gated ROML/Kernal replacement mapping, Game Killer Kernal-window ROM and IO disable latch, Prophet64 IO2 bank/disable control, EXOS HIRAM-gated Kernal replacement mapping, Freeze Frame reset/IO/freeze ROM-window control, Freeze Machine 16K/32K reset/IO/freeze ROM-window control, Snapshot64 freeze-visible 4K Ultimax ROM mapping, Super Explode V5 bank/IO2/capacitor-gated ROM control, Super Snapshot V5 ROM/RAM/control mapping, MACH 5 ROM/IO mirror enable-disable control, Dinamic IO1-read bank switching, Zaxxon fixed-ROM read-selected upper banks, COMAL-80 black/default 16K bank switching, Structured BASIC IO1 bank/off control, Ross read-triggered bank/off control, Dela EP64/EP7x8/EP256 and Rex EP256 EPROM bank decoding, Mikro Assembler IO mirrors, Magic Formel `$E000` bank switching, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, Epyx FastLoad ROM/IO2/capacitor-gate behavior, EasyFlash bank/control/RAM mapping, and normal-mapped Westermann/Rex cartridge aliases |
 
 ### What needs work
 
 - Many games and demos will not run correctly yet — VIC-II timing, sprite multiplexing, and advanced raster effects need further refinement
 - True-drive 1541 compatibility is read-focused and still being validated against protected G64/custom-loader disks
-- 1541 SAVE/write/format support is deferred until read compatibility is stable
-- Weak/random bits, P64/NIB/flux-level media, and G64 write-back are not implemented
+- True-drive GCR writes, persistent disk-image write-back, and 1541 format support are deferred until read compatibility is stable
+- NIB/P64/flux-level media import and G64 write-back are not implemented; weak/random bit readback is available for low-level tracks that provide weak-bit ranges
 - SID filter is simplified
-- Freezer button CPU-state capture, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
+- Freezer button CPU-state capture, Super Snapshot V5 32K RAM-expansion setting, COMAL-80 grey-revision mode selection, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
 - Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
 
 See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade compatibility roadmap and subsystem status.
@@ -47,18 +47,48 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - ROM loading now validates expected stock ROM sizes before applying Settings-selected files
 - PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
+- CIA CNT line rising edges now drive Timer A/Timer B CNT counting and SP serial input shifts, improving pin-level serial/timer compatibility for loaders and peripherals
+- High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
+- High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, and status-channel readback
+- The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
+- Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
+- Compatibility milestone runs can now append categorized JSONL result logs with final PC/drive/screen state, write compact aggregate JSON summaries, and resume by skipping milestones that already passed in a previous log
+- Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
 - Action Replay CRT cartridges now parse type 1 images, switch 8K ROM banks through IO1, expose the current ROM or cartridge RAM through IO2, support the RAM overlay at `$8000-$9FFF`, and honor the disable bit
+- KCS Power CRT cartridges now parse type 2 images, expose 16K/8K/Ultimax/RAM-off modes through IO1 access, mirror the second-last ROML page in IO1, and provide the 128-byte IO2 RAM/status behavior
+- Atomic Power/Nordic Power CRT cartridges now parse type 9 images, switch four 8K ROM banks, expose ROM/RAM/off/Ultimax modes through IO1, support the special `$A000` RAM window, and mirror the active ROM/RAM page through IO2
 - Action Replay 3 CRT cartridges now parse type 35 images, switch two 8K ROM banks through IO1, mirror the active bank into ROML/ROMH, and honor EXROM-hide and disable control
 - Action Replay 4 CRT cartridges now parse type 30 images, switch 8K ROM banks through IO1, mirror the selected ROM's first page through IO2, and honor ROM-hide/freeze-end disable control
 - Final Cartridge I CRT cartridges now parse type 13 images, map the 16K ROM at `$8000-$BFFF`, expose cartridge ROM through IO1/IO2, and toggle ROM visibility off/on through IO1/IO2 access
 - Final Cartridge Plus CRT cartridges now parse type 29 images, map the 32K image segments into `$8000`, `$A000`, and `$E000`, and honor IO2 enable/visibility/readback control bits
 - Final Cartridge III CRT cartridges now parse type 3 images, select 16K banks through `$DFFF`, mirror selected bank bytes through IO1/IO2, honor the register-hide bit, and drive the CPU NMI line through the cartridge control register
 - Simon's BASIC CRT cartridges now parse type 4 images and control the upper ROM through IO1 writes
+- Super Games CRT cartridges now parse type 8 images, switch four 16K banks through `$DF00`, and honor the disable/write-protect latch until reset
 - C64 Game System/System 3 CRT cartridges now parse type 15 images and select 64 ROML banks through `$DE00-$DE3F` IO1 address accesses
 - Warp Speed CRT cartridges now parse type 16 images, mirror `$9E00-$9FFF` into IO1/IO2, and toggle the `$8000-$BFFF` ROM window through IO2/IO1 writes
+- Stardos CRT cartridges now parse type 31 images, expose the `$E000-$FFFF` Kernal replacement, and model IO1/IO2 capacitor-gated ROML enable/disable behavior
+- Game Killer CRT cartridges now parse type 42 images, expose the `$E000-$FFFF` ROM while leaving lower memory as normal RAM, and disable after two IO1/IO2 writes
+- Prophet64 CRT cartridges now parse type 43 banked ROML images and use IO2 writes for 32-bank selection and cartridge disable control
+- EXOS CRT cartridges now parse type 44 images and expose the `$E000-$FFFF` Kernal replacement only while HIRAM is selected
+- Freeze Frame CRT cartridges now parse type 45 images, map their 8K ROM at `$8000` after reset, toggle visibility through IO1/IO2 reads, and mirror the ROM into `$E000` through the cartridge freeze hook
+- Freeze Machine CRT cartridges now parse type 46 16K/32K images plus VICE-compatible split 8K layouts, map lower/upper ROM halves through reset, IO1, IO2, and freeze-window behavior, and toggle the active 16K bank on reset for 32K images
+- Snapshot64 CRT cartridges now parse type 47 images, keep their 4K ROM hidden after reset, expose it in Ultimax-style `$8000/$9000/$E000/$F000` mirrors through the cartridge freeze hook, and hide it again on IO2 writes
+- Super Explode V5 CRT cartridges now parse type 48 images, switch two 8K ROML banks through `$DF00` bit 7, mirror the active bank's last page in IO2, and approximate its capacitor-gated ROM visibility timeout
+- Super Snapshot V5 CRT cartridges now parse type 20 64K/128K images, mirror the selected `$9E00` ROM page through IO1, switch ROM banks and ROM/RAM visibility through IO1 writes, and expose the stock 8K RAM overlay path
+- MACH 5 CRT cartridges now parse type 51 4K/8K images, mirror `$9E00-$9FFF` into IO1/IO2, and use IO1/IO2 writes for ROM enable/disable control
+- Dinamic CRT cartridges now parse type 17 images and select 16 ROML banks through `$DE00-$DE0F` IO1 read accesses
+- Zaxxon/Super Zaxxon CRT cartridges now parse type 18 images, mirror the fixed `$8000-$8FFF` ROM at `$9000`, and select upper ROMH banks through fixed-ROM reads
+- COMAL-80 CRT cartridges now parse type 21 4-bank and optional 8-bank black/default images, map 16K banks at `$8000-$BFFF`, and use mirrored IO1 writes for bank/off control
+- Structured BASIC CRT cartridges now parse type 22 images and use `$DE00-$DE03` read/write accesses for bank selection and cartridge-off control
+- Ross CRT cartridges now parse type 23 16K/32K images and use `$DE00/$DF00` reads for bank selection and cartridge-off control
+- Dela EP64 CRT cartridges now parse type 24 images, accept 8K banks or 32K EPROM blocks, decode `$DE00` bank bits, and honor bit 7 cartridge-off control
+- Dela EP7x8 CRT cartridges now parse type 25 images and select one of eight 8K banks through one-hot-low `$DE00` values
+- Dela EP256 CRT cartridges now parse type 26 images and decode the documented `$38-$3F`, `$28-$2F`, `$18-$1F`, and `$08-$0F` bank windows
+- Rex EP256 CRT cartridges now parse type 27 images, bank 8K/16K/32K EPROM sockets through `$DFA0`, and honor `$DFC0/$DFE0` EXROM off/on reads
+- Mikro Assembler CRT cartridges now parse type 28 images and mirror `$9E00-$9FFF` into IO1/IO2
 - Magic Formel CRT cartridges now parse type 14 images, switch eight `$E000-$FFFF` ROM banks through `$DF00-$DF07`, and support the `$FF` to `$DF00` normal-Kernal fallback
 - Magic Desk CRT cartridges now parse type 19 banked ROML images and switch banks through IO1 writes
 - C64 reset/power-on now restores cartridge latch state so banked cartridges return to their startup bank
@@ -83,7 +113,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - D64 sector-error tables now corrupt synthetic GCR sync/header/data/checksum/disk-ID fields for common read-error codes
 - D64 directory and PRG sector-chain walkers now stop on cyclic chains instead of hanging on malformed media
 - KERNAL VERIFY traps now compare disk data against RAM and report verify mismatches without modifying memory
-- Unsupported KERNAL SAVE traps now report an error instead of pretending a disk write succeeded
+- KERNAL SAVE traps now write PRG files with proper load-address headers to mounted D64 images in fast/convenience mode and still report an error when no writable disk path is available
 - G64 fast-path sector decoding now keeps whole-track data beyond track 35 by producing extended D64 geometry when present
 - G64 fast-path sector decoding now validates GCR symbols plus header/data checksums instead of accepting corrupted sectors as good data
 - G64 fast-path sector decoding now fails when no sectors decode, while native true-drive G64 streams still mount as low-level media
@@ -100,7 +130,19 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - 6502/6510 reset now recovers from JAM/KIL opcodes and resumes through the reset vector instead of staying halted
 - 6502/6510 reset now discards stale pending NMI edges and does not immediately retrigger a held NMI line after reset
 - VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
-- VIC-II bad-line character fetches now stall the C64 CPU during the fetch window while VIC/CIA/SID/drive timing continues
+- VIC-II bad-line timing now exposes separate BA warning and AEC halt phases, reports per-cycle bad-line character-fetch bus ownership, and stalls the C64 CPU only during the AEC-low fetch window while VIC/CIA/SID/drive timing continues
+- VIC-II sprite fetching now uses deterministic two-cycle per-sprite DMA slots with observable bus ownership and CPU stalls instead of repeatedly fetching every sprite during the loose sprite window
+- VIC-II sprite DMA now drops BA during the pre-DMA warning window, including slots that begin just after the rasterline wraps, while keeping the CPU running until AEC goes low
+- VIC-II timing now exposes low-phase refresh, display-data, sprite-pointer, and active-sprite middle-byte access phases separately from CPU-stealing high-phase bus ownership
+- VIC-II sprite pointer bytes are now latched during their low-phase pointer slots and later consumed by the sprite DMA fetch path
+- VIC-II bad-line fetches now latch both character codes and color RAM nibbles into the line buffers during the character-fetch window
+- VIC-II text/bitmap rendering now uses completed bad-line matrix/color buffers instead of rereading live screen/color RAM for the already-latched character row
+- VIC-II latched matrix buffers are now tied to their fetched VCBASE, preventing a completed row buffer from being reused for the wrong character row
+- VIC-II row-counter state now resets on bad lines, advances through rendered display lines, and selects glyph rows for completed latched matrix rows
+- VIC-II low-phase display-data cycles now latch glyph/bitmap bytes into a graphics buffer that rendering can consume when the row and pixel row match
+- VIC-II live color RAM fallback reads now mask to the same four-bit color RAM values used by bad-line latches
+- VIC-II sprite vertical-expansion state now initializes per rasterline, keeps unexpanded sprites advancing every line, and repeats expanded sprite rows through the sprite data counter path
+- VIC-II sprite MC now tracks byte offsets through sprite data and advances by three bytes after each sprite DMA row fetch
 - CIA interrupt masking/read-clear behavior now deasserts CPU IRQ/NMI lines cleanly and avoids duplicate active callbacks
 - C64-level interrupt tests cover combined CIA/VIC IRQ assertion and deassertion
 
@@ -149,7 +191,26 @@ SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDrive
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
 ```
 
-The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen/PC milestones with an untracked `C64/DISKS/compatibility.json` file.
+For resumable local milestone runs, add a JSONL result log path. Reuse the same path with `SWIFT64_LOCAL_MILESTONE_RESUME=1` to skip milestones that already recorded a passing result:
+
+```sh
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESUME=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+```
+
+To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The summary records pass/fail/skip counts, category counts, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
+
+```sh
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+```
+
+To capture passing milestone framebuffers, set a screenshot output directory. Files are written as portable PPM images using sanitized `screenshotName` values from the manifest:
+
+```sh
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR=/tmp/swift64-screens swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+```
+
+The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen, color RAM, RAM, drive, media, and one-or-more-PC-range milestones with an untracked `C64/DISKS/compatibility.json` file.
 
 Useful fast regression slices:
 
@@ -177,6 +238,10 @@ Example milestone manifest:
       "maxCycles": 24000000,
       "pcStart": 49152,
       "pcEnd": 53247,
+      "pcRanges": [
+        { "start": 2048, "end": 4095 },
+        { "start": 49152, "end": 53247 }
+      ],
       "driveStatus": {
         "minGCRReads": 64,
         "minByteReady": 512,
@@ -201,7 +266,11 @@ Example milestone manifest:
       "ramSignatures": [
         { "address": 2049, "bytes": "01 08" }
       ],
-      "screenRAMHash": "optional-fnv1a64-screen-ram-hash"
+      "colorRAMSignatures": [
+        { "address": 0, "bytes": "06 0e 01" }
+      ],
+      "screenRAMHash": "optional-fnv1a64-screen-ram-hash",
+      "colorRAMHash": "optional-fnv1a64-color-ram-hash"
     }
   ]
 }

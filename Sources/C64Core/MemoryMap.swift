@@ -151,7 +151,9 @@ public final class MemoryMap: Bus {
 
         case 0xE000...0xFFFF:
             // Kernal ROM or RAM
-            if let cartridgeValue = cartridge?.read(address) {
+            if cartridge?.kernalWindowRequiresHIRAM == true && !hiram {
+                value = ram[addr]
+            } else if let cartridgeValue = cartridge?.read(address) {
                 value = cartridgeValue
             } else if hiram {
                 value = kernalROM[addr - 0xE000]
@@ -195,7 +197,7 @@ public final class MemoryMap: Bus {
             return
         }
 
-        if addr >= 0x8000 && addr <= 0x9FFF, cartridge?.write(address, value: value) == true {
+        if addr >= 0x8000 && addr <= 0xBFFF, cartridge?.write(address, value: value) == true {
             return
         }
 
@@ -233,6 +235,8 @@ public final class MemoryMap: Bus {
         switch addr {
         case 0x0000...0x0FFF, 0xC000...0xCFFF:
             ram[addr] = value
+        case 0x8000...0x9FFF:
+            _ = cartridge?.write(address, value: value)
         case 0xD000...0xDFFF:
             writeIO(address, value: value)
         default:

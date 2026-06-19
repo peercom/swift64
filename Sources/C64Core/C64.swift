@@ -43,6 +43,9 @@ public final class C64 {
         public let mountedDiskName: String?
         public let mountedCartridgeName: String?
         public let mountedDiskFormat: DiskImage.Format?
+        public let highLevelDiskFormat: DiskImage.Format?
+        public let diskHasUnsavedChanges: Bool
+        public let canExportModifiedD64: Bool
         public let mediaCapabilities: DiskImage.Capabilities?
         public let drive: Drive1541.StatusSnapshot
         public let lastFailureReason: String?
@@ -293,6 +296,14 @@ public final class C64 {
         drive1541.disk.hasNativeLowLevelImage
     }
 
+    public var exportedD64Image: Data? {
+        diskDrive.exportedD64Image
+    }
+
+    public func markExportedD64ImageSaved() {
+        diskDrive.markChangesSaved()
+    }
+
     public var emulationStatus: EmulationStatus {
         EmulationStatus(
             running: running,
@@ -303,6 +314,9 @@ public final class C64 {
             mountedDiskName: mountedDiskName,
             mountedCartridgeName: mountedCartridgeName,
             mountedDiskFormat: mountedDiskImage?.format,
+            highLevelDiskFormat: diskDrive.mountedFormat,
+            diskHasUnsavedChanges: diskDrive.hasUnsavedChanges,
+            canExportModifiedD64: diskDrive.exportedD64Image != nil,
             mediaCapabilities: mountedDiskImage?.capabilities,
             drive: drive1541.statusSnapshot,
             lastFailureReason: lastFailureReason ?? drive1541.lastFailureReason
@@ -396,6 +410,12 @@ public final class C64 {
     public func unmountCartridge() {
         memory.cartridge = nil
         mountedCartridgeName = nil
+        updateNMI()
+        clearFailureStatus()
+    }
+
+    public func pressCartridgeFreezeButton() {
+        memory.cartridge?.pressFreezeButton()
         updateNMI()
         clearFailureStatus()
     }

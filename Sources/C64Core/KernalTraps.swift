@@ -66,6 +66,8 @@ public final class KernalTraps {
     /// Whether traps are enabled
     public var enabled: Bool = true
 
+    private var currentInputChannel: Int?
+
     // MARK: - Init
 
     public init() {}
@@ -90,6 +92,14 @@ public final class KernalTraps {
             return handleLoad(cpu: cpu, memory: memory)
         case KernalTraps.saveRoutine:
             return handleSave(cpu: cpu, memory: memory)
+        case KernalTraps.openRoutine:
+            return handleOpen(cpu: cpu, memory: memory)
+        case KernalTraps.closeRoutine:
+            return handleClose(cpu: cpu, memory: memory)
+        case KernalTraps.chkinRoutine:
+            return handleCHKIN(cpu: cpu, memory: memory)
+        case KernalTraps.basinRoutine:
+            return handleCHRIN(cpu: cpu, memory: memory)
         default:
             return false
         }
@@ -99,7 +109,7 @@ public final class KernalTraps {
         guard isDiskLoadRequest() else { return false }
         guard let memory = memory else { return false }
 
-        return loadRequestFilename(memory: memory) == "$"
+        return diskDrive?.isDirectoryListingRequest(loadRequestFilename(memory: memory)) == true
     }
 
     func isDiskLoadRequest() -> Bool {
@@ -239,10 +249,118 @@ public final class KernalTraps {
     // MARK: - SAVE trap
 
     func handleSave(cpu: CPU6502, memory: MemoryMap) -> Bool {
-        debugLog("[TRAP] SAVE: write-back is not supported")
-        setStatus(memory: memory, value: 0x80)  // Device not present / write path unavailable.
-        cpu.a = 5  // DEVICE NOT PRESENT
+        let deviceNum = memory.ram[Int(KernalTraps.device)]
+        guard (8...11).contains(deviceNum) else { return false }
+
+        let filename = loadRequestFilename(memory: memory)
+        let startPointer = Int(cpu.a)
+        guard startPointer + 1 < memory.ram.count else {
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        let startAddress = UInt16(memory.ram[startPointer]) | (UInt16(memory.ram[startPointer + 1]) << 8)
+        let endAddress = UInt16(cpu.x) | (UInt16(cpu.y) << 8)
+        guard endAddress > startAddress else {
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        guard let drive = diskDrive, drive.isMounted else {
+            debugLog("[TRAP] SAVE: device \(deviceNum) has no mounted disk")
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        let payload = [UInt8(startAddress & 0xFF), UInt8(startAddress >> 8)] + Array(memory.ram[Int(startAddress)..<Int(endAddress)])
+        debugLog("[TRAP] SAVE: device=\(deviceNum) filename=\"\(filename)\" start=$\(String(startAddress, radix: 16, uppercase: true)) end=$\(String(endAddress, radix: 16, uppercase: true)) bytes=\(payload.count)")
+        printToScreen(memory: memory, text: "\rSAVING \(filename)\r")
+
+        guard drive.savePRG(filename: filename, data: payload) else {
+            debugLog("[TRAP] SAVE failed: filename=\"\(filename)\" mounted=\(drive.isMounted)")
+            failSave(cpu: cpu, memory: memory, status: 0x80, error: 5)
+            return true
+        }
+
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.x = UInt8(endAddress & 0xFF)
+        cpu.y = UInt8(endAddress >> 8)
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    private func failSave(cpu: CPU6502, memory: MemoryMap, status: UInt8, error: UInt8) {
+        setStatus(memory: memory, value: status)
+        cpu.a = error
         cpu.setFlag(Flags.carry, true)
+        doRTS(cpu: cpu, memory: memory)
+    }
+
+    // MARK: - OPEN/CLOSE/CHRIN traps
+
+    func handleOpen(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        let deviceNum = memory.ram[Int(KernalTraps.device)]
+        guard (8...11).contains(deviceNum), let drive = diskDrive, drive.isMounted else { return false }
+
+        let channel = Int(memory.ram[Int(KernalTraps.logicalFile)])
+        let secondary = memory.ram[Int(KernalTraps.secondaryAddr)]
+        let filename = loadRequestFilename(memory: memory)
+        let diskChannel = secondary == 15 ? 15 : channel
+
+        guard drive.openFile(channel: diskChannel, filename: filename) else {
+            setStatus(memory: memory, value: 0x80)
+            cpu.a = 5
+            cpu.setFlag(Flags.carry, true)
+            doRTS(cpu: cpu, memory: memory)
+            return true
+        }
+
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    func handleClose(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        guard let drive = diskDrive else { return false }
+        let channel = Int(cpu.a)
+        guard channel >= 0 && channel < 16 else { return false }
+        drive.closeChannel(channel)
+        if currentInputChannel == channel {
+            currentInputChannel = nil
+        }
+
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    func handleCHKIN(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        let channel = Int(cpu.x)
+        guard channel >= 0 && channel < 16, diskDrive != nil else { return false }
+        currentInputChannel = channel
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    func handleCHRIN(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        guard let drive = diskDrive,
+              let channel = currentInputChannel else {
+            return false
+        }
+
+        let result = drive.readByte(channel: channel)
+        cpu.a = result.byte
+        setStatus(memory: memory, value: result.eof ? 0x40 : 0)
+        cpu.setFlag(Flags.carry, false)
         doRTS(cpu: cpu, memory: memory)
         return true
     }
@@ -261,7 +379,7 @@ public final class KernalTraps {
 
         debugLog("[DISK] loadFromDisk: filename=\"\(filename)\" directory has \(drive.directory.count) entries, diskName=\"\(drive.diskName)\"")
 
-        if filename == "$" {
+        if drive.isDirectoryListingRequest(filename) {
             let listing = drive.generateDirectoryListing()
             debugLog("[DISK] Directory listing: \(listing.count) bytes, first 20: \(listing.prefix(20).map { String(format: "%02X", $0) }.joined(separator: " "))")
             return listing

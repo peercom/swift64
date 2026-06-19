@@ -33,6 +33,20 @@ public struct DiskImage {
     }
 
     public struct Track: Equatable {
+        public struct WeakBitRange: Equatable {
+            public let startBit: Int
+            public let endBit: Int
+
+            public init(startBit: Int, endBit: Int) {
+                self.startBit = startBit
+                self.endBit = endBit
+            }
+
+            public func contains(_ bitPosition: Int) -> Bool {
+                startBit <= bitPosition && bitPosition <= endBit
+            }
+        }
+
         /// Half-track index, where 0 is track 1.0 and 1 is track 1.5.
         public let halfTrack: Int
         /// Raw bytes as seen by the 1541 read shift logic.
@@ -45,6 +59,9 @@ public struct DiskImage {
         /// Optional per-GCR-byte speed map decoded from a G64 speed block.
         /// Entries are 0...3 and indexed by byte position in `bytes`.
         public let speedZoneMap: [UInt8]?
+        /// Bit ranges that should read back as unstable media rather than
+        /// fixed stored bits. Used by low-level protected-media importers.
+        public let weakBitRanges: [WeakBitRange]
         /// True when the source is a native low-level stream rather than a
         /// synthetic D64 sector encoding.
         public let isNativeLowLevel: Bool
@@ -55,6 +72,7 @@ public struct DiskImage {
             bitLength: Int? = nil,
             speedZone: Int,
             speedZoneMap: [UInt8]? = nil,
+            weakBitRanges: [WeakBitRange] = [],
             isNativeLowLevel: Bool
         ) {
             self.halfTrack = halfTrack
@@ -62,6 +80,7 @@ public struct DiskImage {
             self.bitLength = bitLength ?? bytes.count * 8
             self.speedZone = speedZone
             self.speedZoneMap = speedZoneMap
+            self.weakBitRanges = weakBitRanges
             self.isNativeLowLevel = isNativeLowLevel
         }
     }
@@ -83,15 +102,18 @@ public struct DiskImage {
         let hasVariableSpeedZones = populated.contains { track in
             track.speedZoneMap?.isEmpty == false
         }
+        let hasWeakBitRanges = populated.contains { !$0.weakBitRanges.isEmpty }
         var unsupported: [String] = []
 
         switch format {
         case .d64:
             unsupported.append("Native copy-protection bitstream")
         case .g64:
-            unsupported.append("Weak/random bits")
             unsupported.append("Flux-level timing")
             unsupported.append("Write-back")
+            if !hasWeakBitRanges {
+                unsupported.append("Weak/random bits")
+            }
         }
 
         return Capabilities(

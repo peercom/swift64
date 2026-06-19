@@ -329,4 +329,331 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertFalse(payload[0] == 0 && payload[1] == 0,
             "Even empty directory should have non-zero first pointer")
     }
+
+    func testFindFileAcceptsDrivePrefixAndFileOptions() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeMinimalD64()))
+
+        XCTAssertNotNil(drive.findFile("0:HELLO"))
+        XCTAssertNotNil(drive.findFile(":HELLO,P,R"))
+        XCTAssertNotNil(drive.findFile("HEL*,P"))
+        XCTAssertTrue(drive.isDirectoryListingRequest("$0"))
+        XCTAssertTrue(drive.isDirectoryListingRequest("0:$"))
+    }
+
+    func testSavePRGWritesDirectoryBAMAndReadableSectorChain() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertEqual(drive.mountedFormat, .d64)
+        XCTAssertFalse(drive.hasUnsavedChanges)
+        let initialFreeBlocks = drive.freeBlocks()
+        let payload = [0x01, 0x08] + Array((0..<300).map { UInt8($0 & 0xFF) })
+
+        XCTAssertTrue(drive.savePRG(filename: "NEWFILE", data: payload))
+
+        let entry = try XCTUnwrap(drive.findFile("NEWFILE"))
+        XCTAssertEqual(entry.filename, "newfile")
+        XCTAssertEqual(entry.typeName, "PRG")
+        XCTAssertEqual(entry.fileSize, 2)
+        XCTAssertEqual(drive.readFileData(entry), payload)
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 2)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+        drive.markChangesSaved()
+        XCTAssertFalse(drive.hasUnsavedChanges)
+
+        let firstSector = drive.readSector(track: Int(entry.firstTrack), sector: Int(entry.firstSector))
+        XCTAssertEqual(firstSector?[0], 1)
+        XCTAssertEqual(firstSector?[1], 1)
+    }
+
+    func testSavedD64ExportsModifiedImageThatCanBeRemounted() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "EXPORT", data: [0x00, 0x20, 0xA9, 0x7F, 0x60]))
+        let exported = try XCTUnwrap(drive.exportedD64Image)
+
+        let remounted = DiskDrive()
+        XCTAssertTrue(remounted.mount(exported))
+        XCTAssertFalse(remounted.hasUnsavedChanges)
+        let entry = try XCTUnwrap(remounted.findFile("EXPORT"))
+        XCTAssertEqual(remounted.readFileData(entry), [0x00, 0x20, 0xA9, 0x7F, 0x60])
+    }
+
+    func testSavePRGRejectsDecodedG64ReadPath() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mountG64(makeMinimalReadableG64()))
+        XCTAssertEqual(drive.mountedFormat, .g64)
+
+        XCTAssertFalse(drive.savePRG(filename: "NOPE", data: [0x01, 0x08, 0x60]))
+
+        XCTAssertFalse(drive.hasUnsavedChanges)
+        XCTAssertNil(drive.exportedD64Image)
+    }
+
+    func testSavePRGRejectsDuplicateFilenameWithoutChangingFreeBlocks() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "ONCE", data: [0x01, 0x08, 0xA9, 0x2A]))
+        let freeAfterFirstSave = drive.freeBlocks()
+
+        XCTAssertFalse(drive.savePRG(filename: "ONCE", data: [0x01, 0x08, 0xEA]))
+
+        XCTAssertEqual(drive.freeBlocks(), freeAfterFirstSave)
+        let entry = try XCTUnwrap(drive.findFile("ONCE"))
+        XCTAssertEqual(drive.readFileData(entry), [0x01, 0x08, 0xA9, 0x2A])
+    }
+
+    func testSavePRGReplaceSyntaxReusesDirectoryEntryAndFreesOldChain() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+        XCTAssertTrue(drive.savePRG(filename: "ONCE", data: [0x01, 0x08, 0xA9, 0x2A]))
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 1)
+
+        let replacement = [0x01, 0x08] + Array((0..<300).map { UInt8(($0 &+ 3) & 0xFF) })
+        XCTAssertTrue(drive.savePRG(filename: "@0:ONCE,P", data: replacement))
+
+        XCTAssertEqual(drive.directory.count, 1)
+        let entry = try XCTUnwrap(drive.findFile("0:ONCE"))
+        XCTAssertEqual(entry.fileSize, 2)
+        XCTAssertEqual(drive.readFileData(entry), replacement)
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 2)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelScratchDeletesFileAndReportsStatus() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+        XCTAssertTrue(drive.savePRG(filename: "DELETE", data: [0x01, 0x08, 0xA9, 0x2A]))
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 1)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "S:DELETE"))
+
+        XCTAssertNil(drive.findFile("DELETE"))
+        XCTAssertEqual(drive.directory.count, 0)
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+        XCTAssertTrue(readChannelString(drive, channel: 15).hasPrefix("01, FILES SCRATCHED"))
+    }
+
+    func testCommandChannelScratchWildcardDeletesMatchingFiles() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "ONE", data: [0x01, 0x08, 0x01]))
+        XCTAssertTrue(drive.savePRG(filename: "TWO", data: [0x01, 0x08, 0x02]))
+        XCTAssertTrue(drive.savePRG(filename: "THREE", data: [0x01, 0x08, 0x03]))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "S:T*"))
+
+        XCTAssertNotNil(drive.findFile("ONE"))
+        XCTAssertNil(drive.findFile("TWO"))
+        XCTAssertNil(drive.findFile("THREE"))
+        XCTAssertTrue(readChannelString(drive, channel: 15).hasPrefix("02, FILES SCRATCHED"))
+    }
+
+    func testCommandChannelScratchMissingFileReportsFileNotFound() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "S:MISSING"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "62, FILE NOT FOUND,00,00\r")
+        XCTAssertFalse(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelRenameUpdatesDirectoryOnly() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "OLD", data: [0x01, 0x08, 0xA9, 0x2A]))
+        let freeAfterSave = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "R:NEW=OLD"))
+
+        XCTAssertNil(drive.findFile("OLD"))
+        let entry = try XCTUnwrap(drive.findFile("0:NEW"))
+        XCTAssertEqual(drive.readFileData(entry), [0x01, 0x08, 0xA9, 0x2A])
+        XCTAssertEqual(drive.freeBlocks(), freeAfterSave)
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+    }
+
+    func testCommandChannelRenameReportsMissingAndDuplicateErrors() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "ONE", data: [0x01, 0x08, 0x01]))
+        XCTAssertTrue(drive.savePRG(filename: "TWO", data: [0x01, 0x08, 0x02]))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "R:THREE=MISSING"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "62, FILE NOT FOUND,00,00\r")
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "R:ONE=TWO"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "63, FILE EXISTS,00,00\r")
+        XCTAssertNotNil(drive.findFile("ONE"))
+        XCTAssertNotNil(drive.findFile("TWO"))
+    }
+
+    func testSavePRGTooLargeFailsWithoutConsumingFreeBlocks() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+        let oversizedPayload = [UInt8](repeating: 0xEA, count: 200_000)
+
+        XCTAssertFalse(drive.savePRG(filename: "TOO BIG", data: oversizedPayload))
+
+        XCTAssertEqual(drive.directory.count, 0)
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+    }
+
+    private func makeBlankWritableD64() -> Data {
+        let totalBytes = 174848
+        var image = [UInt8](repeating: 0, count: totalBytes)
+        let bamOffset = DiskDrive.trackOffset[18]
+
+        image[bamOffset + 0] = 18
+        image[bamOffset + 1] = 1
+        image[bamOffset + 2] = 0x41
+
+        for track in 1...35 {
+            let entryOffset = bamOffset + track * 4
+            let sectors = DiskDrive.sectorsPerTrack[track]
+            var bitmap = [UInt8](repeating: 0, count: 3)
+            for sector in 0..<sectors {
+                bitmap[sector / 8] |= 1 << UInt8(sector % 8)
+            }
+
+            if track == 18 {
+                bitmap[0] &= ~UInt8(0x03)
+                image[entryOffset] = UInt8(sectors - 2)
+            } else {
+                image[entryOffset] = UInt8(sectors)
+            }
+
+            image[entryOffset + 1] = bitmap[0]
+            image[entryOffset + 2] = bitmap[1]
+            image[entryOffset + 3] = bitmap[2]
+        }
+
+        let name = Array("WRITE TEST".utf8)
+        for i in 0..<16 {
+            image[bamOffset + 0x90 + i] = i < name.count ? name[i] : 0xA0
+        }
+        image[bamOffset + 0xA2] = 0x53
+        image[bamOffset + 0xA3] = 0x57
+        image[bamOffset + 0xA5] = 0x32
+        image[bamOffset + 0xA6] = 0x41
+
+        let dirOffset = DiskDrive.trackOffset[18] + 256
+        image[dirOffset + 0] = 0
+        image[dirOffset + 1] = 0xFF
+
+        return Data(image)
+    }
+
+    private func readChannelString(_ drive: DiskDrive, channel: Int) -> String {
+        var bytes: [UInt8] = []
+        while true {
+            let result = drive.readByte(channel: channel)
+            bytes.append(result.byte)
+            if result.eof { break }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private func makeMinimalReadableG64() -> Data {
+        var sector = [UInt8](repeating: 0, count: 256)
+        sector[0] = 18
+        sector[1] = 1
+        sector[2] = 0x41
+        return Data(buildG64(trackSectors: [18: [(0, sector)]]))
+    }
+
+    private func buildG64(trackSectors: [Int: [(Int, [UInt8])]]) -> [UInt8] {
+        let numTracks = 84
+        var g64 = [UInt8]()
+
+        g64.append(contentsOf: [0x47, 0x43, 0x52, 0x2D, 0x31, 0x35, 0x34, 0x31])
+        g64.append(0x00)
+        g64.append(UInt8(numTracks))
+        g64.append(0x00)
+        g64.append(0x1E)
+
+        let offsetTablePosition = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+        g64.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+
+        for track in trackSectors.keys.sorted() {
+            let halfTrack = (track - 1) * 2
+            guard let sectors = trackSectors[track] else { continue }
+            let trackDataOffset = g64.count
+            let trackGCR = buildGCRTrack(track: track, sectors: sectors)
+            g64.append(UInt8(trackGCR.count & 0xFF))
+            g64.append(UInt8(trackGCR.count >> 8))
+            g64.append(contentsOf: trackGCR)
+
+            let offsetPosition = offsetTablePosition + halfTrack * 4
+            g64[offsetPosition] = UInt8(trackDataOffset & 0xFF)
+            g64[offsetPosition + 1] = UInt8((trackDataOffset >> 8) & 0xFF)
+            g64[offsetPosition + 2] = UInt8((trackDataOffset >> 16) & 0xFF)
+            g64[offsetPosition + 3] = UInt8((trackDataOffset >> 24) & 0xFF)
+        }
+
+        return g64
+    }
+
+    private func buildGCRTrack(track: Int, sectors: [(Int, [UInt8])]) -> [UInt8] {
+        var gcr = [UInt8]()
+
+        for (sectorNumber, sectorData) in sectors {
+            gcr.append(contentsOf: [UInt8](repeating: 0xFF, count: 5))
+            let id1: UInt8 = 0x41
+            let id2: UInt8 = 0x42
+            let headerChecksum = UInt8(sectorNumber) ^ UInt8(track) ^ id2 ^ id1
+            let header: [UInt8] = [0x08, headerChecksum, UInt8(sectorNumber), UInt8(track), id2, id1, 0x0F, 0x0F]
+            gcr.append(contentsOf: encodeGCRBytes(header))
+            gcr.append(contentsOf: [UInt8](repeating: 0x55, count: 9))
+            gcr.append(contentsOf: [UInt8](repeating: 0xFF, count: 5))
+
+            var dataBlock = [UInt8]()
+            dataBlock.append(0x07)
+            dataBlock.append(contentsOf: sectorData)
+            dataBlock.append(sectorData.reduce(0, ^))
+            dataBlock.append(0x00)
+            dataBlock.append(0x00)
+            gcr.append(contentsOf: encodeGCRBytes(dataBlock))
+            gcr.append(contentsOf: [UInt8](repeating: 0x55, count: 8))
+        }
+
+        return gcr
+    }
+
+    private func encodeGCRBytes(_ data: [UInt8]) -> [UInt8] {
+        var padded = data
+        while padded.count % 4 != 0 { padded.append(0) }
+        var result = [UInt8]()
+        for index in stride(from: 0, to: padded.count, by: 4) {
+            result.append(contentsOf: encodeGCR(Array(padded[index..<index + 4])))
+        }
+        return result
+    }
+
+    private func encodeGCR(_ bytes: [UInt8]) -> [UInt8] {
+        let encode: [UInt8] = [0x0A, 0x0B, 0x12, 0x13, 0x0E, 0x0F, 0x16, 0x17, 0x09, 0x19, 0x1A, 0x1B, 0x0D, 0x1D, 0x1E, 0x15]
+        let g0 = UInt64(encode[Int(bytes[0] >> 4)])
+        let g1 = UInt64(encode[Int(bytes[0] & 0x0F)])
+        let g2 = UInt64(encode[Int(bytes[1] >> 4)])
+        let g3 = UInt64(encode[Int(bytes[1] & 0x0F)])
+        let g4 = UInt64(encode[Int(bytes[2] >> 4)])
+        let g5 = UInt64(encode[Int(bytes[2] & 0x0F)])
+        let g6 = UInt64(encode[Int(bytes[3] >> 4)])
+        let g7 = UInt64(encode[Int(bytes[3] & 0x0F)])
+        let bits = (g0 << 35) | (g1 << 30) | (g2 << 25) | (g3 << 20) | (g4 << 15) | (g5 << 10) | (g6 << 5) | g7
+
+        return [
+            UInt8((bits >> 32) & 0xFF),
+            UInt8((bits >> 24) & 0xFF),
+            UInt8((bits >> 16) & 0xFF),
+            UInt8((bits >> 8) & 0xFF),
+            UInt8(bits & 0xFF),
+        ]
+    }
 }

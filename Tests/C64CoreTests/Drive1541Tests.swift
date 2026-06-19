@@ -59,6 +59,38 @@ final class Drive1541Tests: XCTestCase {
         )
     }
 
+    func testGCRHeadReadsWeakBitRangesAsUnstableBits() {
+        let fixedDrive = makeDriveWithTrack(
+            bytes: [UInt8](repeating: 0x00, count: 16),
+            weakBitRanges: []
+        )
+        let weakDrive = makeDriveWithTrack(
+            bytes: [UInt8](repeating: 0x00, count: 16),
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 127)]
+        )
+
+        let fixedBytes = readPresentedGCRBytes(from: fixedDrive, count: 4)
+        let weakBytes = readPresentedGCRBytes(from: weakDrive, count: 4)
+
+        XCTAssertEqual(fixedBytes, [0x00, 0x00, 0x00, 0x00])
+        XCTAssertTrue(weakBytes.contains { $0 != 0x00 })
+    }
+
+    func testGCRHeadUsesWeakBitAnnotationsAddedAfterInsert() {
+        let drive = makeDriveWithTrack(
+            bytes: [UInt8](repeating: 0x00, count: 16),
+            weakBitRanges: []
+        )
+
+        XCTAssertTrue(drive.disk.setWeakBitRanges(
+            [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 127)],
+            forHalfTrack: 36
+        ))
+
+        let bytes = readPresentedGCRBytes(from: drive, count: 4)
+        XCTAssertTrue(bytes.contains { $0 != 0x00 })
+    }
+
     func testInsertDiskRefreshesVIA2WriteProtectAndSyncInputs() {
         let drive = Drive1541()
         drive.via2.portBInput = 0x00
@@ -618,14 +650,27 @@ final class Drive1541Tests: XCTestCase {
     }
 
     private func makeDriveWithSpeedMappedTrack(zone: UInt8) -> Drive1541 {
+        makeDriveWithTrack(
+            bytes: [UInt8](repeating: 0x00, count: 256),
+            speedZone: Int(zone),
+            speedZoneMap: [UInt8](repeating: zone, count: 256)
+        )
+    }
+
+    private func makeDriveWithTrack(
+        bytes: [UInt8],
+        speedZone: Int = 2,
+        speedZoneMap: [UInt8]? = nil,
+        weakBitRanges: [DiskImage.Track.WeakBitRange] = []
+    ) -> Drive1541 {
         let drive = Drive1541()
-        let bytes = [UInt8](repeating: 0x00, count: 256)
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
         tracks[36] = DiskImage.Track(
             halfTrack: 36,
             bytes: bytes,
-            speedZone: Int(zone),
-            speedZoneMap: [UInt8](repeating: zone, count: bytes.count),
+            speedZone: speedZone,
+            speedZoneMap: speedZoneMap,
+            weakBitRanges: weakBitRanges,
             isNativeLowLevel: true
         )
 
@@ -633,6 +678,18 @@ final class Drive1541Tests: XCTestCase {
         drive.halfTrack = 36
         drive.motorOn = true
         return drive
+    }
+
+    private func readPresentedGCRBytes(from drive: Drive1541, count: Int) -> [UInt8] {
+        var bytes: [UInt8] = []
+        for _ in 0..<12_000 {
+            drive.tickGCRHead()
+            if drive.statusSnapshot.byteReady {
+                bytes.append(drive.via2.readRegister(0x01))
+                if bytes.count == count { break }
+            }
+        }
+        return bytes
     }
 
     private func makeDiskImageWithTrack(bytes: [UInt8]) -> DiskImage {

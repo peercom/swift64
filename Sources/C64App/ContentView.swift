@@ -52,6 +52,8 @@ struct ContentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Menu {
                         Button("Open Disk Image...") { openDisk() }
+                        Button("Export Modified D64...") { exportModifiedD64() }
+                            .disabled(!status.canExportModifiedD64 || !status.diskHasUnsavedChanges)
                         Button("Open Tape Image...") { openTape() }
                         Button("Load Program...") { loadPRG() }
                         Button("Open Cartridge Image...") { openCartridge() }
@@ -115,6 +117,22 @@ struct ContentView: View {
     func openDisk() {
         openFile(types: ["d64", "g64"], title: "Open Disk Image") { url in
             emulator.mountDisk(url)
+        }
+    }
+
+    func exportModifiedD64() {
+        let panel = NSSavePanel()
+        panel.title = "Export Modified D64"
+        panel.allowedContentTypes = [.init(filenameExtension: "d64")].compactMap { $0 }
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = emulator.suggestedModifiedD64Name
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try emulator.exportModifiedD64(to: url)
+            } catch {
+                print("Could not export modified D64: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -515,6 +533,8 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Image", value: status.mountedDiskName ?? "none")
                 StatusRow(label: "Cartridge", value: status.mountedCartridgeName ?? "none")
                 StatusRow(label: "Media", value: mediaDescription)
+                StatusRow(label: "Fast Media", value: highLevelMediaDescription)
+                StatusRow(label: "Modified", value: modifiedDescription)
                 StatusRow(label: "Capability", value: capabilityDescription)
                 StatusRow(label: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")")
             }
@@ -555,6 +575,17 @@ private struct DriveStatusPopover: View {
     private var mediaDescription: String {
         guard let format = status.mountedDiskFormat else { return "none" }
         return format.displayName
+    }
+
+    private var highLevelMediaDescription: String {
+        status.highLevelDiskFormat?.displayName ?? "none"
+    }
+
+    private var modifiedDescription: String {
+        if status.diskHasUnsavedChanges {
+            return status.canExportModifiedD64 ? "yes, exportable D64" : "yes"
+        }
+        return "no"
     }
 
     private var capabilityDescription: String {
@@ -623,6 +654,16 @@ final class EmulatorController: ObservableObject {
     @Published var crtShaderEnabled = false
     @Published var crtShaderIntensity: Float = 0.65
 
+    var suggestedModifiedD64Name: String {
+        guard let name = c64.emulationStatus.mountedDiskName else {
+            return "modified.d64"
+        }
+
+        let url = URL(fileURLWithPath: name)
+        let base = url.deletingPathExtension().lastPathComponent
+        return "\(base)-modified.d64"
+    }
+
     init() {
         migrateLegacyPreferencesIfNeeded()
         applyEmulationPreferences(reset: false, powerDrive: false)
@@ -689,6 +730,24 @@ final class EmulatorController: ObservableObject {
         } catch {
             print("Could not read disk image \(url.lastPathComponent): \(error.localizedDescription)")
         }
+    }
+
+    func exportModifiedD64(to url: URL) throws {
+        guard let data = c64.exportedD64Image else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        try data.write(to: url, options: .atomic)
+        c64.markExportedD64ImageSaved()
+        refreshStatus()
+        print("Modified D64 exported: \(url.lastPathComponent)")
     }
 
     private func readUserSelectedFile(_ url: URL) throws -> Data {

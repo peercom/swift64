@@ -132,9 +132,108 @@ public final class VIC {
     /// The VIC-II accepts only one light pen latch event per video frame.
     var lightPenLatchedThisFrame: Bool = false
 
+    /// Owner of the VIC-II-visible bus for the current raster cycle.
+    public enum BusOwner: Equatable {
+        case cpu
+        case vicBadLine
+        case vicSpriteDMA
+    }
+
+    /// VIC-II bus phase for the current raster cycle.
+    public enum BusPhase: Equatable {
+        case cpu
+        case badLineBAWarning
+        case badLineCharacterFetch(column: Int)
+        case spriteBAWarning(sprite: Int)
+        case spriteDMA(sprite: Int)
+    }
+
+    /// VIC-II low-phase memory activity. These accesses use the half-cycle
+    /// normally available to the VIC and do not by themselves stop the CPU.
+    public enum LowPhaseAccess: Equatable {
+        case idle
+        case refresh(index: Int)
+        case displayData(column: Int)
+        case spritePointer(sprite: Int)
+        case spriteMiddleByte(sprite: Int)
+    }
+
+    /// Current cycle's VIC-II bus phase.
+    public var busPhase: BusPhase {
+        if badLine {
+            switch rasterCycle {
+            case 12..<15:
+                return .badLineBAWarning
+            case 15..<55:
+                return .badLineCharacterFetch(column: rasterCycle - 15)
+            default:
+                break
+            }
+        }
+
+        if let sprite = activeSpriteDMASlot {
+            return .spriteDMA(sprite: sprite)
+        }
+        if let sprite = activeSpriteBAWarningSlot {
+            return .spriteBAWarning(sprite: sprite)
+        }
+        return .cpu
+    }
+
+    /// Current cycle's VIC-II low-phase memory access.
+    public var lowPhaseAccess: LowPhaseAccess {
+        switch rasterCycle {
+        case 10..<15:
+            return .refresh(index: rasterCycle - 10)
+        case 15..<55:
+            return .displayData(column: rasterCycle - 15)
+        default:
+            if let sprite = spritePointerSlotForCurrentCycle() {
+                return .spritePointer(sprite: sprite)
+            }
+            if let sprite = spriteMiddleByteSlotForCurrentCycle(),
+               spriteLineRow(for: sprite) != nil {
+                return .spriteMiddleByte(sprite: sprite)
+            }
+            return .idle
+        }
+    }
+
+    /// VIC-II BA line state. A low BA warns the CPU that the VIC will need the bus shortly.
+    public var baLineLow: Bool {
+        switch busPhase {
+        case .badLineBAWarning, .badLineCharacterFetch, .spriteBAWarning, .spriteDMA:
+            return true
+        case .cpu:
+            return false
+        }
+    }
+
+    /// VIC-II AEC line state. A low AEC means the CPU is no longer allowed to drive the bus.
+    public var aecLineLow: Bool {
+        switch busPhase {
+        case .badLineCharacterFetch, .spriteDMA:
+            return true
+        case .cpu, .badLineBAWarning, .spriteBAWarning:
+            return false
+        }
+    }
+
+    /// Current cycle's effective bus owner.
+    public var busOwner: BusOwner {
+        switch busPhase {
+        case .badLineCharacterFetch:
+            return .vicBadLine
+        case .spriteDMA:
+            return .vicSpriteDMA
+        case .cpu, .badLineBAWarning, .spriteBAWarning:
+            return .cpu
+        }
+    }
+
     /// True when the VIC is stealing the bus from the CPU for bad-line character fetches.
     var isStealingCPU: Bool {
-        badLine && rasterCycle >= 15 && rasterCycle < 55
+        aecLineLow
     }
 
     /// Row counter (RC) — 0 to 7, tracks which line within a char row
@@ -148,15 +247,54 @@ public final class VIC {
     var lineBuffer = [UInt8](repeating: 0, count: 40)
     /// Line buffer for color data (40 chars)
     var colorBuffer = [UInt8](repeating: 0, count: 40)
+    /// Tracks which bad-line columns have been fetched for the current matrix row.
+    var badLineFetchMask: UInt64 = 0
+    /// True when lineBuffer/colorBuffer contain a complete fetched matrix row.
+    var displayLineBufferValid: Bool = false
+    /// VCBASE associated with the completed lineBuffer/colorBuffer row.
+    var displayLineBufferBase: Int = 0
+    /// Low-phase graphics bytes fetched for the current display line.
+    var graphicsBuffer = [UInt8](repeating: 0, count: 40)
+    /// Tracks which graphics bytes have been fetched for the current display line.
+    var graphicsFetchMask: UInt64 = 0
+    /// Matrix base associated with the current graphicsBuffer contents.
+    var graphicsBufferBase: Int = 0
+    /// Pixel row associated with the current graphicsBuffer contents.
+    var graphicsBufferPixelRow: Int = 0
+    /// True when graphicsBuffer contains all 40 graphics bytes for its row/pixel row.
+    var graphicsBufferValid: Bool = false
 
     /// Sprite Y expansion flip-flops
     var spriteYExpFF = [Bool](repeating: false, count: 8)
-    /// Sprite data counters (MC, 0-63 × 3)
+    /// Sprite data counters (MC, byte offset 0...63 within sprite data)
     var spriteMC = [Int](repeating: 0, count: 8)
+    /// Rasterline for which the sprite expansion state has been initialized.
+    var spriteExpansionLine = [Int?](repeating: nil, count: 8)
     /// Sprite display active
     var spriteDisplay = [Bool](repeating: false, count: 8)
     /// Sprite line data (3 bytes × 8 sprites)
     var spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
+    /// Sprite data pointer bytes latched during the low-phase sprite-pointer slots.
+    var spritePointers = [UInt8](repeating: 0, count: 8)
+
+    /// Sprite DMA slots are currently modeled as deterministic two-cycle bursts
+    /// per sprite during the VIC-II's sprite-fetch part of the line.
+    public var activeSpriteDMASlot: Int? {
+        guard let slot = spriteDMASlotForCurrentCycle(),
+              spriteLineRow(for: slot) != nil else {
+            return nil
+        }
+        return slot
+    }
+
+    /// Active sprite whose DMA slot is within the BA warning window.
+    public var activeSpriteBAWarningSlot: Int? {
+        guard let slot = spriteBAWarningSlotForCurrentCycle(),
+              spriteLineRow(for: slot, onRasterLine: spriteBAWarningRasterLine(for: slot)) != nil else {
+            return nil
+        }
+        return slot
+    }
 
     // MARK: - Framebuffer
 
@@ -216,10 +354,20 @@ public final class VIC {
         videoCounterBase = 0
         lineBuffer = [UInt8](repeating: 0, count: 40)
         colorBuffer = [UInt8](repeating: 0, count: 40)
+        badLineFetchMask = 0
+        displayLineBufferValid = false
+        displayLineBufferBase = 0
+        graphicsBuffer = [UInt8](repeating: 0, count: 40)
+        graphicsFetchMask = 0
+        graphicsBufferBase = 0
+        graphicsBufferPixelRow = 0
+        graphicsBufferValid = false
         spriteYExpFF = [Bool](repeating: false, count: 8)
         spriteMC = [Int](repeating: 0, count: 8)
+        spriteExpansionLine = [Int?](repeating: nil, count: 8)
         spriteDisplay = [Bool](repeating: false, count: 8)
         spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
+        spritePointers = [UInt8](repeating: 0, count: 8)
         frameReady = false
 
         if wasIRQActive {
@@ -246,18 +394,21 @@ public final class VIC {
         // Check for bad line condition
         if rasterCycle == 0 {
             checkBadLine()
+            updateSpriteExpansionStateForCurrentLine()
         }
 
         let shouldStallCPU = isStealingCPU
+
+        performLowPhaseAccess()
 
         // Render pixels at specific cycles (raster beam)
         if rasterCycle >= 0 && rasterCycle < rasterCyclesPerLine {
             renderCycle()
         }
 
-        // Sprite data fetch at cycles 58-62 and 0-2
-        if rasterCycle >= 58 || rasterCycle <= 2 {
-            fetchSpriteData()
+        // Sprite data fetch in deterministic per-sprite DMA slots.
+        if let sprite = spriteDMAFetchSlotForCurrentCycle() {
+            fetchSpriteData(sprite: sprite)
         }
 
         // Advance cycle
@@ -274,6 +425,8 @@ public final class VIC {
             badLineDENLatched = true
         }
 
+        let wasBadLine = badLine
+
         // Bad line when rasterline is in the VIC-II bad-line range and lower 3 bits match YSCROLL.
         if rasterLine >= UInt16(VIC.firstBadLine) && rasterLine <= UInt16(VIC.lastBadLine) {
             let yMatch = (rasterLine & 0x07) == UInt16(yScroll)
@@ -285,6 +438,12 @@ public final class VIC {
             }
         } else {
             badLine = false
+        }
+
+        if badLine && !wasBadLine {
+            badLineFetchMask = 0
+            displayLineBufferValid = false
+            displayLineBufferBase = videoCounterBase
         }
     }
 
@@ -320,12 +479,24 @@ public final class VIC {
     }
 
     func renderCycle() {
-        // Fetch char data on bad lines during cycles 15-54
-        if badLine && rasterCycle >= 15 && rasterCycle < 55 {
-            let col = rasterCycle - 15
-            if col < 40 {
-                fetchCharData(column: col)
-            }
+        // Fetch char data on bad lines during cycles 15-54.
+        if case let .badLineCharacterFetch(column) = busPhase, column < 40 {
+            fetchCharData(column: column)
+        }
+    }
+
+    func performLowPhaseAccess() {
+        switch lowPhaseAccess {
+        case let .displayData(column):
+            fetchDisplayData(column: column)
+        case let .spritePointer(sprite):
+            guard sprite >= 0 && sprite < 8 else { return }
+
+            let readMem = readMemory ?? { _ in return 0 }
+            let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
+            spritePointers[sprite] = readMem(screenBase + 0x03F8 + UInt16(sprite))
+        case .idle, .refresh, .spriteMiddleByte:
+            return
         }
     }
 
@@ -372,12 +543,71 @@ public final class VIC {
     func fetchCharData(column: Int) {
         let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
         let vc = UInt16(videoCounterBase + column)
+        if column == 0 {
+            displayLineBufferBase = videoCounterBase
+        }
         let charCode = readMemory?(screenBase + vc) ?? 0
         lineBuffer[column] = charCode
+        colorBuffer[column] = (readColorRAM?(vc) ?? 0) & 0x0F
 
-        // Color RAM read (this comes directly from memory map)
-        // We'll store it during the fetch
-        colorBuffer[column] = 0  // Will be filled by external color read
+        badLineFetchMask |= UInt64(1) << UInt64(column)
+        displayLineBufferValid = badLineFetchMask == (UInt64(1) << 40) - 1
+    }
+
+    func currentDisplayFetchContext() -> (charRow: Int, rowBase: Int, pixelRow: Int)? {
+        let topBorder: Int = rows25 ? VIC.displayTop : VIC.displayTop + 4
+        let bottomBorder: Int = rows25 ? VIC.displayBottom : VIC.displayBottom - 4
+        let line = Int(rasterLine)
+        let graphicsY = line - VIC.displayTop
+
+        guard line >= topBorder && line < bottomBorder else { return nil }
+        guard displayActive && displayEnabled && graphicsY >= 0 else { return nil }
+
+        let charRow = graphicsY / 8
+        let rowBase = charRow * 40
+        let pixelRow = displayLineBufferValid && displayLineBufferBase == rowBase ? rowCounter & 0x07 : graphicsY % 8
+        return (charRow, rowBase, pixelRow)
+    }
+
+    func fetchDisplayData(column: Int) {
+        guard column >= 0 && column < 40 else { return }
+        guard let context = currentDisplayFetchContext() else { return }
+
+        if column == 0 || graphicsBufferBase != context.rowBase || graphicsBufferPixelRow != context.pixelRow {
+            graphicsFetchMask = 0
+            graphicsBufferValid = false
+            graphicsBufferBase = context.rowBase
+            graphicsBufferPixelRow = context.pixelRow
+        }
+
+        let readMem = readMemory ?? { _ in return 0 }
+        let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
+        let charBase: UInt16
+        if bitmapMode {
+            charBase = UInt16((memoryPointers >> 3) & 0x01) * 0x2000
+        } else {
+            charBase = UInt16((memoryPointers >> 1) & 0x07) * 0x0800
+        }
+
+        let vc = context.rowBase + column
+        let charCode: UInt8
+        if displayLineBufferValid && displayLineBufferBase == context.rowBase {
+            charCode = lineBuffer[column]
+        } else {
+            charCode = readMem(screenBase + UInt16(vc))
+        }
+
+        if bitmapMode {
+            let bitmapAddr = charBase + UInt16(vc) * 8 + UInt16(context.pixelRow)
+            graphicsBuffer[column] = readMem(bitmapAddr)
+        } else {
+            let glyphCode = extendedBGMode ? (charCode & 0x3F) : charCode
+            let charAddr = charBase + UInt16(glyphCode) * 8 + UInt16(context.pixelRow)
+            graphicsBuffer[column] = readMem(charAddr)
+        }
+
+        graphicsFetchMask |= UInt64(1) << UInt64(column)
+        graphicsBufferValid = graphicsFetchMask == (UInt64(1) << 40) - 1
     }
 
     // MARK: - Rasterline rendering
@@ -405,7 +635,8 @@ public final class VIC {
 
         if lineInDisplay && displayActive && displayEnabled && graphicsY >= 0 {
             let charRow = graphicsY / 8
-            let pixelRow = graphicsY % 8
+            let rowBase = charRow * 40
+            let pixelRow = displayLineBufferValid && displayLineBufferBase == rowBase ? rowCounter & 0x07 : graphicsY % 8
 
             renderGraphicsLine(
                 &graphicsLine,
@@ -442,9 +673,13 @@ public final class VIC {
         // Update video counter at end of display line
         if lineInDisplay && displayActive {
             let charRow = graphicsY / 8
-            let pixelRow = graphicsY % 8
+            let rowBase = charRow * 40
+            let pixelRow = displayLineBufferValid && displayLineBufferBase == rowBase ? rowCounter & 0x07 : graphicsY % 8
             if pixelRow == 7 {
                 videoCounterBase = (charRow + 1) * 40
+                rowCounter = 0
+            } else {
+                rowCounter = (pixelRow + 1) & 0x07
             }
         }
     }
@@ -462,13 +697,23 @@ public final class VIC {
         }
 
         for col in 0..<40 {
-            let vc = charRow * 40 + col
+            let rowBase = charRow * 40
+            let vc = rowBase + col
             let screenAddr = screenBase + UInt16(vc)
-            let charCode = readMem(screenAddr)
-            let colorData = readColorRAM?(UInt16(vc)) ?? 0x0E
+            let charCode: UInt8
+            let colorData: UInt8
+            if displayLineBufferValid && displayLineBufferBase == rowBase {
+                charCode = lineBuffer[col]
+                colorData = colorBuffer[col]
+            } else {
+                charCode = readMem(screenAddr)
+                colorData = (readColorRAM?(UInt16(vc)) ?? 0x0E) & 0x0F
+            }
 
             let pixelData: UInt8
-            if bitmapMode {
+            if graphicsBufferValid && graphicsBufferBase == rowBase && graphicsBufferPixelRow == pixelRow {
+                pixelData = graphicsBuffer[col]
+            } else if bitmapMode {
                 let bitmapAddr = charBase + UInt16(vc) * 8 + UInt16(pixelRow)
                 pixelData = readMem(bitmapAddr)
             } else {
@@ -634,39 +879,192 @@ public final class VIC {
 
     // MARK: - Sprites
 
-    func fetchSpriteData() {
-        guard spriteEnabled != 0 else { return }
-        let readMem = readMemory ?? { _ in return 0 }
-        let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
+    static let spriteDMAStartCycles = [58, 60, 62, 1, 3, 5, 7, 9]
+    static let spritePointerCycles = [55, 56, 57, 58, 59, 60, 61, 62]
 
-        for i in 0..<8 {
-            guard spriteEnabled & (1 << i) != 0 else { continue }
+    func spritePointerSlotForCurrentCycle() -> Int? {
+        VIC.spritePointerCycles.firstIndex(of: rasterCycle)
+    }
 
-            let sy = spriteY[i]
-            let height: Int = (spriteExpandY & (1 << i) != 0) ? 42 : 21
-            let line = Int(rasterLine)
+    func spriteDMASlotForCurrentCycle() -> Int? {
+        switch rasterCycle {
+        case 58, 59:
+            return 0
+        case 60, 61:
+            return 1
+        case 62, 0:
+            return 2
+        case 1, 2:
+            return 3
+        case 3, 4:
+            return 4
+        case 5, 6:
+            return 5
+        case 7, 8:
+            return 6
+        case 9, 10:
+            return 7
+        default:
+            return nil
+        }
+    }
 
-            if line >= Int(sy) && line < Int(sy) + height {
-                let row: Int
-                if spriteExpandY & (1 << i) != 0 {
-                    row = (line - Int(sy)) / 2
-                } else {
-                    row = line - Int(sy)
+    func spriteMiddleByteSlotForCurrentCycle() -> Int? {
+        switch rasterCycle {
+        case 59:
+            return 0
+        case 61:
+            return 1
+        case 0:
+            return 2
+        case 2:
+            return 3
+        case 4:
+            return 4
+        case 6:
+            return 5
+        case 8:
+            return 6
+        case 10:
+            return 7
+        default:
+            return nil
+        }
+    }
+
+    func spriteBAWarningSlotForCurrentCycle() -> Int? {
+        VIC.spriteDMAStartCycles
+            .enumerated()
+            .compactMap { sprite, startCycle -> (sprite: Int, distance: Int)? in
+                let distance = (startCycle - rasterCycle + rasterCyclesPerLine) % rasterCyclesPerLine
+                guard distance >= 1 && distance <= 3 else { return nil }
+                return (sprite, distance)
+            }
+            .filter { spriteLineRow(for: $0.sprite, onRasterLine: spriteBAWarningRasterLine(for: $0.sprite)) != nil }
+            .min { lhs, rhs in
+                if lhs.distance == rhs.distance {
+                    return lhs.sprite < rhs.sprite
                 }
+                return lhs.distance < rhs.distance
+            }?
+            .sprite
+    }
 
-                // Read sprite pointer from screen memory + $03F8
-                let ptrAddr = screenBase + 0x03F8 + UInt16(i)
-                let spritePtr = UInt16(readMem(ptrAddr)) * 64
+    func spriteBAWarningRasterLine(for sprite: Int) -> Int {
+        guard sprite >= 0 && sprite < VIC.spriteDMAStartCycles.count else {
+            return Int(rasterLine)
+        }
 
-                let dataAddr = spritePtr + UInt16(row * 3)
-                spriteLineData[i][0] = readMem(dataAddr)
-                spriteLineData[i][1] = readMem(dataAddr + 1)
-                spriteLineData[i][2] = readMem(dataAddr + 2)
-                spriteDisplay[i] = true
+        let startCycle = VIC.spriteDMAStartCycles[sprite]
+        if startCycle <= rasterCycle {
+            return (Int(rasterLine) + 1) % rasterLinesPerFrame
+        }
+        return Int(rasterLine)
+    }
+
+    func spriteDMAFetchSlotForCurrentCycle() -> Int? {
+        switch rasterCycle {
+        case 58:
+            return 0
+        case 60:
+            return 1
+        case 62:
+            return 2
+        case 1:
+            return 3
+        case 3:
+            return 4
+        case 5:
+            return 5
+        case 7:
+            return 6
+        case 9:
+            return 7
+        default:
+            return nil
+        }
+    }
+
+    func spriteLineRow(for sprite: Int) -> Int? {
+        spriteLineRow(for: sprite, onRasterLine: Int(rasterLine))
+    }
+
+    func spriteLineRow(for sprite: Int, onRasterLine line: Int) -> Int? {
+        guard let byteOffset = spriteLineByteOffset(for: sprite, onRasterLine: line) else { return nil }
+        return byteOffset / 3
+    }
+
+    func spriteLineByteOffset(for sprite: Int) -> Int? {
+        spriteLineByteOffset(for: sprite, onRasterLine: Int(rasterLine))
+    }
+
+    func spriteLineByteOffset(for sprite: Int, onRasterLine line: Int) -> Int? {
+        guard sprite >= 0 && sprite < 8 else { return nil }
+        guard spriteEnabled & (1 << sprite) != 0 else { return nil }
+
+        let sy = spriteY[sprite]
+        let height: Int = (spriteExpandY & (1 << sprite) != 0) ? 42 : 21
+        guard line >= Int(sy) && line < Int(sy) + height else { return nil }
+
+        if line == Int(rasterLine), spriteExpansionLine[sprite] == line {
+            return spriteMC[sprite]
+        }
+
+        if spriteExpandY & (1 << sprite) != 0 {
+            return ((line - Int(sy)) / 2) * 3
+        }
+        return (line - Int(sy)) * 3
+    }
+
+    func updateSpriteExpansionStateForCurrentLine() {
+        let line = Int(rasterLine)
+        for sprite in 0..<8 {
+            guard spriteEnabled & (1 << sprite) != 0 else {
+                spriteExpansionLine[sprite] = nil
+                spriteYExpFF[sprite] = false
+                continue
+            }
+
+            let sy = Int(spriteY[sprite])
+            let expandedY = spriteExpandY & (1 << sprite) != 0
+            let height = expandedY ? 42 : 21
+            guard line >= sy && line < sy + height else {
+                spriteExpansionLine[sprite] = nil
+                spriteYExpFF[sprite] = false
+                spriteDisplay[sprite] = false
+                continue
+            }
+
+            let offset = line - sy
+            spriteExpansionLine[sprite] = line
+            if expandedY {
+                spriteYExpFF[sprite] = offset % 2 == 1
+                spriteMC[sprite] = (offset / 2) * 3
             } else {
-                spriteDisplay[i] = false
+                spriteYExpFF[sprite] = true
+                spriteMC[sprite] = offset * 3
             }
         }
+    }
+
+    func fetchSpriteData(sprite: Int) {
+        guard sprite >= 0 && sprite < 8 else { return }
+        let readMem = readMemory ?? { _ in return 0 }
+
+        guard let byteOffset = spriteLineByteOffset(for: sprite) else {
+            spriteDisplay[sprite] = false
+            return
+        }
+
+        let spritePtr = UInt16(spritePointers[sprite]) * 64
+        let dataAddr = spritePtr + UInt16(byteOffset)
+        spriteLineData[sprite][0] = readMem(dataAddr)
+        spriteLineData[sprite][1] = readMem(dataAddr + 1)
+        spriteLineData[sprite][2] = readMem(dataAddr + 2)
+        if spriteExpansionLine[sprite] == Int(rasterLine) {
+            spriteMC[sprite] = min(63, byteOffset + 3)
+        }
+        spriteDisplay[sprite] = true
     }
 
     func renderSprites(_ line: inout [UInt32], fbY: Int, foregroundMask: [Bool]? = nil) {

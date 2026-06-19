@@ -206,6 +206,44 @@ public final class GCRDisk {
         return trackInfos[halfTrack]
     }
 
+    /// Annotate an already-loaded low-level track with weak/random bit ranges.
+    /// This is used by protected-media importers that can identify unstable
+    /// regions separately from the raw byte stream.
+    @discardableResult
+    public func setWeakBitRanges(
+        _ ranges: [DiskImage.Track.WeakBitRange],
+        forHalfTrack halfTrack: Int
+    ) -> Bool {
+        guard halfTrack >= 0 && halfTrack < trackInfos.count,
+              let existing = trackInfos[halfTrack] else {
+            return false
+        }
+        guard ranges.allSatisfy({ $0.startBit >= 0 && $0.startBit <= $0.endBit && $0.endBit < existing.bitLength }) else {
+            return false
+        }
+
+        let updated = DiskImage.Track(
+            halfTrack: existing.halfTrack,
+            bytes: existing.bytes,
+            bitLength: existing.bitLength,
+            speedZone: existing.speedZone,
+            speedZoneMap: existing.speedZoneMap,
+            weakBitRanges: ranges,
+            isNativeLowLevel: existing.isNativeLowLevel
+        )
+        trackInfos[halfTrack] = updated
+        tracks[halfTrack] = updated.bytes
+        if let image {
+            self.image = DiskImage(
+                format: image.format,
+                tracks: trackInfos,
+                maxTrackSize: image.maxTrackSize,
+                sectorErrorCodes: image.sectorErrorCodes
+            )
+        }
+        return true
+    }
+
     // MARK: - GCR encoding
 
     private static func g64SpeedInfo(

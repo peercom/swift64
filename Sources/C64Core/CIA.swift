@@ -311,7 +311,11 @@ public final class CIA {
     }
 
     public func setCNTLine(high: Bool) {
+        let wasHigh = cntLineHigh
         cntLineHigh = high
+        if !wasHigh && high {
+            pulseCNT()
+        }
     }
 
     public func setSPLine(high: Bool) {

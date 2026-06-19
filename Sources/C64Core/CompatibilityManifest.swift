@@ -64,12 +64,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let maxCycles: Int?
     public let pcStart: Int?
     public let pcEnd: Int?
+    public let pcRanges: [CompatibilityPCRange]
     public let minGCRReads: Int?
     public let minByteReady: Int?
     public let driveStatus: CompatibilityDriveStatus?
     public let mediaStatus: CompatibilityMediaStatus?
     public let ramSignatures: [CompatibilityRAMSignature]
+    public let colorRAMSignatures: [CompatibilityRAMSignature]
     public let screenRAMHash: String?
+    public let colorRAMHash: String?
     public let screenshotName: String?
 
     private enum CodingKeys: String, CodingKey {
@@ -82,12 +85,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case maxCycles
         case pcStart
         case pcEnd
+        case pcRanges
         case minGCRReads
         case minByteReady
         case driveStatus
         case mediaStatus
         case ramSignatures
+        case colorRAMSignatures
         case screenRAMHash
+        case colorRAMHash
         case screenshotName
     }
 
@@ -100,12 +106,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         maxCycles: Int? = nil,
         pcStart: Int? = nil,
         pcEnd: Int? = nil,
+        pcRanges: [CompatibilityPCRange] = [],
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
+        colorRAMSignatures: [CompatibilityRAMSignature] = [],
         screenRAMHash: String? = nil,
+        colorRAMHash: String? = nil,
         screenshotName: String? = nil
     ) {
         self.file = file
@@ -116,12 +125,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.maxCycles = maxCycles
         self.pcStart = pcStart
         self.pcEnd = pcEnd
+        self.pcRanges = pcRanges
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
         self.ramSignatures = ramSignatures
+        self.colorRAMSignatures = colorRAMSignatures
         self.screenRAMHash = screenRAMHash
+        self.colorRAMHash = colorRAMHash
         self.screenshotName = screenshotName
     }
 
@@ -134,12 +146,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         maxCycles: Int? = nil,
         pcStart: Int? = nil,
         pcEnd: Int? = nil,
+        pcRanges: [CompatibilityPCRange] = [],
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
+        colorRAMSignatures: [CompatibilityRAMSignature] = [],
         screenRAMHash: String? = nil,
+        colorRAMHash: String? = nil,
         screenshotName: String? = nil
     ) {
         self.file = file
@@ -150,12 +165,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.maxCycles = maxCycles
         self.pcStart = pcStart
         self.pcEnd = pcEnd
+        self.pcRanges = pcRanges
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
         self.ramSignatures = ramSignatures
+        self.colorRAMSignatures = colorRAMSignatures
         self.screenRAMHash = screenRAMHash
+        self.colorRAMHash = colorRAMHash
         self.screenshotName = screenshotName
     }
 
@@ -180,12 +198,15 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         maxCycles = try container.decodeIfPresent(Int.self, forKey: .maxCycles)
         pcStart = try container.decodeIfPresent(Int.self, forKey: .pcStart)
         pcEnd = try container.decodeIfPresent(Int.self, forKey: .pcEnd)
+        pcRanges = try container.decodeIfPresent([CompatibilityPCRange].self, forKey: .pcRanges) ?? []
         minGCRReads = try container.decodeIfPresent(Int.self, forKey: .minGCRReads)
         minByteReady = try container.decodeIfPresent(Int.self, forKey: .minByteReady)
         driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
         mediaStatus = try container.decodeIfPresent(CompatibilityMediaStatus.self, forKey: .mediaStatus)
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
+        colorRAMSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .colorRAMSignatures) ?? []
         screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
+        colorRAMHash = try container.decodeIfPresent(String.self, forKey: .colorRAMHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
     }
 
@@ -194,8 +215,54 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     }
 
     public var pcRange: ClosedRange<UInt16>? {
-        guard let pcStart, let pcEnd else { return nil }
-        return UInt16(pcStart)...UInt16(pcEnd)
+        guard let pcStart,
+              let pcEnd,
+              let start = UInt16(exactly: pcStart),
+              let end = UInt16(exactly: pcEnd),
+              start <= end else {
+            return nil
+        }
+        return start...end
+    }
+
+    public var expectedPCRanges: [ClosedRange<UInt16>] {
+        var ranges = pcRanges.map(\.range)
+        if let pcRange {
+            ranges.append(pcRange)
+        }
+        return ranges
+    }
+}
+
+public struct CompatibilityPCRange: Decodable, Equatable {
+    public let start: Int
+    public let end: Int
+
+    public var range: ClosedRange<UInt16> {
+        UInt16(start)...UInt16(end)
+    }
+
+    public init(start: Int, end: Int) {
+        self.start = start
+        self.end = end
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case start
+        case end
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        start = try container.decode(Int.self, forKey: .start)
+        end = try container.decode(Int.self, forKey: .end)
+        guard start >= 0, end <= 0xFFFF, start <= end else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .start,
+                in: container,
+                debugDescription: "PC range must be ordered and fit in 16 bits"
+            )
+        }
     }
 }
 
@@ -372,6 +439,11 @@ public enum CompatibilityHash {
         let start = 0x0400
         let end = min(ram.count, start + 1000)
         return fnv1a64(ram[start..<end])
+    }
+
+    public static func colorRAM(_ colorRAM: [UInt8]) -> String {
+        let end = min(colorRAM.count, 1000)
+        return fnv1a64(colorRAM[..<end].map { $0 & 0x0F })
     }
 
     static func fnv1a64<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {

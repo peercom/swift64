@@ -90,6 +90,9 @@ public final class Drive1541 {
     /// Bits collected since last aligned byte output
     var bitCounter: Int = 0
 
+    /// Deterministic pseudo-random state used when reading weak/random bit regions.
+    var weakBitLFSR: UInt16 = 0xACE1
+
     /// UE7 4-bit counter (clocked at 16 MHz, resets at speed-zone value)
     var ue7Counter: Int = 0
 
@@ -413,6 +416,7 @@ public final class Drive1541 {
         syncDetected = false
         shiftRegister = 0
         bitCounter = 0
+        weakBitLFSR = 0xACE1
         ue7Counter = 0
         uf4Counter = 0
         byteReadyEdge = false
@@ -679,7 +683,13 @@ public final class Drive1541 {
                     if headBitPosition >= totalBits { headBitPosition = 0 }
                     let byteIdx = headBitPosition / 8
                     let bitIdx = 7 - (headBitPosition % 8)
-                    let bit = UInt16((trackData[byteIdx] >> bitIdx) & 1)
+                    let bit = readTrackBit(
+                        trackData: trackData,
+                        trackInfo: trackInfo,
+                        byteIndex: byteIdx,
+                        bitIndex: bitIdx,
+                        bitPosition: headBitPosition
+                    )
                     headBitPosition += 1
 
                     // 10-bit shift register (per VICE: last_read_data)
@@ -716,6 +726,26 @@ public final class Drive1541 {
                 }
             }
         }
+    }
+
+    private func readTrackBit(
+        trackData: [UInt8],
+        trackInfo: DiskImage.Track?,
+        byteIndex: Int,
+        bitIndex: Int,
+        bitPosition: Int
+    ) -> UInt16 {
+        if let trackInfo,
+           trackInfo.weakBitRanges.contains(where: { $0.contains(bitPosition) }) {
+            return nextWeakBit()
+        }
+        return UInt16((trackData[byteIndex] >> bitIndex) & 1)
+    }
+
+    private func nextWeakBit() -> UInt16 {
+        let feedback = ((weakBitLFSR >> 0) ^ (weakBitLFSR >> 2) ^ (weakBitLFSR >> 3) ^ (weakBitLFSR >> 5)) & 1
+        weakBitLFSR = (weakBitLFSR >> 1) | (feedback << 15)
+        return UInt16(weakBitLFSR & 1)
     }
 
     private func speedZoneForCurrentHeadPosition(

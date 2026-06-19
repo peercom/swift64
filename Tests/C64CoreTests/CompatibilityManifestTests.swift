@@ -15,6 +15,10 @@ final class CompatibilityManifestTests: XCTestCase {
               "maxCycles": 24000000,
               "pcStart": 49152,
               "pcEnd": 53247,
+              "pcRanges": [
+                { "start": 2048, "end": 4095 },
+                { "start": 53248, "end": 57343 }
+              ],
               "minGCRReads": 64,
               "minByteReady": 512,
               "driveStatus": {
@@ -49,7 +53,12 @@ final class CompatibilityManifestTests: XCTestCase {
                 { "address": 2049, "bytes": "01 08 a9 00" },
                 { "address": 49152, "bytes": [169, 66, 96] }
               ],
+              "colorRAMSignatures": [
+                { "address": 0, "bytes": "01 02 03" },
+                { "address": 999, "bytes": [14, 15] }
+              ],
               "screenRAMHash": "0123456789abcdef",
+              "colorRAMHash": "fedcba9876543210",
               "screenshotName": "demo-title"
             }
           ]
@@ -68,6 +77,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.commands, ["LOAD\"*\",8,1", "RUN"])
         XCTAssertEqual(milestone.command, "LOAD\"*\",8,1")
         XCTAssertEqual(milestone.pcRange, 0xC000...0xCFFF)
+        XCTAssertEqual(milestone.pcRanges.map(\.range), [0x0800...0x0FFF, 0xD000...0xDFFF])
+        XCTAssertEqual(milestone.expectedPCRanges, [0x0800...0x0FFF, 0xD000...0xDFFF, 0xC000...0xCFFF])
         XCTAssertEqual(milestone.driveStatus?.minGCRReads, 128)
         XCTAssertEqual(milestone.driveStatus?.minByteReady, 1024)
         XCTAssertEqual(milestone.driveStatus?.minSyncDetections, 4)
@@ -94,7 +105,12 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Write-back"])
         XCTAssertEqual(milestone.ramSignatures[0].bytes, [0x01, 0x08, 0xA9, 0x00])
         XCTAssertEqual(milestone.ramSignatures[1].bytes, [0xA9, 0x42, 0x60])
+        XCTAssertEqual(milestone.colorRAMSignatures[0].address, 0)
+        XCTAssertEqual(milestone.colorRAMSignatures[0].bytes, [0x01, 0x02, 0x03])
+        XCTAssertEqual(milestone.colorRAMSignatures[1].address, 999)
+        XCTAssertEqual(milestone.colorRAMSignatures[1].bytes, [0x0E, 0x0F])
         XCTAssertEqual(milestone.screenRAMHash, "0123456789abcdef")
+        XCTAssertEqual(milestone.colorRAMHash, "fedcba9876543210")
         XCTAssertEqual(milestone.screenshotName, "demo-title")
     }
 
@@ -123,6 +139,11 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertNil(milestone.driveStatus)
         XCTAssertNil(milestone.mediaStatus)
         XCTAssertEqual(milestone.ramSignatures, [])
+        XCTAssertEqual(milestone.colorRAMSignatures, [])
+        XCTAssertNil(milestone.screenRAMHash)
+        XCTAssertNil(milestone.colorRAMHash)
+        XCTAssertEqual(milestone.pcRanges, [])
+        XCTAssertEqual(milestone.expectedPCRanges, [])
     }
 
     func testManifestDecodesDriveModes() throws {
@@ -252,6 +273,45 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
     }
 
+    func testManifestRejectsInvalidPCRanges() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-range.d64",
+              "command": "LOAD\\"*\\",8,1",
+              "pcRanges": [
+                { "start": 65536, "end": 65537 }
+              ]
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testInvalidLegacyPCRangeDoesNotProduceRange() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-legacy-range.d64",
+              "command": "LOAD\\"*\\",8,1",
+              "pcStart": 53248,
+              "pcEnd": 49152
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+        let milestone = try XCTUnwrap(manifest.milestones.first)
+
+        XCTAssertNil(milestone.pcRange)
+        XCTAssertEqual(milestone.expectedPCRanges, [])
+    }
+
     func testScreenRAMHashUsesStableFNV1A64OverTextScreenBytes() {
         var ram = [UInt8](repeating: 0, count: 0x10000)
         ram[0x0400] = 0x01
@@ -262,6 +322,21 @@ final class CompatibilityManifestTests: XCTestCase {
         let unchanged = CompatibilityHash.screenRAM(ram)
         ram[0x0401] = 0x03
         let changed = CompatibilityHash.screenRAM(ram)
+
+        XCTAssertEqual(first, unchanged)
+        XCTAssertNotEqual(first, changed)
+    }
+
+    func testColorRAMHashUsesStableFNV1A64OverColorNibbles() {
+        var colorRAM = [UInt8](repeating: 0, count: 1024)
+        colorRAM[0] = 0x81
+        colorRAM[1] = 0x02
+
+        let first = CompatibilityHash.colorRAM(colorRAM)
+        colorRAM[1000] = 0x0F
+        let unchanged = CompatibilityHash.colorRAM(colorRAM)
+        colorRAM[0] = 0x03
+        let changed = CompatibilityHash.colorRAM(colorRAM)
 
         XCTAssertEqual(first, unchanged)
         XCTAssertNotEqual(first, changed)

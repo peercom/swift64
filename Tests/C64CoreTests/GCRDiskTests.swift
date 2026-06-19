@@ -184,6 +184,72 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.capabilities.preservesVariableSpeedZones, true)
     }
 
+    func testDiskImageWithWeakBitRangesDoesNotReportWeakBitsUnsupported() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x00, 0x00],
+            speedZone: 2,
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)],
+            isNativeLowLevel: true
+        )
+        let image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+
+        XCTAssertFalse(image.capabilities.unsupportedFeatures.contains("Weak/random bits"))
+        XCTAssertTrue(image.capabilities.unsupportedFeatures.contains("Flux-level timing"))
+    }
+
+    func testSetWeakBitRangesAnnotatesLoadedTrackAndUpdatesCapabilities() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x00, 0x00],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        let image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.tracks = image.tracks.map { $0?.bytes }
+        disk.trackInfos = image.tracks
+        disk.image = image
+
+        XCTAssertTrue(disk.setWeakBitRanges(
+            [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)],
+            forHalfTrack: 34
+        ))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+        XCTAssertFalse(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
+    }
+
+    func testSetWeakBitRangesRejectsMissingOrOutOfRangeTracks() {
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.setWeakBitRanges(
+            [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)],
+            forHalfTrack: 34
+        ))
+
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x00],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 1)
+        disk.tracks = image.tracks.map { $0?.bytes }
+        disk.trackInfos = image.tracks
+        disk.image = image
+        XCTAssertFalse(disk.setWeakBitRanges(
+            [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 8)],
+            forHalfTrack: 34
+        ))
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.weakBitRanges, [])
+    }
+
     func testD64LoadCreatesSyntheticLowLevelTracks() {
         let d64 = makeBlankD64()
         let disk = GCRDisk()
@@ -372,6 +438,9 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(c64.mountDisk(Data(g64), fileName: "selected.g64"))
         XCTAssertEqual(c64.emulationStatus.mountedDiskName, "selected.g64")
         XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .g64)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertFalse(c64.diskDrive.isMounted)
         XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
     }
@@ -385,6 +454,9 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(c64.mountDisk(Data(g64), fileName: "unsupported.g64"))
         XCTAssertNil(c64.emulationStatus.mountedDiskName)
         XCTAssertNil(c64.emulationStatus.mountedDiskFormat)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertFalse(c64.emulationStatus.drive.hasDisk)
     }
 
@@ -397,6 +469,9 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(c64.mountDisk(Data(g64), fileName: "empty.g64"))
         XCTAssertNil(c64.emulationStatus.mountedDiskName)
         XCTAssertNil(c64.emulationStatus.mountedDiskFormat)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertFalse(c64.emulationStatus.drive.hasDisk)
     }
 
@@ -407,6 +482,9 @@ final class GCRDiskTests: XCTestCase {
         let before = c64.emulationStatus
         XCTAssertEqual(before.mountedDiskName, "good.d64")
         XCTAssertEqual(before.mountedDiskFormat, .d64)
+        XCTAssertEqual(before.highLevelDiskFormat, .d64)
+        XCTAssertFalse(before.diskHasUnsavedChanges)
+        XCTAssertTrue(before.canExportModifiedD64)
         XCTAssertEqual(before.mediaCapabilities?.hasSyntheticGCR, true)
         XCTAssertEqual(before.drive.hasNativeLowLevelImage, false)
 
@@ -418,6 +496,9 @@ final class GCRDiskTests: XCTestCase {
         let after = c64.emulationStatus
         XCTAssertEqual(after.mountedDiskName, "good.d64")
         XCTAssertEqual(after.mountedDiskFormat, .d64)
+        XCTAssertEqual(after.highLevelDiskFormat, .d64)
+        XCTAssertFalse(after.diskHasUnsavedChanges)
+        XCTAssertTrue(after.canExportModifiedD64)
         XCTAssertEqual(after.mediaCapabilities?.hasSyntheticGCR, true)
         XCTAssertEqual(after.drive.hasDisk, true)
         XCTAssertEqual(after.drive.hasNativeLowLevelImage, false)

@@ -140,6 +140,7 @@ public final class DiskDrive {
 
     /// 16 channels (logical file numbers)
     var channels = [Channel](repeating: Channel(), count: 16)
+    private var commandStatus = "00, OK,00,00\r"
 
     /// Parsed directory entries
     public private(set) var directory: [DirectoryEntry] = []
@@ -151,9 +152,21 @@ public final class DiskDrive {
     public private(set) var diskID: String = ""
 
     var mountedGeometry: D64Geometry?
+    public private(set) var mountedFormat: DiskImage.Format?
+    public private(set) var hasUnsavedChanges = false
 
     public var hasSectorErrorInfo: Bool {
         mountedGeometry?.errorInfoOffset != nil
+    }
+
+    public var exportedD64Image: Data? {
+        guard mountedFormat == .d64, let imageData else { return nil }
+        return Data(imageData)
+    }
+
+    public func markChangesSaved() {
+        guard mountedFormat == .d64 else { return }
+        hasUnsavedChanges = false
     }
 
     // MARK: - Init
@@ -169,6 +182,8 @@ public final class DiskDrive {
         }
         imageData = [UInt8](data)
         mountedGeometry = geometry
+        mountedFormat = .d64
+        hasUnsavedChanges = false
         parseDirectory()
         return true
     }
@@ -178,6 +193,8 @@ public final class DiskDrive {
         guard let decoded = G64Parser.decode(data) else { return false }
         imageData = decoded
         mountedGeometry = Self.d64Geometry(forByteCount: decoded.count)
+        mountedFormat = .g64
+        hasUnsavedChanges = false
         parseDirectory()
         return true
     }
@@ -199,9 +216,12 @@ public final class DiskDrive {
     public func unmount() {
         imageData = nil
         mountedGeometry = nil
+        mountedFormat = nil
+        hasUnsavedChanges = false
         directory = []
         diskName = ""
         diskID = ""
+        commandStatus = "00, OK,00,00\r"
         for i in 0..<16 { channels[i] = Channel() }
     }
 
@@ -306,15 +326,22 @@ public final class DiskDrive {
 
     /// Find a file by name. Supports wildcards (* and ?).
     public func findFile(_ name: String) -> DirectoryEntry? {
-        if name == "*" || name.isEmpty {
+        let request = parseDiskFilename(name)
+        let searchName = request.name
+
+        if searchName == "*" || searchName.isEmpty {
             // First PRG file
             return directory.first { $0.fileType & 0x07 == 2 }
         }
 
-        let searchName = name.uppercased()
+        let uppercasedSearchName = searchName.uppercased()
         return directory.first { entry in
-            matchWildcard(searchName, entry.filename.uppercased())
+            matchWildcard(uppercasedSearchName, entry.filename.uppercased())
         }
+    }
+
+    public func isDirectoryListingRequest(_ name: String) -> Bool {
+        parseDiskFilename(name).name.hasPrefix("$")
     }
 
     /// Read the raw data of a file (following the track/sector chain).
@@ -351,8 +378,539 @@ public final class DiskDrive {
         return data
     }
 
+    /// Save a PRG file into the mounted D64 image.
+    ///
+    /// This is the high-level convenience write path used by Kernal traps. It
+    /// updates the D64 image in memory, including BAM free maps, PRG sector
+    /// chains, and the first free directory slot. True-drive GCR write-back is
+    /// still handled separately by the low-level 1541 roadmap.
+    @discardableResult
+    public func savePRG(filename: String, data: [UInt8]) -> Bool {
+        let request = parseDiskFilename(filename)
+        guard isMounted,
+              mountedGeometry != nil,
+              mountedFormat == .d64,
+              !request.name.isEmpty,
+              request.name != "$" else {
+            return false
+        }
+
+        let existing = findDirectorySlot(named: request.name)
+        guard request.replaceExisting || existing == nil else { return false }
+
+        let directorySlot: DirectorySlot
+        let releasedSectors: Set<Int>
+        if let existing {
+            directorySlot = existing.slot
+            releasedSectors = fileChainKeys(firstTrack: Int(existing.entry.firstTrack), firstSector: Int(existing.entry.firstSector))
+        } else {
+            guard let freeSlot = findFreeDirectorySlot() else { return false }
+            directorySlot = freeSlot
+            releasedSectors = []
+        }
+
+        let sectorCount = sectorCountNeeded(forPayloadSize: data.count)
+        guard sectorCount > 0 else { return false }
+
+        guard let allocated = selectFreeSectors(count: sectorCount, releasing: releasedSectors) else { return false }
+        let allocatedKeys = Set(allocated.map { sectorChainKey(track: $0.track, sector: $0.sector) })
+
+        if existing != nil {
+            clearDirectoryEntry(slot: directorySlot)
+            for key in releasedSectors.subtracting(allocatedKeys) {
+                setBAMSector(track: key >> 8, sector: key & 0xFF, free: true)
+            }
+        }
+
+        for sector in allocated {
+            setBAMSector(track: sector.track, sector: sector.sector, free: false)
+        }
+
+        writePRGChain(data: data, sectors: allocated)
+        writeDirectoryEntry(slot: directorySlot, filename: request.name, firstSector: allocated[0], sectorCount: sectorCount)
+        parseDirectory()
+        hasUnsavedChanges = true
+        return true
+    }
+
+    @discardableResult
+    public func executeCommand(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            commandStatus = "00, OK,00,00\r"
+            return true
+        }
+
+        let upper = trimmed.uppercased()
+        if upper.hasPrefix("S:") || upper.hasPrefix("S0:") || upper.hasPrefix("SCRATCH:") {
+            let name: String
+            if upper.hasPrefix("SCRATCH:") {
+                name = String(trimmed.dropFirst("SCRATCH:".count))
+            } else if upper.hasPrefix("S0:") {
+                name = String(trimmed.dropFirst(3))
+            } else {
+                name = String(trimmed.dropFirst(2))
+            }
+
+            guard let scratched = scratchFiles(matching: name) else {
+                commandStatus = "74, DRIVE NOT READY,00,00\r"
+                return false
+            }
+
+            if scratched > 0 {
+                commandStatus = String(format: "%02d, FILES SCRATCHED,00,00\r", min(scratched, 99))
+            } else {
+                commandStatus = "62, FILE NOT FOUND,00,00\r"
+            }
+            return true
+        }
+
+        if upper.hasPrefix("R:") || upper.hasPrefix("R0:") || upper.hasPrefix("RENAME:") {
+            let expression: String
+            if upper.hasPrefix("RENAME:") {
+                expression = String(trimmed.dropFirst("RENAME:".count))
+            } else if upper.hasPrefix("R0:") {
+                expression = String(trimmed.dropFirst(3))
+            } else {
+                expression = String(trimmed.dropFirst(2))
+            }
+
+            guard let result = renameFile(expression: expression) else {
+                commandStatus = "74, DRIVE NOT READY,00,00\r"
+                return false
+            }
+
+            switch result {
+            case .renamed:
+                commandStatus = "00, OK,00,00\r"
+            case .missingSource:
+                commandStatus = "62, FILE NOT FOUND,00,00\r"
+            case .destinationExists:
+                commandStatus = "63, FILE EXISTS,00,00\r"
+            case .syntaxError:
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+            }
+            return result == .renamed
+        }
+
+        commandStatus = "30, SYNTAX ERROR,00,00\r"
+        return false
+    }
+
     private func sectorChainKey(track: Int, sector: Int) -> Int {
         (track << 8) | sector
+    }
+
+    private struct DirectorySlot {
+        let track: Int
+        let sector: Int
+        let entryIndex: Int
+    }
+
+    private struct DiskFilenameRequest {
+        let name: String
+        let replaceExisting: Bool
+    }
+
+    private enum RenameResult {
+        case renamed
+        case missingSource
+        case destinationExists
+        case syntaxError
+    }
+
+    private func parseDiskFilename(_ filename: String) -> DiskFilenameRequest {
+        var name = filename
+        var replaceExisting = false
+
+        if name.hasPrefix("@") {
+            replaceExisting = true
+            name.removeFirst()
+        }
+
+        if name.hasPrefix(":") {
+            name.removeFirst()
+        }
+
+        if name.count >= 2 {
+            let chars = Array(name)
+            if chars[0].isNumber && chars[1] == ":" {
+                name.removeFirst(2)
+            }
+        }
+
+        if let comma = name.firstIndex(of: ",") {
+            name = String(name[..<comma])
+        }
+
+        return DiskFilenameRequest(name: name, replaceExisting: replaceExisting)
+    }
+
+    private func findFreeDirectorySlot() -> DirectorySlot? {
+        var track = 18
+        var sector = 1
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { return nil }
+            visitedSectors.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return nil }
+            for index in 0..<8 where data[index * 32 + 2] == 0 {
+                return DirectorySlot(track: track, sector: sector, entryIndex: index)
+            }
+
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+
+        return nil
+    }
+
+    private func findDirectorySlot(named name: String) -> (slot: DirectorySlot, entry: DirectoryEntry)? {
+        let searchName = name.uppercased()
+        var track = 18
+        var sector = 1
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { return nil }
+            visitedSectors.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return nil }
+            for index in 0..<8 {
+                let offset = index * 32
+                let fileType = data[offset + 2]
+                guard fileType != 0 else { continue }
+
+                let filenameRaw = Array(data[offset + 5...offset + 20])
+                let filename = petsciiToString(filenameRaw)
+                guard filename.uppercased() == searchName else { continue }
+
+                let entry = DirectoryEntry(
+                    filename: filename,
+                    filenameRaw: filenameRaw,
+                    fileType: fileType,
+                    firstTrack: data[offset + 3],
+                    firstSector: data[offset + 4],
+                    fileSize: UInt16(data[offset + 30]) | (UInt16(data[offset + 31]) << 8)
+                )
+                return (DirectorySlot(track: track, sector: sector, entryIndex: index), entry)
+            }
+
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+
+        return nil
+    }
+
+    private func scratchFiles(matching filename: String) -> Int? {
+        guard isMounted, mountedFormat == .d64 else { return nil }
+        let request = parseDiskFilename(filename)
+        guard !request.name.isEmpty, request.name != "$" else { return 0 }
+
+        let matches = directorySlots(matching: request.name)
+        guard !matches.isEmpty else { return 0 }
+
+        for match in matches {
+            let releasedSectors = fileChainKeys(firstTrack: Int(match.entry.firstTrack), firstSector: Int(match.entry.firstSector))
+            clearDirectoryEntry(slot: match.slot)
+            for key in releasedSectors {
+                setBAMSector(track: key >> 8, sector: key & 0xFF, free: true)
+            }
+        }
+
+        parseDirectory()
+        hasUnsavedChanges = true
+        return matches.count
+    }
+
+    private func renameFile(expression: String) -> RenameResult? {
+        guard isMounted, mountedFormat == .d64 else { return nil }
+        guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
+
+        let destination = parseDiskFilename(String(expression[..<separator])).name
+        let source = parseDiskFilename(String(expression[expression.index(after: separator)...])).name
+        guard !destination.isEmpty, !source.isEmpty, destination != "$", source != "$" else {
+            return .syntaxError
+        }
+        guard findDirectorySlot(named: destination) == nil else { return .destinationExists }
+        guard let existing = findDirectorySlot(named: source) else { return .missingSource }
+
+        renameDirectoryEntry(slot: existing.slot, filename: destination)
+        parseDirectory()
+        hasUnsavedChanges = true
+        return .renamed
+    }
+
+    private func directorySlots(matching name: String) -> [(slot: DirectorySlot, entry: DirectoryEntry)] {
+        let searchName = name.uppercased()
+        var matches: [(slot: DirectorySlot, entry: DirectoryEntry)] = []
+        var track = 18
+        var sector = 1
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { return matches }
+            visitedSectors.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return matches }
+            for index in 0..<8 {
+                let offset = index * 32
+                let fileType = data[offset + 2]
+                guard fileType != 0 else { continue }
+
+                let filenameRaw = Array(data[offset + 5...offset + 20])
+                let filename = petsciiToString(filenameRaw)
+                guard matchWildcard(searchName, filename.uppercased()) else { continue }
+
+                let entry = DirectoryEntry(
+                    filename: filename,
+                    filenameRaw: filenameRaw,
+                    fileType: fileType,
+                    firstTrack: data[offset + 3],
+                    firstSector: data[offset + 4],
+                    fileSize: UInt16(data[offset + 30]) | (UInt16(data[offset + 31]) << 8)
+                )
+                matches.append((DirectorySlot(track: track, sector: sector, entryIndex: index), entry))
+            }
+
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+
+        return matches
+    }
+
+    private func sectorCountNeeded(forPayloadSize size: Int) -> Int {
+        guard size > 0 else { return 0 }
+        if size <= 253 { return 1 }
+        return 1 + Int(ceil(Double(size - 253) / 254.0))
+    }
+
+    private func writePRGChain(data: [UInt8], sectors: [(track: Int, sector: Int)]) {
+        var position = 0
+
+        for index in sectors.indices {
+            var sectorData = [UInt8](repeating: 0, count: 256)
+            let isLast = index == sectors.indices.last
+            let bytesRemaining = data.count - position
+
+            if isLast {
+                let byteCount = min(bytesRemaining, 253)
+                sectorData[0] = 0
+                sectorData[1] = UInt8(byteCount + 2)
+                if byteCount > 0 {
+                    sectorData.replaceSubrange(2..<(2 + byteCount), with: data[position..<(position + byteCount)])
+                    position += byteCount
+                }
+            } else {
+                let next = sectors[index + 1]
+                sectorData[0] = UInt8(next.track)
+                sectorData[1] = UInt8(next.sector)
+                let byteCount = min(bytesRemaining, 254)
+                sectorData.replaceSubrange(2..<(2 + byteCount), with: data[position..<(position + byteCount)])
+                position += byteCount
+            }
+
+            writeSector(track: sectors[index].track, sector: sectors[index].sector, data: sectorData)
+        }
+    }
+
+    private func writeDirectoryEntry(
+        slot: DirectorySlot,
+        filename: String,
+        firstSector: (track: Int, sector: Int),
+        sectorCount: Int
+    ) {
+        guard var sectorData = readSector(track: slot.track, sector: slot.sector) else { return }
+        let base = slot.entryIndex * 32
+        sectorData[base + 2] = 0x82
+        sectorData[base + 3] = UInt8(firstSector.track)
+        sectorData[base + 4] = UInt8(firstSector.sector)
+
+        let name = petsciiFilenameBytes(filename)
+        for i in 0..<16 {
+            sectorData[base + 5 + i] = name[i]
+        }
+
+        sectorData[base + 30] = UInt8(sectorCount & 0xFF)
+        sectorData[base + 31] = UInt8((sectorCount >> 8) & 0xFF)
+        writeSector(track: slot.track, sector: slot.sector, data: sectorData)
+    }
+
+    private func selectFreeSectors(count: Int, releasing released: Set<Int> = []) -> [(track: Int, sector: Int)]? {
+        guard let geometry = mountedGeometry else { return nil }
+        var occupied = occupiedSectors().subtracting(released)
+        var selected: [(track: Int, sector: Int)] = []
+
+        for track in 1...geometry.trackCount where track != 18 {
+            ensureUsableBAMBitmap(forTrack: track, occupied: occupied)
+
+            for sector in 0..<geometry.sectorsPerTrack[track] {
+                let key = sectorChainKey(track: track, sector: sector)
+                guard !occupied.contains(key),
+                      released.contains(key) || isBAMSectorFree(track: track, sector: sector) else { continue }
+                selected.append((track, sector))
+                occupied.insert(key)
+                if selected.count == count { return selected }
+            }
+        }
+
+        return nil
+    }
+
+    private func occupiedSectors() -> Set<Int> {
+        var occupied = Set<Int>()
+        appendDirectoryChain(to: &occupied)
+        for entry in directory {
+            appendFileChain(entry, to: &occupied)
+        }
+        return occupied
+    }
+
+    private func appendDirectoryChain(to occupied: inout Set<Int>) {
+        var track = 18
+        var sector = 1
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !occupied.contains(key) else { return }
+            occupied.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return }
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+    }
+
+    private func fileChainKeys(firstTrack: Int, firstSector: Int) -> Set<Int> {
+        var keys = Set<Int>()
+        var track = firstTrack
+        var sector = firstSector
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !keys.contains(key) else { return keys }
+            keys.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return keys }
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+
+        return keys
+    }
+
+    private func appendFileChain(_ entry: DirectoryEntry, to occupied: inout Set<Int>) {
+        var track = Int(entry.firstTrack)
+        var sector = Int(entry.firstSector)
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !occupied.contains(key) else { return }
+            occupied.insert(key)
+
+            guard let data = readSector(track: track, sector: sector) else { return }
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+    }
+
+    private func ensureUsableBAMBitmap(forTrack track: Int, occupied: Set<Int>) {
+        guard let geometry = mountedGeometry,
+              let image = imageData,
+              track >= 1 && track <= geometry.trackCount else { return }
+
+        let bamOffset = bamEntryOffset(forTrack: track)
+        guard bamOffset + 3 < image.count else { return }
+        let hasBitmap = image[bamOffset + 1] != 0 || image[bamOffset + 2] != 0 || image[bamOffset + 3] != 0
+        guard !hasBitmap, image[bamOffset] > 0 else { return }
+
+        var freeCount = UInt8(0)
+        for sector in 0..<geometry.sectorsPerTrack[track] {
+            let free = !occupied.contains(sectorChainKey(track: track, sector: sector))
+            markBAMSector(track: track, sector: sector, free: free)
+            if free { freeCount += 1 }
+        }
+
+        if bamOffset < (imageData?.count ?? 0) {
+            imageData?[bamOffset] = freeCount
+        }
+    }
+
+    private func isBAMSectorFree(track: Int, sector: Int) -> Bool {
+        guard let image = imageData else { return false }
+        let byteOffset = bamEntryOffset(forTrack: track) + 1 + sector / 8
+        guard byteOffset < image.count else { return false }
+        return image[byteOffset] & (1 << UInt8(sector % 8)) != 0
+    }
+
+    private func markBAMSector(track: Int, sector: Int, free: Bool) {
+        let byteOffset = bamEntryOffset(forTrack: track) + 1 + sector / 8
+        guard imageData != nil, byteOffset < imageData!.count else { return }
+        let mask = UInt8(1 << UInt8(sector % 8))
+        if free {
+            imageData![byteOffset] |= mask
+        } else {
+            imageData![byteOffset] &= ~mask
+        }
+    }
+
+    private func setBAMSector(track: Int, sector: Int, free: Bool) {
+        let wasFree = isBAMSectorFree(track: track, sector: sector)
+        guard wasFree != free else { return }
+
+        markBAMSector(track: track, sector: sector, free: free)
+        let countOffset = bamEntryOffset(forTrack: track)
+        guard countOffset < (imageData?.count ?? 0) else { return }
+
+        if free {
+            let count = imageData?[countOffset] ?? 0
+            imageData?[countOffset] = count &+ 1
+        } else if let count = imageData?[countOffset], count > 0 {
+            imageData?[countOffset] = count - 1
+        }
+    }
+
+    private func bamEntryOffset(forTrack track: Int) -> Int {
+        DiskDrive.trackOffset[18] + track * 4
+    }
+
+    private func clearDirectoryEntry(slot: DirectorySlot) {
+        guard var sectorData = readSector(track: slot.track, sector: slot.sector) else { return }
+        let base = slot.entryIndex * 32
+        for offset in 2..<32 {
+            sectorData[base + offset] = 0
+        }
+        writeSector(track: slot.track, sector: slot.sector, data: sectorData)
+    }
+
+    private func renameDirectoryEntry(slot: DirectorySlot, filename: String) {
+        guard var sectorData = readSector(track: slot.track, sector: slot.sector) else { return }
+        let base = slot.entryIndex * 32
+        let name = petsciiFilenameBytes(filename)
+        for index in 0..<16 {
+            sectorData[base + 5 + index] = name[index]
+        }
+        writeSector(track: slot.track, sector: slot.sector, data: sectorData)
+    }
+
+    private func writeSector(track: Int, sector: Int, data: [UInt8]) {
+        guard var image = imageData,
+              let geometry = mountedGeometry,
+              track >= 1 && track <= geometry.trackCount,
+              sector >= 0 && sector < geometry.sectorsPerTrack[track],
+              data.count == 256 else { return }
+
+        let offset = geometry.trackOffsets[track] + sector * 256
+        guard offset + 256 <= image.count else { return }
+        image.replaceSubrange(offset..<offset + 256, with: data)
+        imageData = image
     }
 
     /// Generate a directory listing as a BASIC program (like LOAD"$",8).
@@ -446,7 +1004,15 @@ public final class DiskDrive {
     public func openFile(channel: Int, filename: String) -> Bool {
         guard channel >= 0 && channel < 16 else { return false }
 
-        if filename == "$" {
+        if channel == 15 {
+            if !filename.isEmpty {
+                _ = executeCommand(filename)
+            }
+            channels[channel] = Channel(data: Array(commandStatus.utf8), position: 0, isOpen: true)
+            return true
+        }
+
+        if isDirectoryListingRequest(filename) {
             // Directory listing
             let listing = generateDirectoryListing()
             channels[channel] = Channel(data: listing, position: 0, isOpen: true)
@@ -531,5 +1097,10 @@ public final class DiskDrive {
         case 0x22: return 0x22  // Quote
         default: return 0x3F  // ?
         }
+    }
+
+    private func petsciiFilenameBytes(_ filename: String) -> [UInt8] {
+        let bytes = filename.prefix(16).map { charToPetscii($0) }
+        return bytes + [UInt8](repeating: 0xA0, count: max(0, 16 - bytes.count))
     }
 }

@@ -564,12 +564,15 @@ final class VICTests: XCTestCase {
     func testSpriteDataFetchRunsDuringEarlyRasterCycles() {
         let vic = VIC()
         vic.rasterLine = 0
-        vic.rasterCycle = 0
+        vic.rasterCycle = 58
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 0
+        vic.spritePointers[0] = 0x02
+        var reads: [UInt16] = []
         vic.readMemory = { address in
+            reads.append(address)
             switch address {
-            case 0x07F8: return 0x02
+            case 0x07FB: return 0x05
             case 0x0080: return 0xAA
             case 0x0081: return 0xBB
             case 0x0082: return 0xCC
@@ -581,6 +584,335 @@ final class VICTests: XCTestCase {
 
         XCTAssertTrue(vic.spriteDisplay[0])
         XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
+        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082])
+    }
+
+    func testSpriteDMABusPhaseUsesPerSpriteSlots() {
+        let vic = VIC()
+        vic.rasterLine = 7
+        vic.rasterCycle = 58
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 7
+
+        XCTAssertEqual(vic.activeSpriteDMASlot, 0)
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertTrue(vic.aecLineLow)
+        XCTAssertEqual(vic.busOwner, .vicSpriteDMA)
+
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterCycle, 59)
+        XCTAssertEqual(vic.activeSpriteDMASlot, 0)
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertTrue(vic.aecLineLow)
+
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterCycle, 60)
+        XCTAssertNil(vic.activeSpriteDMASlot)
+        XCTAssertEqual(vic.busPhase, .cpu)
+        XCTAssertFalse(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+    }
+
+    func testSpriteBAWarningDropsBeforeDMASlotWithoutAEC() {
+        let vic = VIC()
+        vic.rasterLine = 7
+        vic.rasterCycle = 55
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 7
+
+        XCTAssertEqual(vic.activeSpriteBAWarningSlot, 0)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+        XCTAssertFalse(vic.isStealingCPU)
+        XCTAssertEqual(vic.busOwner, .cpu)
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 56)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 57)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 58)
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
+        XCTAssertTrue(vic.aecLineLow)
+        XCTAssertEqual(vic.busOwner, .vicSpriteDMA)
+    }
+
+    func testSpriteBAWarningCanTargetSpriteOnNextRasterline() {
+        let vic = VIC()
+        vic.rasterLine = 10
+        vic.rasterCycle = 61
+        vic.spriteEnabled = 0x08
+        vic.spriteY[3] = 11
+
+        XCTAssertEqual(vic.activeSpriteBAWarningSlot, 3)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 62)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterLine, 11)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+    }
+
+    func testSpriteDMASlotIgnoresInactiveVerticalRange() {
+        let vic = VIC()
+        vic.rasterLine = 10
+        vic.rasterCycle = 58
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 42
+
+        XCTAssertNil(vic.activeSpriteDMASlot)
+        XCTAssertEqual(vic.busPhase, .cpu)
+        XCTAssertFalse(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+    }
+
+    func testSpriteBAWarningIgnoresInactiveVerticalRange() {
+        let vic = VIC()
+        vic.rasterLine = 10
+        vic.rasterCycle = 55
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 42
+
+        XCTAssertNil(vic.activeSpriteBAWarningSlot)
+        XCTAssertEqual(vic.busPhase, .cpu)
+        XCTAssertFalse(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+    }
+
+    func testSpriteDMAFetchesOnlyAtStartOfTwoCycleSlot() {
+        let vic = VIC()
+        vic.rasterLine = 0
+        vic.rasterCycle = 58
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 0
+        vic.spritePointers[0] = 0x02
+        var reads: [UInt16] = []
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x07FB: return 0x05
+            case 0x0080: return 0xAA
+            case 0x0081: return 0xBB
+            case 0x0082: return 0xCC
+            default: return 0
+            }
+        }
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 59)
+        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082])
+
+        vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 60)
+        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082, 0x07FC])
+    }
+
+    func testSpriteExpansionStateInitializesUnexpandedRowsEachRasterLine() {
+        let vic = VIC()
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 7
+
+        vic.rasterLine = 7
+        vic.updateSpriteExpansionStateForCurrentLine()
+        XCTAssertTrue(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMC[0], 0)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
+
+        vic.rasterLine = 8
+        vic.updateSpriteExpansionStateForCurrentLine()
+        XCTAssertTrue(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMC[0], 3)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
+    }
+
+    func testSpriteExpansionStateRepeatsRowsForExpandedSprites() {
+        let vic = VIC()
+        vic.spriteEnabled = 0x01
+        vic.spriteExpandY = 0x01
+        vic.spriteY[0] = 7
+
+        vic.rasterLine = 7
+        vic.updateSpriteExpansionStateForCurrentLine()
+        XCTAssertFalse(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMC[0], 0)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
+
+        vic.rasterLine = 8
+        vic.updateSpriteExpansionStateForCurrentLine()
+        XCTAssertTrue(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMC[0], 0)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
+
+        vic.rasterLine = 9
+        vic.updateSpriteExpansionStateForCurrentLine()
+        XCTAssertFalse(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMC[0], 3)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
+    }
+
+    func testExpandedSpriteDMAUsesInitializedSpriteCounter() {
+        let vic = VIC()
+        vic.rasterLine = 10
+        vic.rasterCycle = 58
+        vic.spriteEnabled = 0x01
+        vic.spriteExpandY = 0x01
+        vic.spriteY[0] = 7
+        vic.spritePointers[0] = 0x02
+        vic.updateSpriteExpansionStateForCurrentLine()
+        var reads: [UInt16] = []
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x0080 + 3: return 0xAA
+            case 0x0080 + 4: return 0xBB
+            case 0x0080 + 5: return 0xCC
+            default: return 0
+            }
+        }
+
+        vic.fetchSpriteData(sprite: 0)
+
+        XCTAssertEqual(vic.spriteMC[0], 6)
+        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
+        XCTAssertEqual(reads, [0x0083, 0x0084, 0x0085])
+    }
+
+    func testSpriteDMAAdvancesUnexpandedSpriteCounterByThreeBytes() {
+        let vic = VIC()
+        vic.rasterLine = 9
+        vic.rasterCycle = 58
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 7
+        vic.spritePointers[0] = 0x02
+        vic.updateSpriteExpansionStateForCurrentLine()
+        vic.readMemory = { address in
+            switch address {
+            case 0x0086: return 0xAA
+            case 0x0087: return 0xBB
+            case 0x0088: return 0xCC
+            default: return 0
+            }
+        }
+
+        XCTAssertEqual(vic.spriteMC[0], 6)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 2)
+
+        vic.fetchSpriteData(sprite: 0)
+
+        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
+        XCTAssertEqual(vic.spriteMC[0], 9)
+        XCTAssertEqual(vic.spriteLineRow(for: 0), 3)
+    }
+
+    func testSpritePointerLatchesDuringLowPhaseBeforeDMASlot() {
+        let vic = VIC()
+        vic.rasterLine = 0
+        vic.rasterCycle = 55
+        vic.spriteEnabled = 0x01
+        vic.spriteY[0] = 0
+        var reads: [UInt16] = []
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x07F8: return 0x02
+            case 0x07F9: return 0x09
+            case 0x07FA: return 0x0A
+            case 0x07FB: return 0x0B
+            case 0x0080: return 0xAA
+            case 0x0081: return 0xBB
+            case 0x0082: return 0xCC
+            default: return 0
+            }
+        }
+
+        while vic.rasterCycle < 58 {
+            vic.tick()
+        }
+
+        XCTAssertEqual(vic.spritePointers[0], 0x02)
+        XCTAssertEqual(vic.spritePointers[1], 0x09)
+        XCTAssertEqual(vic.spritePointers[2], 0x0A)
+        XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA])
+
+        vic.tick()
+
+        XCTAssertTrue(vic.spriteDisplay[0])
+        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
+        XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA, 0x07FB, 0x0080, 0x0081, 0x0082])
+    }
+
+    func testLowPhaseAccessReportsRefreshCycles() {
+        let vic = VIC()
+        vic.rasterLine = 20
+        vic.rasterCycle = 10
+
+        for index in 0..<5 {
+            XCTAssertEqual(vic.lowPhaseAccess, .refresh(index: index))
+            XCTAssertEqual(vic.busPhase, .cpu)
+            XCTAssertFalse(vic.baLineLow)
+            XCTAssertFalse(vic.aecLineLow)
+            vic.tick()
+        }
+
+        XCTAssertEqual(vic.rasterCycle, 15)
+        XCTAssertEqual(vic.lowPhaseAccess, .displayData(column: 0))
+    }
+
+    func testLowPhaseAccessReportsDisplayColumns() {
+        let vic = VIC()
+        vic.rasterLine = 20
+        vic.rasterCycle = 15
+
+        for column in 0..<40 {
+            XCTAssertEqual(vic.lowPhaseAccess, .displayData(column: column))
+            vic.tick()
+        }
+
+        XCTAssertEqual(vic.rasterCycle, 55)
+        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 0))
+    }
+
+    func testLowPhaseAccessReportsSpritePointersWithoutStealingCPU() {
+        let vic = VIC()
+        vic.rasterLine = 20
+        vic.rasterCycle = 55
+
+        for sprite in 0..<8 {
+            XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: sprite))
+            XCTAssertEqual(vic.busPhase, .cpu)
+            XCTAssertFalse(vic.baLineLow)
+            XCTAssertFalse(vic.aecLineLow)
+            vic.tick()
+        }
+    }
+
+    func testLowPhaseSpriteMiddleByteRequiresActiveSprite() {
+        let vic = VIC()
+        vic.rasterLine = 7
+        vic.rasterCycle = 2
+        vic.spriteEnabled = 0x08
+        vic.spriteY[3] = 7
+
+        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
+
+        vic.spriteY[3] = 42
+
+        XCTAssertEqual(vic.lowPhaseAccess, .idle)
     }
 
     func testTickReturnsTrueOnlyDuringBadLineBusStealWindow() {
@@ -597,6 +929,453 @@ final class VICTests: XCTestCase {
         }
 
         XCTAssertTrue(vic.tick())
+    }
+
+    func testBadLineBALineDropsThreeCyclesBeforeAEC() {
+        let vic = VIC()
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rasterCycle = 0
+        vic.badLineDENLatched = true
+        vic.rowCounter = 5
+
+        vic.tick()
+        XCTAssertTrue(vic.badLine)
+        XCTAssertEqual(vic.rowCounter, 0)
+
+        while vic.rasterCycle < 12 {
+            XCTAssertFalse(vic.baLineLow)
+            XCTAssertFalse(vic.aecLineLow)
+            XCTAssertEqual(vic.busOwner, .cpu)
+            vic.tick()
+        }
+
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+        XCTAssertFalse(vic.isStealingCPU)
+        XCTAssertEqual(vic.busOwner, .cpu)
+        XCTAssertEqual(vic.busPhase, .badLineBAWarning)
+
+        while vic.rasterCycle < 15 {
+            vic.tick()
+        }
+
+        XCTAssertTrue(vic.baLineLow)
+        XCTAssertTrue(vic.aecLineLow)
+        XCTAssertTrue(vic.isStealingCPU)
+        XCTAssertEqual(vic.busOwner, .vicBadLine)
+        XCTAssertEqual(vic.busPhase, .badLineCharacterFetch(column: 0))
+
+        while vic.rasterCycle < 55 {
+            vic.tick()
+        }
+
+        XCTAssertFalse(vic.baLineLow)
+        XCTAssertFalse(vic.aecLineLow)
+        XCTAssertFalse(vic.isStealingCPU)
+        XCTAssertEqual(vic.busOwner, .cpu)
+        XCTAssertEqual(vic.busPhase, .cpu)
+    }
+
+    func testBadLineBusPhaseReportsCharacterFetchColumn() {
+        let vic = VIC()
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rasterCycle = 0
+        vic.badLineDENLatched = true
+
+        while vic.rasterCycle < 15 {
+            vic.tick()
+        }
+
+        for column in 0..<40 {
+            XCTAssertEqual(vic.busPhase, .badLineCharacterFetch(column: column))
+            vic.tick()
+        }
+
+        XCTAssertEqual(vic.rasterCycle, 55)
+        XCTAssertEqual(vic.busPhase, .cpu)
+    }
+
+    func testBadLineFetchLatchesCharacterAndColorRAM() {
+        let vic = VIC()
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rasterCycle = 15
+        vic.badLine = true
+        vic.videoCounterBase = 80
+        var screenReads: [UInt16] = []
+        var colorReads: [UInt16] = []
+        vic.readMemory = { address in
+            screenReads.append(address)
+            switch address {
+            case 0x0450: return 0x41
+            case 0x0451: return 0x42
+            default: return 0
+            }
+        }
+        vic.readColorRAM = { address in
+            colorReads.append(address)
+            switch address {
+            case 0x0050: return 0x2A
+            case 0x0051: return 0x37
+            default: return 0
+            }
+        }
+
+        vic.tick()
+        vic.tick()
+
+        XCTAssertEqual(vic.lineBuffer[0], 0x41)
+        XCTAssertEqual(vic.lineBuffer[1], 0x42)
+        XCTAssertEqual(vic.colorBuffer[0], 0x0A)
+        XCTAssertEqual(vic.colorBuffer[1], 0x07)
+        XCTAssertEqual(vic.displayLineBufferBase, 80)
+        XCTAssertEqual(screenReads, [0x0450, 0x0451])
+        XCTAssertEqual(colorReads, [0x0050, 0x0051])
+    }
+
+    func testRenderingUsesCompletedBadLineCharacterAndColorBuffers() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+        var screenReads: [UInt16] = []
+        var colorReads: [UInt16] = []
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.readMemory = { address in
+            screenReads.append(address)
+            switch address {
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { address in
+            colorReads.append(address)
+            return 0x07
+        }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
+        XCTAssertFalse(screenReads.contains(0x0400))
+        XCTAssertFalse(colorReads.contains(0x0000))
+        XCTAssertTrue(screenReads.contains(0x1008))
+    }
+
+    func testLowPhaseDisplayDataLatchesGlyphByteForCompletedMatrixRow() {
+        let vic = VIC()
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rasterCycle = 15
+        vic.displayActive = true
+        vic.rowCounter = 3
+        vic.lineBuffer[0] = 0x01
+        vic.displayLineBufferValid = true
+        vic.displayLineBufferBase = 0
+        var reads: [UInt16] = []
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x100B: return 0x80
+            default: return 0x00
+            }
+        }
+
+        vic.performLowPhaseAccess()
+
+        XCTAssertEqual(vic.graphicsBuffer[0], 0x80)
+        XCTAssertEqual(vic.graphicsBufferBase, 0)
+        XCTAssertEqual(vic.graphicsBufferPixelRow, 3)
+        XCTAssertFalse(vic.graphicsBufferValid)
+        XCTAssertEqual(reads, [0x100B])
+    }
+
+    func testRenderingUsesCompletedLowPhaseGraphicsBuffer() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+        var reads: [UInt16] = []
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.displayLineBufferBase = 0
+        vic.graphicsBuffer[0] = 0x80
+        vic.graphicsBufferValid = true
+        vic.graphicsBufferBase = 0
+        vic.graphicsBufferPixelRow = 0
+        vic.readMemory = { address in
+            reads.append(address)
+            return 0x00
+        }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
+        XCTAssertFalse(reads.contains(0x1008))
+    }
+
+    func testLowPhaseGraphicsBufferOnlyAppliesToMatchingPixelRow() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.displayLineBufferBase = 0
+        vic.graphicsBuffer[0] = 0x80
+        vic.graphicsBufferValid = true
+        vic.graphicsBufferBase = 0
+        vic.graphicsBufferPixelRow = 1
+        vic.readMemory = { address in
+            switch address {
+            case 0x1008: return 0x00
+            default: return 0x00
+            }
+        }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
+    }
+
+    func testCompletedBadLineBufferOnlyAppliesToMatchingMatrixBase() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.displayLineBufferBase = 40
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x03
+            case 0x1018: return 0x80
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[7])
+
+        line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 1,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
+    }
+
+    func testLatchedMatrixRenderingUsesRowCounterForGlyphRow() {
+        let vic = VIC()
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        var reads: [UInt16] = []
+
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.displayActive = true
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.displayLineBufferBase = 0
+        vic.rowCounter = 3
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x100B: return 0x80
+            default: return 0x00
+            }
+        }
+
+        vic.renderRasterline()
+
+        XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + VIC.displayLeft], ColorPalette.rgba[2])
+        XCTAssertTrue(reads.contains(0x100B))
+        XCTAssertFalse(reads.contains(0x1008))
+        XCTAssertEqual(vic.rowCounter, 4)
+    }
+
+    func testRenderedDisplayLinesAdvanceAndWrapRowCounter() {
+        let vic = VIC()
+
+        vic.displayActive = true
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rowCounter = 0
+        vic.renderRasterline()
+
+        XCTAssertEqual(vic.rowCounter, 1)
+        XCTAssertEqual(vic.videoCounterBase, 0)
+
+        vic.rasterLine = UInt16(VIC.displayTop + 7)
+        vic.rowCounter = 7
+        vic.renderRasterline()
+
+        XCTAssertEqual(vic.rowCounter, 0)
+        XCTAssertEqual(vic.videoCounterBase, 40)
+    }
+
+    func testCompletedBadLineBufferIgnoresLaterMatrixAndColorChangesButReadsLiveGlyph() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+        var glyph: UInt8 = 0x80
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = true
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x03
+            case 0x1008: return glyph
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
+
+        glyph = 0x00
+        line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
+    }
+
+    func testIncompleteBadLineBufferFallsBackToLiveScreenAndColorRAM() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+        var screenReads: [UInt16] = []
+        var colorReads: [UInt16] = []
+
+        vic.lineBuffer[0] = 0x01
+        vic.colorBuffer[0] = 0x02
+        vic.displayLineBufferValid = false
+        vic.readMemory = { address in
+            screenReads.append(address)
+            switch address {
+            case 0x0400: return 0x03
+            case 0x1018: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { address in
+            colorReads.append(address)
+            return 0x07
+        }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[7])
+        XCTAssertTrue(screenReads.contains(0x0400))
+        XCTAssertTrue(screenReads.contains(0x1018))
+        XCTAssertTrue(colorReads.contains(0x0000))
+    }
+
+    func testLiveColorRAMFallbackMasksToFourBits() {
+        let vic = VIC()
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
+
+        vic.displayLineBufferValid = false
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0xF2 }
+
+        vic.renderGraphicsLine(
+            &line,
+            foregroundMask: &foregroundMask,
+            charRow: 0,
+            pixelRow: 0,
+            leftBorder: VIC.displayLeft,
+            rightBorder: VIC.displayRight
+        )
+
+        XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
+    }
+
+    func testDisplayDisabledKeepsBadLineBusSignalsHigh() {
+        let vic = VIC()
+        vic.rasterLine = UInt16(VIC.displayTop)
+        vic.rasterCycle = 0
+        vic.writeRegister(0x11, value: 0x0B)
+
+        for _ in 0..<56 {
+            XCTAssertFalse(vic.badLine)
+            XCTAssertFalse(vic.baLineLow)
+            XCTAssertFalse(vic.aecLineLow)
+            XCTAssertEqual(vic.busOwner, .cpu)
+            XCTAssertEqual(vic.busPhase, .cpu)
+            vic.tick()
+        }
     }
 
     func testSpriteSpriteCollisionRegisterTracksAndClearsOverlaps() {

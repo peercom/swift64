@@ -94,6 +94,33 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.interruptData & 0x01, 0x01)
     }
 
+    func testTimerACountsCNTRisingEdgesWhenCNTModeIsSelected() {
+        let cia = CIA(isCIA1: true)
+        cia.setCNTLine(high: false)
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x81)
+        cia.writeRegister(0x0E, value: 0x21)
+
+        cia.setCNTLine(high: false)
+        XCTAssertEqual(cia.timerA, 0x0001)
+
+        cia.setCNTLine(high: true)
+        XCTAssertEqual(cia.timerA, 0x0000)
+        XCTAssertFalse(cia.interruptActive)
+
+        cia.setCNTLine(high: true)
+        XCTAssertEqual(cia.timerA, 0x0000)
+
+        cia.setCNTLine(high: false)
+        XCTAssertEqual(cia.timerA, 0x0000)
+
+        cia.setCNTLine(high: true)
+        XCTAssertEqual(cia.timerA, 0x0001)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData & 0x01, 0x01)
+    }
+
     func testTimerBCountsCNTPulsesWhenCNTModeIsSelected() {
         let cia = CIA(isCIA1: true)
         cia.writeRegister(0x06, value: 0x01)
@@ -109,6 +136,26 @@ final class CIATests: XCTestCase {
         XCTAssertFalse(cia.interruptActive)
 
         cia.pulseCNT()
+        XCTAssertEqual(cia.timerB, 0x0001)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData & 0x02, 0x02)
+    }
+
+    func testTimerBCountsCNTRisingEdgesWhenCNTModeIsSelected() {
+        let cia = CIA(isCIA1: true)
+        cia.setCNTLine(high: false)
+        cia.writeRegister(0x06, value: 0x01)
+        cia.writeRegister(0x07, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x82)
+        cia.writeRegister(0x0F, value: 0x21)
+
+        cia.setCNTLine(high: true)
+        XCTAssertEqual(cia.timerB, 0x0000)
+        XCTAssertFalse(cia.interruptActive)
+
+        cia.setCNTLine(high: false)
+        cia.setCNTLine(high: true)
+
         XCTAssertEqual(cia.timerB, 0x0001)
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.interruptData & 0x02, 0x02)
@@ -487,6 +534,23 @@ final class CIATests: XCTestCase {
         cia.pulseCNT()
 
         XCTAssertEqual(cia.readRegister(0x0C), 0b1010_0101)
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x88)
+        XCTAssertFalse(cia.interruptActive)
+    }
+
+    func testSerialInputShiftsSPOnCNTRisingEdgesAndRaisesInterrupt() {
+        let cia = CIA(isCIA1: true)
+        cia.setCNTLine(high: false)
+        cia.writeRegister(0x0D, value: 0x88)
+
+        for bit in [false, true, true, false, true, false, false, true] {
+            cia.setSPLine(high: bit)
+            cia.setCNTLine(high: false)
+            cia.setCNTLine(high: true)
+        }
+
+        XCTAssertEqual(cia.readRegister(0x0C), 0b0110_1001)
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.readRegister(0x0D), 0x88)
         XCTAssertFalse(cia.interruptActive)
