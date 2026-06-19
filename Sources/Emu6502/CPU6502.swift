@@ -31,6 +31,10 @@ public final class CPU6502 {
     /// IRQ line state (active low / level-sensitive). Set to `true` to assert.
     public var irqLine: Bool = false
 
+    /// RDY input line state. When low, the NMOS 6502 pauses on read cycles
+    /// while allowing write cycles already in progress to complete.
+    public private(set) var rdyLine: Bool = true
+
     /// Total number of cycles executed since reset.
     public private(set) var totalCycles: UInt64 = 0
 
@@ -85,6 +89,10 @@ public final class CPU6502 {
     }
     var interruptType: InterruptKind = .none
 
+    /// One-boundary IRQ mask override for instructions that update I too late
+    /// for the immediately following IRQ decision, such as CLI, SEI, and PLP.
+    var irqMaskOverrideForNextBoundary: Bool?
+
     var resetPending: Bool = false
 
     // MARK: - Init
@@ -100,7 +108,9 @@ public final class CPU6502 {
         jammed = false
         servicingInterrupt = false
         interruptType = .none
+        irqMaskOverrideForNextBoundary = nil
         cycle = 0
+        rdyLine = true
         nmiPending = false
         nmiLinePrev = nmiLine
         resetPending = true
@@ -130,11 +140,20 @@ public final class CPU6502 {
         setFlag(Flags.overflow, true)
     }
 
+    /// Set the RDY input line level. Low stalls the CPU on the next read cycle.
+    public func setRDYLine(high: Bool) {
+        rdyLine = high
+    }
+
     /// Execute exactly one clock cycle.
     @discardableResult
     public func tick() -> Bool {
         guard !jammed else { return false }
         totalCycles += 1
+
+        if !rdyLine && currentCycleIsRead() {
+            return true
+        }
 
         if servicingInterrupt {
             executeInterruptCycle()
@@ -144,6 +163,8 @@ public final class CPU6502 {
         if cycle == 0 {
             // Check for pending interrupts at instruction boundary
             detectNMIEdge()
+            let irqMasked = irqMaskOverrideForNextBoundary ?? getFlag(Flags.interrupt)
+            irqMaskOverrideForNextBoundary = nil
 
             if resetPending {
                 resetPending = false
@@ -153,7 +174,7 @@ public final class CPU6502 {
                 nmiPending = false
                 beginInterrupt(.nmi)
                 return true
-            } else if irqLine && !getFlag(Flags.interrupt) {
+            } else if irqLine && !irqMasked {
                 beginInterrupt(.irq)
                 return true
             }
@@ -189,6 +210,8 @@ public final class CPU6502 {
         jammed = false
         servicingInterrupt = false
         interruptType = .none
+        irqMaskOverrideForNextBoundary = nil
+        rdyLine = true
         nmiPending = false
         nmiLinePrev = nmiLine
     }

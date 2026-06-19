@@ -564,6 +564,7 @@ public final class C64 {
     /// Run a single system clock cycle.
     func tickOneCycle() {
         let cpuStalledByVIC = vic.isStealingCPU
+        cpu.setRDYLine(high: !cpuStalledByVIC)
 
         // At instruction boundaries: trace, check traps and breakpoints
         if !cpuStalledByVIC && cpu.cycle == 0 {
@@ -577,9 +578,7 @@ public final class C64 {
         monitorCPUFailureState()
         feedKeyboardBufferIfPossible()
 
-        if !cpuStalledByVIC {
-            cpu.tick()
-        }
+        cpu.tick()
 
         // VIC tick
         vic.tick()

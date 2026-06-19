@@ -49,6 +49,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
 - CIA CNT line rising edges now drive Timer A/Timer B CNT counting and SP serial input shifts, improving pin-level serial/timer compatibility for loaders and peripherals
 - CIA serial output now preserves SDR writes made before output mode is enabled and starts shifting the pending byte when CRA serial-output mode is selected
+- NMOS 6502 decimal ADC/SBC now have exhaustive operand/carry coverage for hardware-style accumulator and flag behavior, including invalid BCD inputs and cases where the final BCD result differs from the flags' source values
+- NMOS 6502 RDY input is now modeled as a line-level CPU pin that stalls opcode/data reads while allowing in-progress write cycles to complete
+- VIC-II AEC-low bus stealing now drives the CPU RDY line instead of skipping CPU ticks, so halted reads freeze while pending writes can still drain
+- NMOS 6502 IRQ masking now honors the one-boundary delay after late `I` flag changes from `CLI`, `SEI`, and `PLP`
+- Simultaneous NMI/IRQ arbitration now has focused coverage: NMI vectors first, then a still-asserted IRQ is serviced after RTI restores `I` clear
+- BRK/IRQ/NMI stack status bytes now have focused coverage: BRK pushes the break flag set while hardware IRQ/NMI pushes it clear
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
 - VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work

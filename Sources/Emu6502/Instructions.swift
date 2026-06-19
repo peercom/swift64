@@ -264,6 +264,48 @@ extension CPU6502 {
 
     // MARK: - Per-cycle dispatch
 
+    func currentCycleIsRead() -> Bool {
+        if cycle == 0 {
+            return true
+        }
+
+        if servicingInterrupt {
+            return interruptType == .reset || !(2...4).contains(cycle)
+        }
+
+        let template = CPU6502.templateTable[Int(opcode)]
+        switch template {
+        case .zpWrite:
+            return cycle != 2
+        case .zpRMW:
+            return !(3...4).contains(cycle)
+        case .zpxWrite, .zpyWrite:
+            return cycle != 3
+        case .zpxRMW:
+            return !(4...5).contains(cycle)
+        case .absWrite:
+            return cycle != 3
+        case .absRMW:
+            return !(4...5).contains(cycle)
+        case .absxWrite, .absyWrite:
+            return cycle != 4
+        case .absxRMW, .absyRMW:
+            return !(5...6).contains(cycle)
+        case .indxWrite, .indyWrite:
+            return cycle != 5
+        case .indxRMW, .indyRMW:
+            return !(6...7).contains(cycle)
+        case .jsr:
+            return !(3...4).contains(cycle)
+        case .brk:
+            return !(2...4).contains(cycle)
+        case .push:
+            return cycle != 2
+        default:
+            return true
+        }
+    }
+
     func executeCycle() {
         let template = CPU6502.templateTable[Int(opcode)]
         switch template {
@@ -471,8 +513,12 @@ extension CPU6502 {
         case 0x88: y &-= 1; setZN(y)    // DEY
         case 0x18: setFlag(Flags.carry, false)      // CLC
         case 0x38: setFlag(Flags.carry, true)       // SEC
-        case 0x58: setFlag(Flags.interrupt, false)  // CLI
-        case 0x78: setFlag(Flags.interrupt, true)   // SEI
+        case 0x58:  // CLI
+            irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
+            setFlag(Flags.interrupt, false)
+        case 0x78:  // SEI
+            irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
+            setFlag(Flags.interrupt, true)
         case 0xB8: setFlag(Flags.overflow, false)   // CLV
         case 0xD8: setFlag(Flags.decimal, false)    // CLD
         case 0xF8: setFlag(Flags.decimal, true)     // SED
@@ -1340,7 +1386,9 @@ extension CPU6502 {
             let value = bus.read(0x0100 | UInt16(sp))
             switch opcode {
             case 0x68: a = value; setZN(a)                            // PLA
-            case 0x28: p = (value & ~Flags.brk) | Flags.unused       // PLP
+            case 0x28:
+                irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
+                p = (value & ~Flags.brk) | Flags.unused              // PLP
             default: break
             }
             cycle = 0
@@ -1442,18 +1490,42 @@ extension CPU6502 {
     }
 
     func adcBCD(_ v: UInt8) {
-        let c: UInt8 = getFlag(Flags.carry) ? 1 : 0
-        var lo = (a & 0x0F) + (v & 0x0F) + c
-        var hi = (a >> 4) + (v >> 4)
-        if lo > 9 { lo -= 10; hi += 1 }
+        let carryIn = getFlag(Flags.carry)
+        let binarySum = UInt16(a) + UInt16(v) + UInt16(carryIn ? 1 : 0)
 
-        let sum = UInt16(a) + UInt16(v) + UInt16(c)
-        setFlag(Flags.overflow, (~(UInt16(a) ^ UInt16(v)) & (UInt16(a) ^ sum) & 0x80) != 0)
-        setFlag(Flags.zero, UInt8(sum & 0xFF) == 0)
+        var partial = a & 0x0F
+        var carry = carryIn
+        (partial, carry, _) = adc8(partial, v & 0x0F, carry: carry)
 
-        if hi > 9 { hi -= 10; setFlag(Flags.carry, true) } else { setFlag(Flags.carry, false) }
-        a = ((hi & 0x0F) << 4) | (lo & 0x0F)
-        setFlag(Flags.negative, a & 0x80 != 0)
+        let highCorrectionIndex: UInt8
+        if partial >= 0x0A {
+            highCorrectionIndex = 0x0F
+            (partial, carry, _) = adc8(partial, 0x05, carry: true)
+            partial &= 0x0F
+            carry = true
+        } else {
+            highCorrectionIndex = 0
+        }
+
+        partial |= a & 0xF0
+        let highAddend = (v & 0xF0) | highCorrectionIndex
+        let intermediate: UInt8
+        let highCarry: Bool
+        let highOverflow: Bool
+        (intermediate, highCarry, highOverflow) = adc8(partial, highAddend, carry: carry)
+
+        var result = intermediate
+        var finalCarry = false
+        if highCarry || intermediate >= 0xA0 {
+            (result, _, _) = adc8(intermediate, 0x5F, carry: true)
+            finalCarry = true
+        }
+
+        a = result
+        setFlag(Flags.carry, finalCarry)
+        setFlag(Flags.zero, UInt8(binarySum & 0xFF) == 0)
+        setFlag(Flags.negative, intermediate & 0x80 != 0)
+        setFlag(Flags.overflow, highOverflow)
     }
 
     func sbc(_ v: UInt8) {
@@ -1482,6 +1554,14 @@ extension CPU6502 {
 
         if hi < 0 { hi += 10; setFlag(Flags.carry, false) } else { setFlag(Flags.carry, true) }
         a = UInt8(((hi & 0x0F) << 4) | (lo & 0x0F))
+    }
+
+    private func adc8(_ lhs: UInt8, _ rhs: UInt8, carry: Bool) -> (result: UInt8, carry: Bool, overflow: Bool) {
+        let carryValue: UInt16 = carry ? 1 : 0
+        let sum = UInt16(lhs) + UInt16(rhs) + carryValue
+        let result = UInt8(sum & 0xFF)
+        let overflow = (~(UInt16(lhs) ^ UInt16(rhs)) & (UInt16(lhs) ^ UInt16(result)) & 0x80) != 0
+        return (result, sum > 0xFF, overflow)
     }
 
     func andOp(_ v: UInt8) { a &= v; setZN(a) }

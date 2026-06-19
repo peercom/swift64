@@ -443,6 +443,42 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertEqual(cpu.x, 0x99)
     }
 
+    func testBRKPushesStatusWithBreakFlagSet() {
+        let (cpu, bus) = makeCPU([0x00, 0xEA])
+        bus.memory[0xFFFE] = 0x00
+        bus.memory[0xFFFF] = 0x07
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, Flags.brk)
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.unused, Flags.unused)
+    }
+
+    func testIRQPushesStatusWithBreakFlagClear() {
+        let (cpu, bus) = makeCPU([0xEA])
+        bus.memory[0xFFFE] = 0x00
+        bus.memory[0xFFFF] = 0x07
+        cpu.setFlag(Flags.interrupt, false)
+        cpu.irqLine = true
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, 0)
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.unused, Flags.unused)
+    }
+
+    func testNMIPushesStatusWithBreakFlagClear() {
+        let (cpu, bus) = makeCPU([0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        cpu.setNMILine(high: true)
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, 0)
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.unused, Flags.unused)
+    }
+
     // MARK: - Flag instructions
 
     func testSECCLC() {
@@ -512,6 +548,39 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertEqual(cpu.x, 0x02)
     }
 
+    func testNMITakesPriorityOverSimultaneousIRQAndPendingIRQRunsAfterRTI() {
+        let (cpu, bus) = makeCPU([0xEA, 0xEA, 0xEA])  // NOPs
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x10
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xE8  // INX
+        bus.memory[0x0701] = 0x40  // RTI
+        bus.memory[0x0710] = 0xC8  // INY
+        bus.memory[0x0711] = 0x40  // RTI
+        cpu.setFlag(Flags.interrupt, false)
+
+        runInstructions(cpu, count: 1)
+        cpu.setNMILine(high: true)
+        cpu.irqLine = true
+
+        runInstructions(cpu, count: 1)  // NMI sequence wins arbitration.
+        XCTAssertEqual(cpu.pc, 0x0700)
+        XCTAssertEqual(cpu.x, 0x00)
+        XCTAssertEqual(cpu.y, 0x00)
+
+        runInstructions(cpu, count: 2)  // NMI handler INX, then RTI.
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+
+        runInstructions(cpu, count: 1)  // IRQ sequence runs after RTI restores I clear.
+        XCTAssertEqual(cpu.pc, 0x0710)
+
+        runInstructions(cpu, count: 1)  // IRQ handler INY.
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x01)
+    }
+
     // MARK: - IRQ
 
     func testIRQ() {
@@ -525,6 +594,68 @@ final class CPU6502Tests: XCTestCase {
         runInstructions(cpu, count: 1)  // CLI
         cpu.irqLine = true
         runInstructions(cpu, count: 3)  // IRQ handler: LDX, RTI, NOP
+        XCTAssertEqual(cpu.x, 0x99)
+    }
+
+    func testIRQAfterCLIDelaysUntilAfterFollowingInstruction() {
+        let (cpu, bus) = makeCPU([0x58, 0xA9, 0x42, 0xEA])  // CLI; LDA #$42; NOP
+        bus.memory[0xFFFE] = 0x00
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xA2  // LDX #$99
+        bus.memory[0x0701] = 0x99
+        bus.memory[0x0702] = 0x40  // RTI
+
+        cpu.irqLine = true
+        runInstructions(cpu, count: 1)  // CLI
+        runInstructions(cpu, count: 1)  // delayed slot: LDA #$42
+
+        XCTAssertEqual(cpu.a, 0x42)
+        XCTAssertEqual(cpu.x, 0x00)
+
+        runInstructions(cpu, count: 2)  // IRQ sequence, then handler LDX
+
+        XCTAssertEqual(cpu.x, 0x99)
+    }
+
+    func testIRQAfterSEIUsesPreviousClearMaskAtNextBoundary() {
+        let (cpu, bus) = makeCPU([0x78, 0xA9, 0x42])  // SEI; LDA #$42
+        bus.memory[0xFFFE] = 0x00
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xA2  // LDX #$99
+        bus.memory[0x0701] = 0x99
+        bus.memory[0x0702] = 0x40  // RTI
+        cpu.setFlag(Flags.interrupt, false)
+
+        runInstructions(cpu, count: 1)  // SEI
+        XCTAssertTrue(cpu.getFlag(Flags.interrupt))
+
+        cpu.irqLine = true
+        runInstructions(cpu, count: 2)  // IRQ sequence, then handler LDX
+
+        XCTAssertEqual(cpu.a, 0x00)
+        XCTAssertEqual(cpu.x, 0x99)
+    }
+
+    func testIRQAfterPLPClearingInterruptDelaysUntilAfterFollowingInstruction() {
+        let (cpu, bus) = makeCPU([0x28, 0xA9, 0x42, 0xEA])  // PLP; LDA #$42; NOP
+        bus.memory[0x01FE] = Flags.unused
+        bus.memory[0xFFFE] = 0x00
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xA2  // LDX #$99
+        bus.memory[0x0701] = 0x99
+        bus.memory[0x0702] = 0x40  // RTI
+
+        cpu.irqLine = true
+        runInstructions(cpu, count: 1)  // PLP clears I late
+        XCTAssertFalse(cpu.getFlag(Flags.interrupt))
+
+        runInstructions(cpu, count: 1)  // delayed slot: LDA #$42
+
+        XCTAssertEqual(cpu.a, 0x42)
+        XCTAssertEqual(cpu.x, 0x00)
+
+        runInstructions(cpu, count: 2)  // IRQ sequence, then handler LDX
+
         XCTAssertEqual(cpu.x, 0x99)
     }
 
@@ -715,7 +846,192 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertFalse(cpu.servicingInterrupt)
     }
 
+    // MARK: - External CPU pins
+
+    func testRDYLowStallsOpcodeFetchUntilReleased() {
+        let (cpu, _) = makeCPU([0xEA])
+        let beforeCycles = cpu.totalCycles
+
+        cpu.setRDYLine(high: false)
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(cpu.pc, 0x0600)
+        XCTAssertEqual(cpu.cycle, 0)
+        XCTAssertEqual(cpu.totalCycles, beforeCycles + 1)
+
+        cpu.setRDYLine(high: true)
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(cpu.pc, 0x0601)
+        XCTAssertEqual(cpu.cycle, 1)
+    }
+
+    func testRDYLowStallsReadCycleUntilReleased() {
+        let (cpu, _) = makeCPU([0xA9, 0x42])
+
+        XCTAssertTrue(cpu.tick())
+        XCTAssertEqual(cpu.pc, 0x0601)
+        XCTAssertEqual(cpu.cycle, 1)
+
+        cpu.setRDYLine(high: false)
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(cpu.pc, 0x0601)
+        XCTAssertEqual(cpu.cycle, 1)
+        XCTAssertEqual(cpu.a, 0x00)
+
+        cpu.setRDYLine(high: true)
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(cpu.a, 0x42)
+        XCTAssertEqual(cpu.pc, 0x0602)
+        XCTAssertEqual(cpu.cycle, 0)
+    }
+
+    func testRDYLowDoesNotStallWriteCycleInProgress() {
+        let (cpu, bus) = makeCPU([0xA9, 0x42, 0x85, 0x10])
+        runInstructions(cpu, count: 1)
+
+        XCTAssertTrue(cpu.tick())
+        XCTAssertEqual(cpu.opcode, 0x85)
+        XCTAssertTrue(cpu.tick())
+        XCTAssertEqual(cpu.cycle, 2)
+
+        cpu.setRDYLine(high: false)
+        XCTAssertTrue(cpu.tick())
+
+        XCTAssertEqual(bus.memory[0x0010], 0x42)
+        XCTAssertEqual(cpu.cycle, 0)
+    }
+
+    func testResetAndPowerOnReleaseRDYLine() {
+        let (cpu, _) = makeCPU([0xEA])
+
+        cpu.setRDYLine(high: false)
+        cpu.reset()
+        XCTAssertTrue(cpu.rdyLine)
+
+        cpu.setRDYLine(high: false)
+        cpu.powerOn()
+        XCTAssertTrue(cpu.rdyLine)
+    }
+
     // MARK: - BCD mode
+
+    private struct DecimalExpectation {
+        let result: UInt8
+        let carry: Bool
+        let zero: Bool
+        let negative: Bool
+        let overflow: Bool
+    }
+
+    private func add8(_ lhs: UInt8, _ rhs: UInt8, carry: Bool) -> (result: UInt8, carry: Bool, overflow: Bool) {
+        let sum = UInt16(lhs) + UInt16(rhs) + UInt16(carry ? 1 : 0)
+        let result = UInt8(sum & 0xFF)
+        let overflow = (~(UInt16(lhs) ^ UInt16(rhs)) & (UInt16(lhs) ^ UInt16(result)) & 0x80) != 0
+        return (result, sum > 0xFF, overflow)
+    }
+
+    private func subtract8(_ lhs: UInt8, _ rhs: UInt8, carry: Bool) -> (result: UInt8, carry: Bool) {
+        let diff = UInt16(lhs) &- UInt16(rhs) &- UInt16(carry ? 0 : 1)
+        return (UInt8(diff & 0xFF), diff < 0x100)
+    }
+
+    private func expectedNMOSDecimalADC(lhs: UInt8, rhs: UInt8, carryIn: Bool) -> DecimalExpectation {
+        let binarySum = UInt16(lhs) + UInt16(rhs) + UInt16(carryIn ? 1 : 0)
+
+        var partial = lhs & 0x0F
+        var carry = carryIn
+        (partial, carry, _) = add8(partial, rhs & 0x0F, carry: carry)
+
+        let highCorrection: UInt8
+        if partial >= 0x0A {
+            highCorrection = 0x0F
+            (partial, carry, _) = add8(partial, 0x05, carry: true)
+            partial &= 0x0F
+            carry = true
+        } else {
+            highCorrection = 0
+        }
+
+        partial |= lhs & 0xF0
+        let intermediate: UInt8
+        let highCarry: Bool
+        let highOverflow: Bool
+        (intermediate, highCarry, highOverflow) = add8(partial, (rhs & 0xF0) | highCorrection, carry: carry)
+
+        var result = intermediate
+        var finalCarry = false
+        if highCarry || intermediate >= 0xA0 {
+            (result, _, _) = add8(intermediate, 0x5F, carry: true)
+            finalCarry = true
+        }
+
+        return DecimalExpectation(
+            result: result,
+            carry: finalCarry,
+            zero: UInt8(binarySum & 0xFF) == 0,
+            negative: intermediate & 0x80 != 0,
+            overflow: highOverflow
+        )
+    }
+
+    private func expectedNMOSDecimalSBC(lhs: UInt8, rhs: UInt8, carryIn: Bool) -> DecimalExpectation {
+        let binaryDiff = UInt16(lhs) &- UInt16(rhs) &- UInt16(carryIn ? 0 : 1)
+        let binaryResult = UInt8(binaryDiff & 0xFF)
+
+        var partial = lhs & 0x0F
+        var carry: Bool
+        (partial, carry) = subtract8(partial, rhs & 0x0F, carry: carryIn)
+
+        let highCorrection: UInt8
+        if carry {
+            highCorrection = 0
+        } else {
+            highCorrection = 0x0F
+            (partial, _) = subtract8(partial, 0x05, carry: false)
+            partial &= 0x0F
+            carry = false
+        }
+
+        partial |= lhs & 0xF0
+        var result: UInt8
+        let highCarry: Bool
+        (result, highCarry) = subtract8(partial, (rhs & 0xF0) | highCorrection, carry: carry)
+
+        if !highCarry {
+            (result, _) = subtract8(result, 0x5F, carry: false)
+        }
+
+        return DecimalExpectation(
+            result: result,
+            carry: binaryDiff < 0x100,
+            zero: binaryResult == 0,
+            negative: binaryResult & 0x80 != 0,
+            overflow: ((UInt16(lhs) ^ UInt16(rhs)) & (UInt16(lhs) ^ UInt16(binaryResult)) & 0x80) != 0
+        )
+    }
+
+    private func assertDecimalState(
+        _ cpu: CPU6502,
+        _ expected: DecimalExpectation,
+        operation: String,
+        lhs: UInt8,
+        rhs: UInt8,
+        carryIn: Bool
+    ) -> Bool {
+        guard cpu.a == expected.result,
+              cpu.getFlag(Flags.carry) == expected.carry,
+              cpu.getFlag(Flags.zero) == expected.zero,
+              cpu.getFlag(Flags.negative) == expected.negative,
+              cpu.getFlag(Flags.overflow) == expected.overflow
+        else {
+            XCTFail("\(operation) decimal mismatch lhs=$\(String(lhs, radix: 16)) rhs=$\(String(rhs, radix: 16)) carry=\(carryIn)")
+            return false
+        }
+        return true
+    }
 
     func testADCBCD() {
         // SED; LDA #$15; ADC #$27 → should be $42 in BCD
@@ -725,12 +1041,91 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertFalse(cpu.getFlag(Flags.carry))
     }
 
+    func testADCBCDUsesBinarySumForZeroFlag() {
+        let (cpu, _) = makeCPU([0xF8, 0x18, 0xA9, 0x50, 0x69, 0x50])
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(cpu.a, 0x00)
+        XCTAssertTrue(cpu.getFlag(Flags.carry))
+        XCTAssertTrue(cpu.getFlag(Flags.overflow))
+        XCTAssertTrue(cpu.getFlag(Flags.negative))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+    }
+
+    func testADCBCDUsesAdjustedIntermediateForNegativeAndOverflowFlags() {
+        let (cpu, _) = makeCPU([0xF8, 0x38, 0xA9, 0x79, 0x69, 0x00])
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(cpu.a, 0x80)
+        XCTAssertFalse(cpu.getFlag(Flags.carry))
+        XCTAssertTrue(cpu.getFlag(Flags.overflow))
+        XCTAssertTrue(cpu.getFlag(Flags.negative))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+    }
+
+    func testADCBCDZeroFlagSetFromZeroBinarySum() {
+        let (cpu, _) = makeCPU([0xF8, 0x18, 0xA9, 0x00, 0x69, 0x00])
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(cpu.a, 0x00)
+        XCTAssertFalse(cpu.getFlag(Flags.carry))
+        XCTAssertFalse(cpu.getFlag(Flags.overflow))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
+        XCTAssertTrue(cpu.getFlag(Flags.zero))
+    }
+
+    func testADCBCDMatchesNMOS6502PredictionForAllOperandsAndCarryInputs() {
+        let cpu = CPU6502(bus: RAMBus())
+
+        for carryIn in [false, true] {
+            for lhsValue in 0...255 {
+                for rhsValue in 0...255 {
+                    let lhs = UInt8(lhsValue)
+                    let rhs = UInt8(rhsValue)
+                    let expected = expectedNMOSDecimalADC(lhs: lhs, rhs: rhs, carryIn: carryIn)
+
+                    cpu.a = lhs
+                    cpu.p = Flags.unused | Flags.decimal
+                    cpu.setFlag(Flags.carry, carryIn)
+                    cpu.adcBCD(rhs)
+
+                    if !assertDecimalState(cpu, expected, operation: "ADC", lhs: lhs, rhs: rhs, carryIn: carryIn) {
+                        return
+                    }
+                }
+            }
+        }
+    }
+
     func testSBCBCD() {
         // SED; SEC; LDA #$42; SBC #$15 → should be $27
         let (cpu, _) = makeCPU([0xF8, 0x38, 0xA9, 0x42, 0xE9, 0x15])
         runInstructions(cpu, count: 4)
         XCTAssertEqual(cpu.a, 0x27)
         XCTAssertTrue(cpu.getFlag(Flags.carry))
+    }
+
+    func testSBCBCDMatchesNMOS6502PredictionForAllOperandsAndCarryInputs() {
+        let cpu = CPU6502(bus: RAMBus())
+
+        for carryIn in [false, true] {
+            for lhsValue in 0...255 {
+                for rhsValue in 0...255 {
+                    let lhs = UInt8(lhsValue)
+                    let rhs = UInt8(rhsValue)
+                    let expected = expectedNMOSDecimalSBC(lhs: lhs, rhs: rhs, carryIn: carryIn)
+
+                    cpu.a = lhs
+                    cpu.p = Flags.unused | Flags.decimal
+                    cpu.setFlag(Flags.carry, carryIn)
+                    cpu.sbcBCD(rhs)
+
+                    if !assertDecimalState(cpu, expected, operation: "SBC", lhs: lhs, rhs: rhs, carryIn: carryIn) {
+                        return
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Cycle counting
