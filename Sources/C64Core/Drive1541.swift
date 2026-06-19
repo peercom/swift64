@@ -77,6 +77,8 @@ public final class Drive1541 {
 
     /// Drive motor is spinning
     public var motorOn: Bool = false
+    var motorCommandOn: Bool = false
+    var motorSpinDownCyclesRemaining: Int = 0
 
     /// Drive LED state (directly from VIA2 PB3 typically, but also error flash)
     public var ledOn: Bool = false
@@ -148,6 +150,7 @@ public final class Drive1541 {
     /// Drive PC trace log counter (separate limit)
     var drvPCLog: Int = 0
     var diskPCTraceLog: Int = 0
+    static let motorSpinDownCycles = 2_000
 
     // MARK: - Init
 
@@ -254,6 +257,7 @@ public final class Drive1541 {
     public func insertDisk(_ data: Data, isG64: Bool = false) -> Bool {
         let mounted = isG64 ? disk.loadG64(data) : disk.loadD64(data)
         if mounted {
+            resetGCRReadPipeline()
             updateVIA2Inputs()
         }
         return mounted
@@ -265,6 +269,7 @@ public final class Drive1541 {
         disk.image = image
         let mounted = image.tracks.contains { $0 != nil }
         if mounted {
+            resetGCRReadPipeline()
             updateVIA2Inputs()
         }
         return mounted
@@ -274,6 +279,7 @@ public final class Drive1541 {
         disk.tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.image = nil
+        resetGCRReadPipeline()
         updateVIA2Inputs()
     }
 
@@ -412,16 +418,10 @@ public final class Drive1541 {
         headBitPosition = 0
         stepperPhase = 0
         motorOn = false
+        motorCommandOn = false
+        motorSpinDownCyclesRemaining = 0
         ledOn = false
-        syncDetected = false
-        shiftRegister = 0
-        bitCounter = 0
-        weakBitLFSR = 0xACE1
-        ue7Counter = 0
-        uf4Counter = 0
-        byteReadyEdge = false
-        byteReadyLevel = false
-        soDelay = 0
+        resetGCRReadPipeline()
         byteReadyActive = true
         via2.ca1 = false
         via2.portAInput = 0xFF
@@ -439,6 +439,20 @@ public final class Drive1541 {
         lastFailureReason = nil
         debugBytesRead = 0
         debugLogCount = 0
+    }
+
+    private func resetGCRReadPipeline() {
+        headBitPosition = 0
+        syncDetected = false
+        shiftRegister = 0
+        bitCounter = 0
+        weakBitLFSR = 0xACE1
+        ue7Counter = 0
+        uf4Counter = 0
+        byteReadyEdge = false
+        byteReadyLevel = false
+        soDelay = 0
+        via2.ca1 = false
     }
 
     // MARK: - Tick (one drive clock cycle)
@@ -578,7 +592,22 @@ public final class Drive1541 {
         let wasMotorOn = motorOn
         let wasLEDOn = ledOn
 
-        motorOn = pb & 0x04 != 0
+        let commandedMotorOn = pb & 0x04 != 0
+        if commandedMotorOn {
+            motorOn = true
+            motorSpinDownCyclesRemaining = Self.motorSpinDownCycles
+        } else {
+            if motorCommandOn {
+                motorSpinDownCyclesRemaining = Self.motorSpinDownCycles
+            }
+            if motorSpinDownCyclesRemaining > 0 {
+                motorSpinDownCyclesRemaining -= 1
+                motorOn = motorSpinDownCyclesRemaining > 0
+            } else {
+                motorOn = false
+            }
+        }
+        motorCommandOn = commandedMotorOn
         ledOn = pb & 0x08 != 0
 
         if (motorOn != wasMotorOn || ledOn != wasLEDOn) && gcrTraceLog < 200 {

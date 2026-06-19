@@ -103,9 +103,7 @@ public final class TapeUnit {
     }
 
     func mountT64(_ bytes: [UInt8]) -> Bool {
-        imageData = bytes
-        format = .t64
-        entries = []
+        var parsedEntries: [T64Entry] = []
 
         // Header: 64 bytes
         // $20-$21: version
@@ -117,7 +115,7 @@ public final class TapeUnit {
         let usedEntries = Int(bytes[0x24]) | (Int(bytes[0x25]) << 8)
 
         // Container name at offset $28, 24 bytes
-        containerName = readString(bytes, offset: 0x28, length: 24)
+        let parsedContainerName = readString(bytes, offset: 0x28, length: 24)
 
         // Entries start at offset $40, 32 bytes each
         let entryCount = min(usedEntries, maxEntries)
@@ -135,19 +133,32 @@ public final class TapeUnit {
                              (Int(bytes[base + 10]) << 16) | (Int(bytes[base + 11]) << 24)
             let filename = readString(bytes, offset: base + 16, length: 16)
             let dataSize = Int(endAddr) - Int(startAddr)
+            guard dataSize >= 0,
+                  dataOffset >= 0,
+                  dataOffset <= bytes.count,
+                  dataSize <= bytes.count - dataOffset else { continue }
 
-            entries.append(T64Entry(
+            parsedEntries.append(T64Entry(
                 entryType: entryType,
                 fileType: fileType,
                 startAddress: startAddr,
                 endAddress: endAddr,
                 filename: filename,
                 dataOffset: dataOffset,
-                dataSize: max(0, dataSize)
+                dataSize: dataSize
             ))
         }
 
-        return !entries.isEmpty
+        guard !parsedEntries.isEmpty else { return false }
+
+        stopRawPlayback()
+        imageData = bytes
+        format = .t64
+        containerName = parsedContainerName
+        tapPulses = []
+        tapPRGData = nil
+        entries = parsedEntries
+        return true
     }
 
     // MARK: - TAP format
@@ -174,6 +185,7 @@ public final class TapeUnit {
         guard let pulses = decodeTAPPulses(bytes, headerSize: 20, dataSize: dataSize, version: version),
               !pulses.isEmpty else { return false }
 
+        stopRawPlayback()
         imageData = bytes
         format = .tap
         entries = []

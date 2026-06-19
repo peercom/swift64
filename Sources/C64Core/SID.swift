@@ -102,7 +102,16 @@ public final class SID {
         }
     }
     var filterDamping: Double {
-        max(0.35, 1.35 - Double(filterResonance) * 0.055)
+        let resonance = Double(filterResonance)
+        switch model {
+        case .mos6581:
+            return max(0.42, 1.45 - resonance * 0.045)
+        case .mos8580:
+            return max(0.25, 1.25 - resonance * 0.065)
+        }
+    }
+    var filterModeSelected: Bool {
+        filterLP || filterBP || filterHP
     }
 
     /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
@@ -529,7 +538,7 @@ public final class SID {
     }
 
     func applyFilter(input: Int32) -> Int32 {
-        guard filterInputEnabled || filterLP || filterBP || filterHP else { return input }
+        guard filterInputEnabled || filterModeSelected else { return input }
 
         let inputDouble = Double(input)
         let cutoff = normalizedFilterCutoff

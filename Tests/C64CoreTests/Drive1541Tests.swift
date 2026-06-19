@@ -103,6 +103,54 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(drive.statusSnapshot.writeProtected)
     }
 
+    func testInsertDiskClearsStaleGCRReadPipelineState() {
+        let drive = Drive1541()
+        drive.headBitPosition = 1234
+        drive.syncDetected = true
+        drive.shiftRegister = 0x03FF
+        drive.bitCounter = 7
+        drive.byteReadyEdge = true
+        drive.byteReadyLevel = true
+        drive.soDelay = 9
+        drive.via2.ca1 = true
+
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        XCTAssertEqual(drive.statusSnapshot.headBitPosition, 0)
+        XCTAssertFalse(drive.statusSnapshot.syncDetected)
+        XCTAssertFalse(drive.statusSnapshot.byteReady)
+        XCTAssertEqual(drive.shiftRegister, 0)
+        XCTAssertEqual(drive.bitCounter, 0)
+        XCTAssertEqual(drive.soDelay, 0)
+        XCTAssertFalse(drive.via2.ca1)
+        XCTAssertEqual(drive.via2.readRegister(0x00) & 0x80, 0x80)
+    }
+
+    func testEjectDiskClearsStaleGCRReadPipelineState() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+        drive.headBitPosition = 1234
+        drive.syncDetected = true
+        drive.shiftRegister = 0x03FF
+        drive.bitCounter = 7
+        drive.byteReadyEdge = true
+        drive.byteReadyLevel = true
+        drive.soDelay = 9
+        drive.via2.ca1 = true
+
+        drive.ejectDisk()
+
+        XCTAssertFalse(drive.statusSnapshot.hasDisk)
+        XCTAssertEqual(drive.statusSnapshot.headBitPosition, 0)
+        XCTAssertFalse(drive.statusSnapshot.syncDetected)
+        XCTAssertFalse(drive.statusSnapshot.byteReady)
+        XCTAssertEqual(drive.shiftRegister, 0)
+        XCTAssertEqual(drive.bitCounter, 0)
+        XCTAssertEqual(drive.soDelay, 0)
+        XCTAssertFalse(drive.via2.ca1)
+        XCTAssertEqual(drive.via2.readRegister(0x00) & 0x80, 0x80)
+    }
+
     func testWriteProtectChangesAreVisibleThroughVIA2PB4() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
@@ -114,6 +162,43 @@ final class Drive1541Tests: XCTestCase {
         drive.setWriteProtected(true)
         XCTAssertEqual(drive.via2.readRegister(0x00) & 0x10, 0x00)
         XCTAssertTrue(drive.statusSnapshot.writeProtected)
+    }
+
+    func testMotorSpinsDownAfterVIACommandTurnsOff() {
+        let drive = Drive1541()
+
+        drive.via2.portB = 0x04
+        drive.updateMotorAndStepper()
+
+        XCTAssertTrue(drive.statusSnapshot.motorOn)
+        XCTAssertTrue(drive.motorCommandOn)
+        XCTAssertEqual(drive.motorSpinDownCyclesRemaining, Drive1541.motorSpinDownCycles)
+
+        drive.via2.portB = 0x00
+        drive.updateMotorAndStepper()
+
+        XCTAssertTrue(drive.statusSnapshot.motorOn)
+        XCTAssertFalse(drive.motorCommandOn)
+        XCTAssertEqual(drive.motorSpinDownCyclesRemaining, Drive1541.motorSpinDownCycles - 1)
+
+        for _ in 0..<(Drive1541.motorSpinDownCycles - 1) {
+            drive.updateMotorAndStepper()
+        }
+
+        XCTAssertFalse(drive.statusSnapshot.motorOn)
+        XCTAssertEqual(drive.motorSpinDownCyclesRemaining, 0)
+    }
+
+    func testMotorCommandRefreshesSpinDownWindowWhileHeldOn() {
+        let drive = Drive1541()
+
+        drive.via2.portB = 0x04
+        drive.updateMotorAndStepper()
+        drive.motorSpinDownCyclesRemaining = 3
+        drive.updateMotorAndStepper()
+
+        XCTAssertTrue(drive.statusSnapshot.motorOn)
+        XCTAssertEqual(drive.motorSpinDownCyclesRemaining, Drive1541.motorSpinDownCycles)
     }
 
     func testResetClearsVIAAndGCRHardwareStateButKeepsDiskInserted() {
@@ -128,6 +213,8 @@ final class Drive1541Tests: XCTestCase {
         drive.headBitPosition = 1234
         drive.halfTrack = 10
         drive.motorOn = true
+        drive.motorCommandOn = true
+        drive.motorSpinDownCyclesRemaining = 123
         drive.ledOn = true
 
         drive.reset()
@@ -145,6 +232,8 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.statusSnapshot.headBitPosition, 0)
         XCTAssertEqual(drive.statusSnapshot.halfTrack, 36)
         XCTAssertFalse(drive.statusSnapshot.motorOn)
+        XCTAssertFalse(drive.motorCommandOn)
+        XCTAssertEqual(drive.motorSpinDownCyclesRemaining, 0)
         XCTAssertFalse(drive.statusSnapshot.ledOn)
     }
 

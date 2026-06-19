@@ -64,6 +64,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - SID ADSR attack now switches to decay on the same envelope step that reaches maximum level instead of waiting for an extra attack period
 - SID ADSR decay now enters sustain on the same envelope decrement that reaches the current sustain level
 - SID output-stage volume DAC now uses model-specific curves: a stronger non-linear 6581 DC offset path and a smaller near-linear 8580 path
+- SID filter resonance damping is now model-specific, with routed voices remaining inaudible when no low/band/high-pass output mode is selected
 - VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
 - VIA 6522 shift-register modes 1-7 now shift CB2 data in/out under Timer 2, PHI2, or external CB1 clock control, including free-running T2 output recirculation and eight-pulse SR interrupts
 - VIA 6522 internally clocked shift-register modes now expose CB1 output-clock pulses for peripherals that observe the generated serial clock
@@ -71,6 +72,8 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - VIA 6522 Port A output changes now have observable callbacks on ORA/DDRA writes, giving disk/peripheral integrations the same kind of immediate pin-update hook already used on Port B
 - VIA 6522 CA2 handshake and pulse output modes now respond to ORA writes as well as ORA reads
 - VIA 6522 CB2 manual, handshake, and pulse output modes now track PCR and Port B access with observable output-state callbacks, including CB1-edge handshake release
+- 1541 motor control now models a bounded spindle spin-down window after the VIA motor command turns off, instead of stopping the GCR head instantly
+- 1541 media insert/eject now clears stale GCR head sync, byte-ready, shift-register, and delayed-SO state so a new disk cannot inherit read-pipeline state from the previous image
 - High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
 - High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, and status-channel readback
 - The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
@@ -145,6 +148,8 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
 - TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
 - TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
+- Tape image replacement now clears stale raw TAP playback cursors, signal level, and pulse data so T64/TAP swaps cannot inherit the previous tape's signal path
+- T64 mounting now rejects directory entries whose payload ranges fall outside the image, preventing mounted-but-unreadable tape state after corrupt media swaps
 - True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
 - Extended 40/41/42-track D64 images now keep their extra-track geometry for fast sector reads and synthetic true-drive GCR tracks
 - D64 images with appended sector-error tables now preserve per-sector error metadata for future bad-sector/GCR error simulation

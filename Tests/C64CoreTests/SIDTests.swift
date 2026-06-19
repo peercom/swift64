@@ -695,6 +695,36 @@ final class SIDTests: XCTestCase {
         XCTAssertGreaterThan(response8580, response6581)
     }
 
+    func testFilterResonanceDampingDiffersBySIDModel() {
+        let sid6581 = SID()
+        sid6581.model = .mos6581
+        sid6581.writeRegister(0x17, value: 0xF1)
+
+        let sid8580 = SID()
+        sid8580.model = .mos8580
+        sid8580.writeRegister(0x17, value: 0xF1)
+
+        XCTAssertGreaterThan(sid6581.filterDamping, sid8580.filterDamping)
+        XCTAssertEqual(sid6581.filterDamping, 0.775, accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterDamping, 0.275, accuracy: 0.0001)
+    }
+
+    func testRoutedVoiceIsSilentWhenNoFilterModeIsSelected() {
+        let sid = SID()
+        sid.model = .mos8580
+        sid.voices[0].control = 0x20
+        sid.voices[0].accumulator = 0xFFFFFF
+        sid.voices[0].envelopeLevel = 0xFF
+        sid.writeRegister(0x17, value: 0x01)
+        sid.writeRegister(0x18, value: 0x0F)
+
+        sid.generateSample()
+
+        XCTAssertLessThan(sid.sampleBuffer[0], 0.02)
+        XCTAssertNotEqual(sid.filterBand, 0)
+        XCTAssertFalse(sid.filterModeSelected)
+    }
+
     func testVoice3OffMutesDirectVoiceButNotFilteredVoice3Path() {
         let mutedDirect = SID()
         mutedDirect.model = .mos8580
