@@ -105,6 +105,8 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - SID noise generation now clocks the LFSR on accumulator bit 19 and maps the documented shift-register taps into OSC/noise output bits
 - SID pulse waveforms now handle zero/max pulse-width edge cases and compare against the top 12 accumulator bits
 - SID TEST-bit handling now keeps noise cleared while held and reseeds the noise shift register when released
+- SID direct chip reads now model a decaying local data-bus latch while memory-mapped write-only SID reads still preserve C64 CPU open-bus behavior
+- SID ADSR timing now uses a 15-bit equality-based rate counter, exposing the classic delay-bug behavior when switching to faster envelope rates after the counter has already passed the new period
 - VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
 - CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
 - CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source

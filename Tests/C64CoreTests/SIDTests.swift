@@ -19,6 +19,8 @@ final class SIDTests: XCTestCase {
 
         sid.reset()
 
+        XCTAssertEqual(sid.dataBusLatch, 0)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, 0)
         XCTAssertEqual(sid.model, .mos8580)
         XCTAssertEqual(sid.clockRate, 1_022_727)
         XCTAssertEqual(sid.voices[0].frequency, 0)
@@ -29,6 +31,8 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.readRegister(0x19), 0xFF)
         XCTAssertEqual(sid.readRegister(0x1A), 0xFF)
         XCTAssertEqual(sid.volumeFilter, 0)
+        XCTAssertEqual(sid.dataBusLatch, 0xFF)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, SID.dataBusLatchHoldCycles)
         XCTAssertEqual(sid.sampleBuffer[0], 0)
         XCTAssertEqual(sid.sampleWritePos, 0)
         XCTAssertFalse(sid.oscillatorMSBRose.contains(true))
@@ -45,6 +49,63 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.readRegister(0x19), 0x34)
         XCTAssertEqual(sid.readRegister(0x1A), 0xA5)
+    }
+
+    func testDirectWriteOnlySIDReadsReturnLocalDataBusLatch() {
+        let sid = SID()
+
+        XCTAssertEqual(sid.readRegister(0x00), 0x00)
+
+        sid.writeRegister(0x00, value: 0x34)
+        XCTAssertEqual(sid.readRegister(0x00), 0x34)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, SID.dataBusLatchHoldCycles)
+
+        sid.writeRegister(0x18, value: 0x8F)
+        XCTAssertEqual(sid.readRegister(0x05), 0x8F)
+    }
+
+    func testSIDDataBusLatchDecaysAfterHoldWindow() {
+        let sid = SID()
+
+        sid.writeRegister(0x00, value: 0x34)
+        for _ in 0..<(SID.dataBusLatchHoldCycles - 1) {
+            sid.tick()
+        }
+
+        XCTAssertEqual(sid.dataBusLatch, 0x34)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, 1)
+
+        sid.tick()
+
+        XCTAssertEqual(sid.dataBusLatch, 0)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, 0)
+        XCTAssertEqual(sid.readRegister(0x00), 0)
+    }
+
+    func testSIDDataBusLatchRefreshesBeforeDecay() {
+        let sid = SID()
+
+        sid.writeRegister(0x00, value: 0x12)
+        for _ in 0..<32 {
+            sid.tick()
+        }
+
+        sid.writeRegister(0x01, value: 0xAB)
+
+        XCTAssertEqual(sid.dataBusLatch, 0xAB)
+        XCTAssertEqual(sid.dataBusLatchCyclesRemaining, SID.dataBusLatchHoldCycles)
+        XCTAssertEqual(sid.readRegister(0x00), 0xAB)
+    }
+
+    func testReadableSIDRegistersUpdateLocalDataBusLatch() {
+        let sid = SID()
+        sid.setPaddle(x: 0x12, y: 0x34)
+
+        XCTAssertEqual(sid.readRegister(0x19), 0x12)
+        XCTAssertEqual(sid.readRegister(0x00), 0x12)
+
+        XCTAssertEqual(sid.readRegister(0x1A), 0x34)
+        XCTAssertEqual(sid.readRegister(0x00), 0x34)
     }
 
     func testPaddleRegistersAreMemoryMappedThroughSIDIOArea() {
@@ -146,6 +207,36 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.voices[0].rateCounter, 0)
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+    }
+
+    func testEnvelopeRateCounterUsesEqualityForADSRDelayBug() {
+        let sid = SID()
+        sid.voices[0].control = 0x01
+        sid.voices[0].envelopeState = .release
+        sid.voices[0].attackDecay = 0x00
+        sid.voices[0].rateCounter = SID.attackRates[0] + 1
+
+        sid.clockEnvelope(0)
+
+        XCTAssertEqual(sid.voices[0].envelopeState, .attack)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+        XCTAssertEqual(sid.voices[0].rateCounter, SID.attackRates[0] + 2)
+
+        sid.voices[0].rateCounter = SID.envelopeRateCounterMask - 1
+        sid.clockEnvelope(0)
+        XCTAssertEqual(sid.voices[0].rateCounter, SID.envelopeRateCounterMask)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+
+        sid.clockEnvelope(0)
+        XCTAssertEqual(sid.voices[0].rateCounter, 0)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
+
+        for _ in 0..<Int(SID.attackRates[0]) {
+            sid.clockEnvelope(0)
+        }
+
+        XCTAssertEqual(sid.voices[0].rateCounter, 0)
+        XCTAssertEqual(sid.voices[0].envelopeLevel, 1)
     }
 
     func testEnvelopeExponentialPeriodChangesAtSIDThresholds() {

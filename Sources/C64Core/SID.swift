@@ -98,6 +98,10 @@ public final class SID {
     /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
     var paddleX: UInt8 = 0xFF
     var paddleY: UInt8 = 0xFF
+    /// Last value observed on the SID-local data bus for direct chip reads.
+    var dataBusLatch: UInt8 = 0
+    /// Remaining cycles before the floating SID-local data bus decays.
+    var dataBusLatchCyclesRemaining: Int = 0
 
     // Filter state
     var filterLow: Double = 0
@@ -128,6 +132,9 @@ public final class SID {
         9, 32, 63, 95, 149, 220, 267, 313,
         392, 977, 1954, 3126, 3907, 11720, 19532, 31251
     ]
+
+    static let dataBusLatchHoldCycles = 0x2000
+    static let envelopeRateCounterMask: UInt16 = 0x7FFF
 
     static func exponentialPeriod(for envelopeLevel: UInt8) -> UInt16 {
         switch envelopeLevel {
@@ -160,6 +167,8 @@ public final class SID {
         volumeFilter = 0
         paddleX = 0xFF
         paddleY = 0xFF
+        dataBusLatch = 0
+        dataBusLatchCyclesRemaining = 0
         filterLow = 0
         filterBand = 0
         filterHigh = 0
@@ -175,6 +184,8 @@ public final class SID {
 
     /// Advance one system clock cycle.
     public func tick() {
+        ageDataBusLatch()
+
         // Update all oscillators before applying sync so source edges are
         // independent of voice iteration order.
         for i in 0..<3 {
@@ -254,7 +265,7 @@ public final class SID {
             }
         }
 
-        voices[v].rateCounter &+= 1
+        voices[v].rateCounter = (voices[v].rateCounter &+ 1) & Self.envelopeRateCounterMask
 
         let rate: UInt16
         switch voices[v].envelopeState {
@@ -268,7 +279,7 @@ public final class SID {
             rate = SID.decayReleaseRates[Int(voices[v].releaseVal)]
         }
 
-        guard voices[v].rateCounter >= rate else { return }
+        guard voices[v].rateCounter == rate else { return }
         voices[v].rateCounter = 0
 
         switch voices[v].envelopeState {
@@ -453,17 +464,40 @@ public final class SID {
         paddleY = y
     }
 
-    public func readRegister(_ reg: UInt16) -> UInt8 {
-        switch reg {
-        case 0x19: return paddleX
-        case 0x1A: return paddleY
-        case 0x1B: return UInt8((oscillatorOutput(2) >> 4) & 0xFF)  // OSC3
-        case 0x1C: return voices[2].envelopeLevel  // ENV3
-        default: return 0
+    func latchDataBus(_ value: UInt8) {
+        dataBusLatch = value
+        dataBusLatchCyclesRemaining = Self.dataBusLatchHoldCycles
+    }
+
+    func ageDataBusLatch() {
+        guard dataBusLatchCyclesRemaining > 0 else { return }
+        dataBusLatchCyclesRemaining -= 1
+        if dataBusLatchCyclesRemaining == 0 {
+            dataBusLatch = 0
         }
     }
 
+    public func readRegister(_ reg: UInt16) -> UInt8 {
+        let value: UInt8
+        switch reg {
+        case 0x19:
+            value = paddleX
+        case 0x1A:
+            value = paddleY
+        case 0x1B:
+            value = UInt8((oscillatorOutput(2) >> 4) & 0xFF)  // OSC3
+        case 0x1C:
+            value = voices[2].envelopeLevel  // ENV3
+        default:
+            value = dataBusLatch
+        }
+        latchDataBus(value)
+        return value
+    }
+
     public func writeRegister(_ reg: UInt16, value: UInt8) {
+        latchDataBus(value)
+
         let voice = Int(reg / 7)
         let voiceReg = Int(reg % 7)
 

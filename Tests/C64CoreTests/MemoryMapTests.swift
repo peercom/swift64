@@ -170,6 +170,7 @@ final class MemoryMapTests: XCTestCase {
         memory.ram[0xC000] = 0xA9
         XCTAssertEqual(memory.read(0xC000), 0xA9)
 
+        sid.writeRegister(0x00, value: 0x34)
         XCTAssertEqual(memory.read(0xD400), 0xA9)
         XCTAssertEqual(memory.read(0xD418), 0xA9)
         XCTAssertEqual(memory.read(0xD419), 0x44)
