@@ -55,6 +55,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - NMOS 6502 IRQ masking now honors the one-boundary delay after late `I` flag changes from `CLI`, `SEI`, and `PLP`
 - Simultaneous NMI/IRQ arbitration now has focused coverage: NMI vectors first, then a still-asserted IRQ is serviced after RTI restores `I` clear
 - BRK/IRQ/NMI stack status bytes now have focused coverage: BRK pushes the break flag set while hardware IRQ/NMI pushes it clear
+- NMI can now hijack BRK/IRQ vector fetches before the low vector byte is read, while late NMIs are prevented from half-hijacking only the high byte; held late NMIs are deferred until after the first handler opcode, and released transients are missed
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
 - VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
@@ -220,6 +221,16 @@ SWIFT64_LOCAL_TRUE_DRIVE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testL
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64DirectoryLoadStartsGCRReadHardware
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
+```
+
+Local public CPU functional-test binaries are also opt-in and run as a single bounded emulator instance. Keep those binaries untracked and provide the success self-loop address for the specific fixture you are running:
+
+```sh
+SWIFT64_CPU_FUNCTIONAL_TEST_PATH=/path/to/6502_functional_test.bin \
+SWIFT64_CPU_FUNCTIONAL_SUCCESS_PC=0x3469 \
+SWIFT64_CPU_FUNCTIONAL_START_PC=0x0400 \
+SWIFT64_CPU_FUNCTIONAL_MAX_CYCLES=100000000 \
+swift test --filter CPU6502ConformanceTests
 ```
 
 For resumable local milestone runs, add a JSONL result log path. Reuse the same path with `SWIFT64_LOCAL_MILESTONE_RESUME=1` to skip milestones that already recorded a passing result:

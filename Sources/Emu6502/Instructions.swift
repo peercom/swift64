@@ -1342,11 +1342,18 @@ extension CPU6502 {
             setFlag(Flags.interrupt, true)
             cycle = 5
         case 5:
-            addr = UInt16(bus.read(Vector.irq))  // vector low
+            if nmiPending {
+                acknowledgePendingNMI()
+                interruptVectorAddress = Vector.nmi
+            } else {
+                interruptVectorAddress = Vector.irq
+            }
+            addr = UInt16(bus.read(interruptVectorAddress))  // vector low
             cycle = 6
         case 6:
-            addr |= UInt16(bus.read(Vector.irq + 1)) << 8  // vector high
+            addr |= UInt16(bus.read(interruptVectorAddress + 1)) << 8  // vector high
             pc = addr
+            interruptVectorAddress = Vector.irq
             cycle = 0
         default: cycle = 0
         }
@@ -1443,26 +1450,17 @@ extension CPU6502 {
             setFlag(Flags.interrupt, true)
             cycle = 5
         case 5:
-            let vector: UInt16
-            switch interruptType {
-            case .nmi:   vector = Vector.nmi
-            case .irq:   vector = Vector.irq
-            case .reset: vector = Vector.reset
-            case .none:  vector = Vector.irq  // shouldn't happen
+            if interruptType == .irq && nmiPending {
+                acknowledgePendingNMI()
+                interruptVectorAddress = Vector.nmi
             }
-            addr = UInt16(bus.read(vector))
+            addr = UInt16(bus.read(interruptVectorAddress))
             cycle = 6
         case 6:
-            let vector: UInt16
-            switch interruptType {
-            case .nmi:   vector = Vector.nmi
-            case .irq:   vector = Vector.irq
-            case .reset: vector = Vector.reset
-            case .none:  vector = Vector.irq
-            }
-            addr |= UInt16(bus.read(vector + 1)) << 8
+            addr |= UInt16(bus.read(interruptVectorAddress + 1)) << 8
             pc = addr
             interruptType = .none
+            interruptVectorAddress = Vector.irq
             servicingInterrupt = false
             cycle = 0
         default:

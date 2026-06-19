@@ -479,6 +479,137 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertEqual(bus.memory[0x01FB] & Flags.unused, Flags.unused)
     }
 
+    func testNMIDuringBRKBeforeVectorFetchHijacksToNMIVectorWithBreakFlagSet() {
+        let (cpu, bus) = makeCPU([0x00, 0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x10
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xE8  // INX
+        bus.memory[0x0710] = 0xC8  // INY
+
+        for _ in 0..<5 { cpu.tick() }  // BRK fetch through pushed status.
+        XCTAssertEqual(cpu.cycle, 5)
+
+        cpu.setNMILine(high: true)
+        cpu.tick()  // vector low, hijacked by NMI
+        cpu.tick()  // vector high
+
+        XCTAssertEqual(cpu.pc, 0x0700)
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, Flags.brk)
+        runInstructions(cpu, count: 1)
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+    }
+
+    func testNMIAfterBRKVectorLowDoesNotHalfHijackAndRunsAfterFirstHandlerOpcode() {
+        let (cpu, bus) = makeCPU([0x00, 0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x34
+        bus.memory[0xFFFF] = 0x12
+        bus.memory[0x0700] = 0xC8  // INY
+        bus.memory[0x1234] = 0xE8  // INX
+        bus.memory[0x1235] = 0xEA  // NOP
+
+        for _ in 0..<5 { cpu.tick() }  // BRK fetch through pushed status.
+        XCTAssertEqual(cpu.cycle, 5)
+        cpu.tick()  // IRQ/BRK vector low has already been fetched.
+        XCTAssertEqual(cpu.cycle, 6)
+
+        cpu.setNMILine(high: true)
+        cpu.tick()  // vector high remains IRQ/BRK, not NMI.
+
+        XCTAssertEqual(cpu.pc, 0x1234)
+        runInstructions(cpu, count: 1)
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+
+        runInstructions(cpu, count: 1)  // deferred NMI sequence.
+        XCTAssertEqual(cpu.pc, 0x0700)
+        XCTAssertEqual(cpu.y, 0x00)
+        runInstructions(cpu, count: 1)
+        XCTAssertEqual(cpu.y, 0x01)
+    }
+
+    func testTransientNMIAfterBRKVectorLowIsMissedBeforeFirstHandlerOpcode() {
+        let (cpu, bus) = makeCPU([0x00, 0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x34
+        bus.memory[0xFFFF] = 0x12
+        bus.memory[0x0700] = 0xC8  // INY
+        bus.memory[0x1234] = 0xE8  // INX
+        bus.memory[0x1235] = 0xEA  // NOP
+
+        for _ in 0..<5 { cpu.tick() }  // BRK fetch through pushed status.
+        cpu.tick()  // IRQ/BRK vector low has already been fetched.
+
+        cpu.setNMILine(high: true)
+        cpu.setNMILine(high: false)
+        cpu.tick()  // vector high remains IRQ/BRK.
+
+        XCTAssertEqual(cpu.pc, 0x1234)
+        runInstructions(cpu, count: 2)
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+        XCTAssertFalse(cpu.nmiPending)
+    }
+
+    func testNMIDuringIRQBeforeVectorFetchHijacksToNMIVectorWithBreakFlagClear() {
+        let (cpu, bus) = makeCPU([0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x10
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xE8  // INX
+        bus.memory[0x0710] = 0xC8  // INY
+        cpu.setFlag(Flags.interrupt, false)
+        cpu.irqLine = true
+
+        for _ in 0..<5 { cpu.tick() }  // IRQ start through pushed status.
+        XCTAssertEqual(cpu.cycle, 5)
+
+        cpu.setNMILine(high: true)
+        cpu.tick()  // vector low, hijacked by NMI
+        cpu.tick()  // vector high
+
+        XCTAssertEqual(cpu.pc, 0x0700)
+        XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, 0)
+        runInstructions(cpu, count: 1)
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+    }
+
+    func testIRQRemainsPendingAfterNMIHijacksIRQVectorFetch() {
+        let (cpu, bus) = makeCPU([0xEA])
+        bus.memory[0xFFFA] = 0x00
+        bus.memory[0xFFFB] = 0x07
+        bus.memory[0xFFFE] = 0x10
+        bus.memory[0xFFFF] = 0x07
+        bus.memory[0x0700] = 0xE8  // INX
+        bus.memory[0x0701] = 0x40  // RTI
+        bus.memory[0x0710] = 0xC8  // INY
+        cpu.setFlag(Flags.interrupt, false)
+        cpu.irqLine = true
+
+        for _ in 0..<5 { cpu.tick() }  // IRQ start through pushed status.
+        cpu.setNMILine(high: true)
+        cpu.tick()  // vector low, hijacked by NMI
+        cpu.tick()  // vector high
+
+        XCTAssertEqual(cpu.pc, 0x0700)
+
+        runInstructions(cpu, count: 2)  // NMI handler INX, then RTI.
+        XCTAssertEqual(cpu.x, 0x01)
+        XCTAssertEqual(cpu.y, 0x00)
+
+        runInstructions(cpu, count: 1)  // IRQ is still level-asserted.
+        XCTAssertEqual(cpu.pc, 0x0710)
+        runInstructions(cpu, count: 1)
+        XCTAssertEqual(cpu.y, 0x01)
+    }
+
     // MARK: - Flag instructions
 
     func testSECCLC() {

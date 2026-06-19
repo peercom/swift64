@@ -93,6 +93,13 @@ public final class CPU6502 {
     /// for the immediately following IRQ decision, such as CLI, SEI, and PLP.
     var irqMaskOverrideForNextBoundary: Bool?
 
+    /// Vector selected for the current BRK/IRQ/NMI/RESET sequence.
+    var interruptVectorAddress: UInt16 = Vector.irq
+
+    /// A late NMI that arrives after the low vector byte was fetched must not
+    /// half-hijack the high vector byte; service it after one handler opcode.
+    var deferNMIUntilAfterNextInstruction = false
+
     var resetPending: Bool = false
 
     // MARK: - Init
@@ -109,6 +116,8 @@ public final class CPU6502 {
         servicingInterrupt = false
         interruptType = .none
         irqMaskOverrideForNextBoundary = nil
+        interruptVectorAddress = Vector.irq
+        deferNMIUntilAfterNextInstruction = false
         cycle = 0
         rdyLine = true
         nmiPending = false
@@ -126,7 +135,12 @@ public final class CPU6502 {
     /// serviced at the next instruction boundary.
     public func setNMILine(high: Bool) {
         if high && !nmiLine {
-            nmiPending = true
+            if protectsLateNMIVectorHijack {
+                deferNMIUntilAfterNextInstruction = true
+                nmiLinePrev = true
+            } else {
+                nmiPending = true
+            }
         }
         nmiLine = high
     }
@@ -170,8 +184,14 @@ public final class CPU6502 {
                 resetPending = false
                 beginInterrupt(.reset)
                 return true
+            } else if deferNMIUntilAfterNextInstruction {
+                deferNMIUntilAfterNextInstruction = false
+                if nmiLine {
+                    nmiPending = true
+                    nmiLinePrev = true
+                }
             } else if nmiPending {
-                nmiPending = false
+                acknowledgePendingNMI()
                 beginInterrupt(.nmi)
                 return true
             } else if irqLine && !irqMasked {
@@ -211,6 +231,8 @@ public final class CPU6502 {
         servicingInterrupt = false
         interruptType = .none
         irqMaskOverrideForNextBoundary = nil
+        interruptVectorAddress = Vector.irq
+        deferNMIUntilAfterNextInstruction = false
         rdyLine = true
         nmiPending = false
         nmiLinePrev = nmiLine
@@ -244,11 +266,29 @@ public final class CPU6502 {
         nmiLinePrev = nmiLine
     }
 
+    var protectsLateNMIVectorHijack: Bool {
+        if servicingInterrupt && interruptType == .irq && cycle == 6 {
+            return true
+        }
+        return !servicingInterrupt && opcode == 0x00 && cycle == 6
+    }
+
+    func acknowledgePendingNMI() {
+        nmiPending = false
+        nmiLinePrev = nmiLine
+    }
+
     /// Begin an interrupt sequence. This consumes the current cycle (cycle 0)
     /// and sets up the per-cycle interrupt state machine.
     func beginInterrupt(_ type: InterruptKind) {
         servicingInterrupt = true
         interruptType = type
+        switch type {
+        case .nmi: interruptVectorAddress = Vector.nmi
+        case .irq: interruptVectorAddress = Vector.irq
+        case .reset: interruptVectorAddress = Vector.reset
+        case .none: interruptVectorAddress = Vector.irq
+        }
         // Cycle 0 of interrupt: dummy read (this tick)
         _ = bus.read(pc)
         cycle = 1
