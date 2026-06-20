@@ -637,6 +637,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("color RAM $0000"))
         XCTAssertTrue(reason.contains("screen hash"))
         XCTAssertTrue(reason.contains("color RAM hash"))
+        XCTAssertTrue(reason.contains("timeout state pc=$"))
+        XCTAssertTrue(reason.contains("drivePC=$"))
+        XCTAssertTrue(reason.contains("driveNoProgress="))
     }
 
     func testMilestoneResultLogRoundTripsPassedEntriesForResume() throws {
@@ -712,6 +715,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneSampleCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneMask, 0)
+        XCTAssertEqual(records.last?.finalDriveNoProgressCycleCount, 0)
+        XCTAssertNil(records.last?.finalFailureReason)
         XCTAssertEqual(records.last?.finalMediaFormat, "D64")
         XCTAssertEqual(records.last?.finalMediaPopulatedHalfTrackCount, 35)
         XCTAssertEqual(records.last?.finalMediaNativeLowLevelTrackCount, 0)
@@ -752,6 +757,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
+        XCTAssertNil(legacyRecord.finalDriveNoProgressCycleCount)
+        XCTAssertNil(legacyRecord.finalFailureReason)
         XCTAssertNil(legacyRecord.finalMediaFormat)
         XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
         XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(milestone.resultKey))
@@ -1795,9 +1802,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         if unmet.isEmpty {
-            return "named milestone timeout after all expectations matched"
+            return "named milestone timeout after all expectations matched; " + timeoutStateSummary(c64)
         }
-        return "named milestone timeout; unmet: " + unmet.joined(separator: "; ")
+        return "named milestone timeout; unmet: " + unmet.joined(separator: "; ") + "; " + timeoutStateSummary(c64)
+    }
+
+    private func timeoutStateSummary(_ c64: C64) -> String {
+        let driveStatus = c64.drive1541.statusSnapshot
+        return "timeout state pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(driveStatus.cpuPC)) driveNoProgress=\(driveStatus.noProgressCycleCount)"
     }
 
     private func driveStatusMismatches(
@@ -2430,6 +2442,8 @@ private struct MatrixRunResult {
             finalVariableSpeedZoneSampleCount: drive.variableSpeedZoneSampleCount,
             finalVariableSpeedZoneMask: drive.variableSpeedZoneMask,
             finalLastIECCommandSummary: drive.lastIECCommandSummary,
+            finalDriveNoProgressCycleCount: drive.noProgressCycleCount,
+            finalFailureReason: tapeStatus.lastFailureReason,
             finalMediaFormat: media?.format.displayName,
             finalMediaPopulatedHalfTrackCount: media?.populatedHalfTrackCount,
             finalMediaNativeLowLevelTrackCount: media?.nativeLowLevelTrackCount,
@@ -2828,6 +2842,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalVariableSpeedZoneSampleCount: UInt64?
     let finalVariableSpeedZoneMask: UInt8?
     let finalLastIECCommandSummary: String?
+    let finalDriveNoProgressCycleCount: UInt64?
+    let finalFailureReason: String?
     let finalMediaFormat: String?
     let finalMediaPopulatedHalfTrackCount: Int?
     let finalMediaNativeLowLevelTrackCount: Int?
@@ -2891,6 +2907,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalVariableSpeedZoneSampleCount: UInt64? = nil,
         finalVariableSpeedZoneMask: UInt8? = nil,
         finalLastIECCommandSummary: String? = nil,
+        finalDriveNoProgressCycleCount: UInt64? = nil,
+        finalFailureReason: String? = nil,
         finalMediaFormat: String? = nil,
         finalMediaPopulatedHalfTrackCount: Int? = nil,
         finalMediaNativeLowLevelTrackCount: Int? = nil,
@@ -2953,6 +2971,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalVariableSpeedZoneSampleCount = finalVariableSpeedZoneSampleCount
         self.finalVariableSpeedZoneMask = finalVariableSpeedZoneMask
         self.finalLastIECCommandSummary = finalLastIECCommandSummary
+        self.finalDriveNoProgressCycleCount = finalDriveNoProgressCycleCount
+        self.finalFailureReason = finalFailureReason
         self.finalMediaFormat = finalMediaFormat
         self.finalMediaPopulatedHalfTrackCount = finalMediaPopulatedHalfTrackCount
         self.finalMediaNativeLowLevelTrackCount = finalMediaNativeLowLevelTrackCount
