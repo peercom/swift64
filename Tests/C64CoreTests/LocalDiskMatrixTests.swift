@@ -11,6 +11,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneResumeEnv = "SWIFT64_LOCAL_MILESTONE_RESUME"
     private let milestoneScreenshotDirEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
+    private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
 
     func testMediaStatusMismatchReportsProtectedMediaCounters() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
@@ -301,6 +302,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             XCTAssertTrue(result.passed, summary)
         }
         try writeMilestoneRunSummary(runSummary, to: summaryURL)
+        if shouldFailOnUnclassifiedMilestoneFailures {
+            assertNoUnclassifiedMilestoneFailures(runSummary)
+        }
         print("Local named milestone matrix:\n" + summaries.joined(separator: "\n") + "\n" + runSummary.consoleSummary)
     }
 
@@ -835,12 +839,43 @@ final class LocalDiskMatrixTests: XCTestCase {
             )
         ])
         XCTAssertEqual(decoded.skippedMilestones, [milestone.resultKey])
+        XCTAssertTrue(decoded.hasUnclassifiedFailures)
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("demo.g64"))
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("LOAD\"*\",8,1"))
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("cycles=60"))
+    }
+
+    func testMilestoneRunSummaryAcceptanceGateIgnoresCategorizedFailures() {
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.d64"),
+            mediaType: .d64,
+            machineProfile: .palC64,
+            driveMode: .compat1541,
+            commands: [#"LOAD"$",8"#],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        var summary = MilestoneRunSummary()
+        summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(for: milestone, c64: C64()))
+
+        XCTAssertFalse(summary.hasUnclassifiedFailures)
+        XCTAssertEqual(summary.unclassifiedFailureSummary, "No unclassified milestone failures.")
     }
 
     func testNamedMilestoneRequiresColorRAMHash() {
@@ -1425,6 +1460,18 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private var shouldResumeMilestoneResults: Bool {
         ProcessInfo.processInfo.environment[milestoneResumeEnv] == "1"
+    }
+
+    private var shouldFailOnUnclassifiedMilestoneFailures: Bool {
+        ProcessInfo.processInfo.environment[milestoneFailOnUnclassifiedEnv] == "1"
+    }
+
+    private func assertNoUnclassifiedMilestoneFailures(
+        _ summary: MilestoneRunSummary,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertFalse(summary.hasUnclassifiedFailures, summary.unclassifiedFailureSummary, file: file, line: line)
     }
 
     private func milestoneResultLogURL() -> URL? {
@@ -3110,6 +3157,20 @@ private struct MilestoneRunSummary: Codable, Equatable {
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
         return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+    }
+
+    var hasUnclassifiedFailures: Bool {
+        unclassifiedFailureCount > 0
+    }
+
+    var unclassifiedFailureSummary: String {
+        guard hasUnclassifiedFailures else {
+            return "No unclassified milestone failures."
+        }
+        let details = unclassifiedFailureDetails.map { detail in
+            "\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
+        }
+        return "Unclassified milestone failures (\(unclassifiedFailureCount)):\n" + details.joined(separator: "\n")
     }
 }
 

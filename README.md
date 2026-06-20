@@ -83,7 +83,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
 - Media capability checks now include weak/random-bit range counts, total weak-bit coverage, and per-byte variable-speed-zone coverage for protected G64 validation
-- Compatibility milestone runs can now append categorized JSONL result logs with final PC/drive/media/tape/screen state, write compact aggregate JSON summaries, and resume by skipping milestones that already passed in a previous log
+- Compatibility milestone runs can now append categorized JSONL result logs with final PC/drive/media/tape/screen state, write compact aggregate JSON summaries, optionally fail acceptance runs on unclassified failures, and resume by skipping milestones that already passed in a previous log
 - Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
@@ -263,10 +263,11 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swif
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESUME=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include a format version, the milestone media type, action summary, max-cycle budget, final PC, 1541 drive state, final failure/no-progress diagnostics, media capability counts including weak-bit and variable-speed-zone counters, tape state, screen hashes, and optional screenshot paths. The aggregate summary records pass/fail/skip counts, category counts including `protectedMedia`, `cartridge`, and `app`, unclassified failure counts/details for unknown or generic emulator failures, tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
+To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include a format version, the milestone media type, action summary, max-cycle budget, final PC, 1541 drive state, final failure/no-progress diagnostics, media capability counts including weak-bit and variable-speed-zone counters, tape state, screen hashes, and optional screenshot paths. The aggregate summary records pass/fail/skip counts, category counts including `protectedMedia`, `cartridge`, and `app`, unclassified failure counts/details for unknown or generic emulator failures, tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys. Add `SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED=1` for preservation acceptance runs that should fail whenever a milestone lands in the unknown/generic emulator bucket:
 
 ```sh
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
+SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED=1 SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
 To capture passing milestone framebuffers, set a screenshot output directory. Files are written as portable PPM images using sanitized `screenshotName` values from the manifest:
