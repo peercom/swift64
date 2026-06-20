@@ -751,6 +751,17 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.mediaType, "g64")
         XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
         XCTAssertEqual(records.last?.maxCycles, 1)
+        XCTAssertEqual(records.last?.finalA, "00")
+        XCTAssertEqual(records.last?.finalX, "00")
+        XCTAssertEqual(records.last?.finalY, "00")
+        XCTAssertEqual(records.last?.finalSP, "FD")
+        XCTAssertEqual(records.last?.finalP, "24")
+        XCTAssertEqual(records.last?.finalIRQLine, false)
+        XCTAssertEqual(records.last?.finalNMILine, false)
+        XCTAssertEqual(records.last?.finalRDYLine, true)
+        XCTAssertEqual(records.last?.finalCPUInstructionCycle, 0)
+        XCTAssertEqual(records.last?.finalVICRasterLine, 0)
+        XCTAssertEqual(records.last?.finalVICRasterCycle, 0)
         XCTAssertEqual(records.last?.finalReadTrack, 18)
         XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
         XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
@@ -801,6 +812,17 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.actionSummary)
         XCTAssertNil(legacyRecord.maxCycles)
         XCTAssertNil(legacyRecord.finalReadHalfTrack)
+        XCTAssertNil(legacyRecord.finalA)
+        XCTAssertNil(legacyRecord.finalX)
+        XCTAssertNil(legacyRecord.finalY)
+        XCTAssertNil(legacyRecord.finalSP)
+        XCTAssertNil(legacyRecord.finalP)
+        XCTAssertNil(legacyRecord.finalIRQLine)
+        XCTAssertNil(legacyRecord.finalNMILine)
+        XCTAssertNil(legacyRecord.finalRDYLine)
+        XCTAssertNil(legacyRecord.finalCPUInstructionCycle)
+        XCTAssertNil(legacyRecord.finalVICRasterLine)
+        XCTAssertNil(legacyRecord.finalVICRasterCycle)
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
@@ -2688,6 +2710,17 @@ private struct MatrixRunResult {
             reason: reason,
             category: category.rawValue,
             finalPC: hex16(c64.cpu.pc),
+            finalA: hex8(c64.cpu.a),
+            finalX: hex8(c64.cpu.x),
+            finalY: hex8(c64.cpu.y),
+            finalSP: hex8(c64.cpu.sp),
+            finalP: hex8(c64.cpu.p),
+            finalIRQLine: c64.cpu.irqLine,
+            finalNMILine: c64.cpu.nmiLine,
+            finalRDYLine: c64.cpu.rdyLine,
+            finalCPUInstructionCycle: c64.cpu.cycle,
+            finalVICRasterLine: Int(c64.vic.rasterLine),
+            finalVICRasterCycle: c64.vic.rasterCycle,
             finalDrivePC: hex16(drive.cpuPC),
             finalTrack: drive.track,
             finalHalfTrack: drive.halfTrack,
@@ -3079,7 +3112,7 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 5
+    static let currentFormatVersion = 6
 
     let formatVersion: Int?
     let manifestHash: String?
@@ -3097,6 +3130,17 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let reason: String
     let category: String?
     let finalPC: String?
+    let finalA: String?
+    let finalX: String?
+    let finalY: String?
+    let finalSP: String?
+    let finalP: String?
+    let finalIRQLine: Bool?
+    let finalNMILine: Bool?
+    let finalRDYLine: Bool?
+    let finalCPUInstructionCycle: Int?
+    let finalVICRasterLine: Int?
+    let finalVICRasterCycle: Int?
     let finalDrivePC: String?
     let finalTrack: Int?
     let finalHalfTrack: Int?
@@ -3166,6 +3210,17 @@ private struct MilestoneResultRecord: Codable, Equatable {
         reason: String,
         category: String? = nil,
         finalPC: String? = nil,
+        finalA: String? = nil,
+        finalX: String? = nil,
+        finalY: String? = nil,
+        finalSP: String? = nil,
+        finalP: String? = nil,
+        finalIRQLine: Bool? = nil,
+        finalNMILine: Bool? = nil,
+        finalRDYLine: Bool? = nil,
+        finalCPUInstructionCycle: Int? = nil,
+        finalVICRasterLine: Int? = nil,
+        finalVICRasterCycle: Int? = nil,
         finalDrivePC: String? = nil,
         finalTrack: Int? = nil,
         finalHalfTrack: Int? = nil,
@@ -3234,6 +3289,17 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.reason = reason
         self.category = category
         self.finalPC = finalPC
+        self.finalA = finalA
+        self.finalX = finalX
+        self.finalY = finalY
+        self.finalSP = finalSP
+        self.finalP = finalP
+        self.finalIRQLine = finalIRQLine
+        self.finalNMILine = finalNMILine
+        self.finalRDYLine = finalRDYLine
+        self.finalCPUInstructionCycle = finalCPUInstructionCycle
+        self.finalVICRasterLine = finalVICRasterLine
+        self.finalVICRasterCycle = finalVICRasterCycle
         self.finalDrivePC = finalDrivePC
         self.finalTrack = finalTrack
         self.finalHalfTrack = finalHalfTrack
