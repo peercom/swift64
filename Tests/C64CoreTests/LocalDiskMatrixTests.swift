@@ -293,6 +293,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             if passedMilestones.contains(milestone.resultKey) {
                 summaries.append("SKIP \(milestone.url.lastPathComponent) command=\(milestone.commandSummary) reason=previous pass in result log")
                 runSummary.recordSkipped(milestone)
+                try appendMilestoneResult(
+                    milestone.skippedRecord(manifestHash: manifestHash, reason: "previous pass in result log"),
+                    to: resultLogURL
+                )
                 continue
             }
 
@@ -728,6 +732,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(passed.contains(milestone.resultKey))
         XCTAssertTrue(log.contains("\"passed\":false"))
         XCTAssertTrue(log.contains("\"passed\":true"))
+        XCTAssertFalse(log.contains(#""skipped":true"#))
         XCTAssertTrue(log.contains(#""mediaType":"g64""#))
         XCTAssertTrue(log.contains(#""commandSummary":"LOAD\"*\",8,1 | RUN""#))
         XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
@@ -744,6 +749,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
         XCTAssertEqual(records.last?.formatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertNil(records.last?.skipped)
         XCTAssertEqual(records.last?.manifestHash, currentManifestHash)
         XCTAssertEqual(records.last?.milestoneID, "demo-loader")
         XCTAssertEqual(records.last?.milestoneName, "Demo Loader")
@@ -805,6 +811,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
         XCTAssertNil(legacyRecord.formatVersion)
+        XCTAssertNil(legacyRecord.skipped)
         XCTAssertNil(legacyRecord.manifestHash)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.milestoneID)
@@ -853,6 +860,25 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(try passedMilestoneKeys(from: staleLogURL).contains(milestone.resultKey))
         XCTAssertTrue(try passedMilestoneKeys(from: staleLogURL, matchingManifestHash: currentManifestHash).contains(milestone.resultKey))
         XCTAssertFalse(try passedMilestoneKeys(from: staleLogURL, matchingManifestHash: "different-manifest").contains(milestone.resultKey))
+
+        let skippedLogURL = directory.appendingPathComponent("skipped.jsonl")
+        try appendMilestoneResult(
+            milestone.skippedRecord(manifestHash: currentManifestHash, reason: "previous pass in result log"),
+            to: skippedLogURL
+        )
+        let skippedRecord = try XCTUnwrap(
+            try String(contentsOf: skippedLogURL, encoding: .utf8)
+                .split(separator: "\n")
+                .map { try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8)) }
+                .last
+        )
+        XCTAssertEqual(skippedRecord.formatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertEqual(skippedRecord.skipped, true)
+        XCTAssertEqual(skippedRecord.passed, false)
+        XCTAssertEqual(skippedRecord.category, "skipped")
+        XCTAssertEqual(skippedRecord.manifestHash, currentManifestHash)
+        XCTAssertEqual(skippedRecord.key, milestone.resultKey)
+        XCTAssertFalse(try passedMilestoneKeys(from: skippedLogURL).contains(milestone.resultKey))
     }
 
     func testMilestoneRunSummaryWritesAggregateJSON() throws {
@@ -2537,7 +2563,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         for line in lines {
             guard let data = String(line).data(using: .utf8),
                   let record = try? decoder.decode(MilestoneResultRecord.self, from: data),
-                  record.passed else {
+                  record.passed,
+                  record.skipped != true else {
                 continue
             }
             if let matchingManifestHash, record.manifestHash != matchingManifestHash {
@@ -3109,12 +3136,34 @@ private struct LocalMilestone {
             driveMode: driveMode.rawValue
         )
     }
+
+    func skippedRecord(manifestHash: String?, reason: String) -> MilestoneResultRecord {
+        MilestoneResultRecord(
+            formatVersion: MilestoneResultRecord.currentFormatVersion,
+            skipped: true,
+            manifestHash: manifestHash,
+            milestoneID: id,
+            milestoneName: name,
+            file: url.lastPathComponent,
+            mediaType: mediaType.rawValue,
+            commandSummary: commandSummary,
+            actionSummary: scheduledActions.map(\.summary),
+            machineProfile: machineProfile.rawValue,
+            driveMode: driveMode.rawValue,
+            maxCycles: maxCycles,
+            passed: false,
+            elapsedCycles: 0,
+            reason: reason,
+            category: "skipped"
+        )
+    }
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 6
+    static let currentFormatVersion = 7
 
     let formatVersion: Int?
+    let skipped: Bool?
     let manifestHash: String?
     let milestoneID: String?
     let milestoneName: String?
@@ -3195,6 +3244,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
 
     init(
         formatVersion: Int? = nil,
+        skipped: Bool? = nil,
         manifestHash: String? = nil,
         milestoneID: String? = nil,
         milestoneName: String? = nil,
@@ -3274,6 +3324,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         screenshotPath: String? = nil
     ) {
         self.formatVersion = formatVersion
+        self.skipped = skipped
         self.manifestHash = manifestHash
         self.milestoneID = milestoneID
         self.milestoneName = milestoneName
