@@ -271,6 +271,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         let summaryURL = milestoneSummaryURL()
         var summaries: [String] = []
         var runSummary = MilestoneRunSummary()
+        runSummary.configureRun(
+            manifestURL: activeMilestoneManifestURL(),
+            resultLogURL: resultLogURL,
+            screenshotDirectoryURL: screenshotDirectoryURL,
+            resumeEnabled: shouldResumeMilestoneResults,
+            milestoneLimit: localMilestoneLimit,
+            failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures
+        )
         for milestone in milestones {
             if passedMilestones.contains(milestone.resultKey) {
                 summaries.append("SKIP \(milestone.url.lastPathComponent) command=\(milestone.commandSummary) reason=previous pass in result log")
@@ -695,7 +703,6 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(passed.contains(milestone.resultKey))
         XCTAssertTrue(log.contains("\"passed\":false"))
         XCTAssertTrue(log.contains("\"passed\":true"))
-        XCTAssertTrue(log.contains(#""formatVersion":3"#))
         XCTAssertTrue(log.contains(#""mediaType":"g64""#))
         XCTAssertTrue(log.contains(#""commandSummary":"LOAD\"*\",8,1 | RUN""#))
         XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
@@ -711,7 +718,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
-        XCTAssertEqual(records.last?.formatVersion, 3)
+        XCTAssertEqual(records.last?.formatVersion, MilestoneResultRecord.currentFormatVersion)
         XCTAssertEqual(records.last?.mediaType, "g64")
         XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
         XCTAssertEqual(records.last?.maxCycles, 1)
@@ -799,6 +806,14 @@ final class LocalDiskMatrixTests: XCTestCase {
             screenshotName: nil
         )
         var summary = MilestoneRunSummary()
+        summary.configureRun(
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            resultLogURL: URL(fileURLWithPath: "/tmp/results.jsonl"),
+            screenshotDirectoryURL: URL(fileURLWithPath: "/tmp/screens", isDirectory: true),
+            resumeEnabled: true,
+            milestoneLimit: 5,
+            failOnUnclassified: true
+        )
         summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(for: milestone, c64: C64()))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(for: milestone, c64: C64()))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(for: milestone, c64: C64()))
@@ -812,6 +827,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.passed, 1)
         XCTAssertEqual(decoded.failed, 2)
         XCTAssertEqual(decoded.skipped, 1)
+        XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
+        XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertEqual(decoded.manifestPath, "/tmp/compatibility.json")
+        XCTAssertEqual(decoded.resultLogPath, "/tmp/results.jsonl")
+        XCTAssertEqual(decoded.screenshotDirectoryPath, "/tmp/screens")
+        XCTAssertEqual(decoded.resumeEnabled, true)
+        XCTAssertEqual(decoded.milestoneLimit, 5)
+        XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
         XCTAssertEqual(decoded.formatVersion, 1)
         XCTAssertEqual(decoded.totalElapsedCycles, 60)
@@ -1469,6 +1492,15 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private var shouldFailOnUnclassifiedMilestoneFailures: Bool {
         ProcessInfo.processInfo.environment[milestoneFailOnUnclassifiedEnv] == "1"
+    }
+
+    private var localMilestoneLimit: Int? {
+        Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_LIMIT"] ?? "")
+    }
+
+    private func activeMilestoneManifestURL() -> URL? {
+        let url = localDiskRoot.appendingPathComponent("compatibility.json")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private func assertNoUnclassifiedMilestoneFailures(
@@ -2493,7 +2525,7 @@ private struct MatrixRunResult {
         let tapeDecode = tapeDecodeRecordFields(tapeStatus.tapeDecodeStatus)
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
-            formatVersion: 3,
+            formatVersion: MilestoneResultRecord.currentFormatVersion,
             file: milestone.url.lastPathComponent,
             mediaType: milestone.mediaType.rawValue,
             commandSummary: milestone.commandSummary,
@@ -2894,6 +2926,8 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
+    static let currentFormatVersion = 3
+
     let formatVersion: Int?
     let file: String
     let mediaType: String?
@@ -3110,6 +3144,14 @@ private struct MilestoneFailureSummary: Codable, Equatable {
 
 private struct MilestoneRunSummary: Codable, Equatable {
     var formatVersion: Int = 1
+    var runnerName: String = "LocalDiskMatrixTests"
+    var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
+    var manifestPath: String?
+    var resultLogPath: String?
+    var screenshotDirectoryPath: String?
+    var resumeEnabled: Bool = false
+    var milestoneLimit: Int?
+    var failOnUnclassified: Bool = false
     var total: Int = 0
     var executed: Int = 0
     var passed: Int = 0
@@ -3124,6 +3166,23 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var failedMilestoneDetails: [MilestoneFailureSummary] = []
     var unclassifiedFailureDetails: [MilestoneFailureSummary] = []
     var skippedMilestones: [MilestoneResultKey] = []
+
+    mutating func configureRun(
+        manifestURL: URL?,
+        resultLogURL: URL?,
+        screenshotDirectoryURL: URL?,
+        resumeEnabled: Bool,
+        milestoneLimit: Int?,
+        failOnUnclassified: Bool
+    ) {
+        resultRecordFormatVersion = MilestoneResultRecord.currentFormatVersion
+        manifestPath = manifestURL?.path
+        resultLogPath = resultLogURL?.path
+        screenshotDirectoryPath = screenshotDirectoryURL?.path
+        self.resumeEnabled = resumeEnabled
+        self.milestoneLimit = milestoneLimit
+        self.failOnUnclassified = failOnUnclassified
+    }
 
     mutating func record(_ record: MilestoneResultRecord) {
         total += 1
