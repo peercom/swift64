@@ -12,6 +12,182 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneScreenshotDirEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
 
+    func testMediaStatusMismatchReportsProtectedMediaCounters() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0xAA, 0x55],
+            speedZone: 2,
+            speedZoneMap: [0, 1],
+            weakBitRanges: [
+                DiskImage.Track.WeakBitRange(startBit: 0, endBit: 3),
+                DiskImage.Track.WeakBitRange(startBit: 8, endBit: 15),
+            ],
+            isNativeLowLevel: true
+        )
+        let capabilities = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2).capabilities
+
+        XCTAssertTrue(mediaStatusMismatches(
+            CompatibilityMediaStatus(
+                weakBitRangeCount: 2,
+                weakBitTotalBitCount: 12,
+                variableSpeedZoneByteCount: 2
+            ),
+            capabilities: capabilities
+        ).isEmpty)
+
+        let mismatches = mediaStatusMismatches(
+            CompatibilityMediaStatus(
+                weakBitRangeCount: 1,
+                weakBitTotalBitCount: 16,
+                variableSpeedZoneByteCount: 4
+            ),
+            capabilities: capabilities
+        )
+
+        XCTAssertTrue(mismatches.contains("media.weakBitRangeCount 2 != 1"))
+        XCTAssertTrue(mismatches.contains("media.weakBitTotalBitCount 12 != 16"))
+        XCTAssertTrue(mismatches.contains("media.variableSpeedZoneByteCount 2 != 4"))
+    }
+
+    func testTapeStatusMismatchReportsSignalAndExportFields() {
+        let c64 = C64()
+
+        XCTAssertTrue(tapeStatusMismatches(
+            CompatibilityTapeStatus(
+                decodeStatus: CompatibilityTapeDecodeStatusKind.none,
+                rawPlaybackActive: false,
+                readSignalHigh: true,
+                cassetteSenseLineHigh: true,
+                cassetteMotorEnabled: false,
+                hasCapturedWritePulses: false,
+                canExportCapturedTAP: false,
+                hasUnsavedChanges: false,
+                canExportSavedT64: false
+            ),
+            status: c64.emulationStatus
+        ).isEmpty)
+
+        let mismatches = tapeStatusMismatches(
+            CompatibilityTapeStatus(
+                mountedTapeNameContains: "loader.tap",
+                decodeStatus: .decodedPrograms,
+                pulseCount: 12,
+                programCount: 1,
+                blockCount: 2,
+                decodeFailureReason: .malformedStandardBlocks,
+                rawPlaybackActive: true,
+                readSignalHigh: false,
+                cassetteSenseLineHigh: false,
+                cassetteMotorEnabled: true,
+                hasCapturedWritePulses: true,
+                canExportCapturedTAP: true,
+                hasUnsavedChanges: true,
+                canExportSavedT64: true
+            ),
+            status: c64.emulationStatus
+        )
+
+        XCTAssertTrue(mismatches.contains("tape.mountedTapeName missing loader.tap"))
+        XCTAssertTrue(mismatches.contains("tape.decodeStatus none != decodedPrograms"))
+        XCTAssertTrue(mismatches.contains("tape.pulseCount nil != 12"))
+        XCTAssertTrue(mismatches.contains("tape.programCount nil != 1"))
+        XCTAssertTrue(mismatches.contains("tape.blockCount nil != 2"))
+        XCTAssertTrue(mismatches.contains("tape.decodeFailureReason nil != malformedStandardBlocks"))
+        XCTAssertTrue(mismatches.contains("tape.rawPlaybackActive false != true"))
+        XCTAssertTrue(mismatches.contains("tape.readSignalHigh true != false"))
+        XCTAssertTrue(mismatches.contains("tape.cassetteSenseLineHigh true != false"))
+        XCTAssertTrue(mismatches.contains("tape.cassetteMotorEnabled false != true"))
+        XCTAssertTrue(mismatches.contains("tape.hasCapturedWritePulses false != true"))
+        XCTAssertTrue(mismatches.contains("tape.canExportCapturedTAP false != true"))
+        XCTAssertTrue(mismatches.contains("tape.hasUnsavedChanges false != true"))
+        XCTAssertTrue(mismatches.contains("tape.canExportSavedT64 false != true"))
+    }
+
+    func testTapeStatusCanMatchMountedTAPDecodeStatus() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTinyTAP(pulses: [0x01, 0x02]), fileName: "loader.tap"))
+
+        XCTAssertTrue(tapeStatusMismatches(
+            CompatibilityTapeStatus(
+                mountedTapeNameContains: "loader.tap",
+                decodeStatus: .rawPulsesOnly,
+                pulseCount: 2,
+                rawPlaybackActive: true,
+                readSignalHigh: true,
+                cassetteSenseLineHigh: false,
+                cassetteMotorEnabled: false,
+                hasCapturedWritePulses: false,
+                canExportCapturedTAP: false,
+                hasUnsavedChanges: false,
+                canExportSavedT64: false
+            ),
+            status: c64.emulationStatus
+        ).isEmpty)
+    }
+
+    func testManifestWeakBitRangesApplyAfterDiskMount() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let diskURL = directory.appendingPathComponent("weak-annotation.d64")
+        try makeResultLogD64WithErrorTable().write(to: diskURL)
+
+        var milestone = LocalMilestone(
+            url: diskURL,
+            mediaType: .d64,
+            machineProfile: .palC64,
+            driveMode: .compat1541,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+        milestone.weakBitRanges = [
+            CompatibilityWeakBitRange(halfTrack: 34, startBit: 0, endBit: 15)
+        ]
+
+        let c64 = C64()
+        XCTAssertTrue(mountPrePowerOnMedia(for: milestone, into: c64))
+
+        let capabilities = try XCTUnwrap(c64.emulationStatus.mediaCapabilities)
+        XCTAssertEqual(capabilities.weakBitRangeCount, 1)
+        XCTAssertEqual(capabilities.weakBitTotalBitCount, 16)
+        XCTAssertEqual(c64.drive1541.disk.trackInfo(halfTrack: 34)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)
+        ])
+
+        milestone.weakBitRanges = [
+            CompatibilityWeakBitRange(halfTrack: 35, startBit: 0, endBit: 15)
+        ]
+        XCTAssertFalse(mountPrePowerOnMedia(for: milestone, into: C64()))
+    }
+
+    private func makeTinyTAP(pulses: [UInt8]) -> Data {
+        var tap = [UInt8](repeating: 0, count: 20)
+        for (offset, byte) in "C64-TAPE-RAW".utf8.enumerated() {
+            tap[offset] = byte
+        }
+        tap[0x0C] = 0
+        tap[0x10] = UInt8(pulses.count & 0xFF)
+        tap[0x11] = UInt8((pulses.count >> 8) & 0xFF)
+        tap[0x12] = UInt8((pulses.count >> 16) & 0xFF)
+        tap[0x13] = UInt8((pulses.count >> 24) & 0xFF)
+        tap.append(contentsOf: pulses)
+        return Data(tap)
+    }
+
     func testLocalDiskImagesMountAndEncodeWhenEnabled() throws {
         try requireEnvironment(matrixEnv)
 
@@ -415,7 +591,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             pcRanges: [0xC000...0xC0FF],
             minGCRReads: 1,
             minByteReady: 1,
-            driveStatus: CompatibilityDriveStatus(track: 17, hasDisk: true),
+            driveStatus: CompatibilityDriveStatus(minWeakBitReads: 1, track: 17, hasDisk: true),
             mediaStatus: CompatibilityMediaStatus(isNativeLowLevel: true),
             ramSignatures: [CompatibilityRAMSignature(address: 0x0801, bytes: [0x01, 0x08])],
             colorRAMSignatures: [CompatibilityRAMSignature(address: 0, bytes: [0x01, 0x02])],
@@ -433,6 +609,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("PC $"))
         XCTAssertTrue(reason.contains("GCR reads 0 < 1"))
         XCTAssertTrue(reason.contains("byte-ready 0 < 1"))
+        XCTAssertTrue(reason.contains("drive.minWeakBitReads 0 < 1"))
         XCTAssertTrue(reason.contains("drive.track"))
         XCTAssertTrue(reason.contains("drive.hasDisk"))
         XCTAssertTrue(reason.contains("media capabilities unavailable"))
@@ -472,10 +649,13 @@ final class LocalDiskMatrixTests: XCTestCase {
             MatrixRunResult(passed: false, elapsedCycles: 10, reason: "first failure").record(for: milestone, c64: C64()),
             to: logURL
         )
+        let tapeC64 = C64()
+        XCTAssertTrue(tapeC64.mountTape(makeTinyTAP(pulses: [0x01, 0x02]), fileName: "loader.tap"))
+        XCTAssertTrue(tapeC64.mountDisk(makeResultLogD64WithErrorTable(), fileName: "result-log.d64"))
         try appendMilestoneResult(
             MatrixRunResult(passed: true, elapsedCycles: 20, reason: "named milestone reached").record(
                 for: milestone,
-                c64: C64(),
+                c64: tapeC64,
                 screenshotURL: URL(fileURLWithPath: "/tmp/swift64-screens/demo.ppm")
             ),
             to: logURL
@@ -491,15 +671,53 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""category":"#))
         XCTAssertTrue(log.contains(#""finalPC":"#))
         XCTAssertTrue(log.contains(#""screenRAMHash":"#))
+        XCTAssertTrue(log.contains(#""finalTapeDecodeStatus":"rawPulsesOnly""#))
+        XCTAssertTrue(log.contains(#""finalMountedTapeName":"loader.tap""#))
+        XCTAssertTrue(log.contains(#""finalMediaFormat":"D64""#))
         let records = try log.split(separator: "\n").map {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
+        XCTAssertEqual(records.last?.finalReadTrack, 18)
+        XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
+        XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
+        XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
+        XCTAssertEqual(records.last?.finalMediaFormat, "D64")
+        XCTAssertEqual(records.last?.finalMediaPopulatedHalfTrackCount, 35)
+        XCTAssertEqual(records.last?.finalMediaNativeLowLevelTrackCount, 0)
+        XCTAssertEqual(records.last?.finalMediaSyntheticGCRTrackCount, 35)
+        XCTAssertEqual(records.last?.finalMediaHasSyntheticGCR, true)
+        XCTAssertEqual(records.last?.finalMediaIsNativeLowLevel, false)
+        XCTAssertEqual(records.last?.finalMediaPreservesSectorErrorInfo, true)
+        XCTAssertEqual(records.last?.finalMediaSectorErrorCodeCount, 683)
+        XCTAssertEqual(records.last?.finalMediaNonDefaultSectorErrorCodeCount, 2)
+        XCTAssertEqual(records.last?.finalMediaWeakBitRangeCount, 0)
+        XCTAssertEqual(records.last?.finalMediaWeakBitTotalBitCount, 0)
+        XCTAssertEqual(records.last?.finalMediaVariableSpeedZoneByteCount, 0)
+        XCTAssertEqual(records.last?.finalMediaSupportsWraparoundReads, true)
+        XCTAssertNil(records.last?.finalMediaMaxTrackSize)
+        XCTAssertEqual(records.last?.finalMediaUnsupportedFeatures, ["Native copy-protection bitstream"])
+        XCTAssertEqual(records.last?.finalMountedTapeName, "loader.tap")
+        XCTAssertEqual(records.last?.finalTapeDecodeStatus, "rawPulsesOnly")
+        XCTAssertEqual(records.last?.finalTapePulseCount, 2)
+        XCTAssertEqual(records.last?.finalTapeRawPlaybackActive, true)
+        XCTAssertEqual(records.last?.finalTapeReadSignalHigh, true)
+        XCTAssertEqual(records.last?.finalCassetteSenseLineHigh, false)
+        XCTAssertEqual(records.last?.finalCassetteMotorEnabled, false)
+        XCTAssertEqual(records.last?.finalTapeHasCapturedWritePulses, false)
+        XCTAssertEqual(records.last?.finalCanExportCapturedTAP, false)
+        XCTAssertEqual(records.last?.finalTapeHasUnsavedChanges, false)
+        XCTAssertEqual(records.last?.finalCanExportSavedT64, false)
 
         let legacyURL = directory.appendingPathComponent("legacy.jsonl")
         let legacyLine = #"{"commandSummary":"LOAD\"*\",8,1 | RUN","driveMode":"compat1541","elapsedCycles":5,"file":"demo.g64","machineProfile":"palC64","passed":true,"reason":"old pass"}"#
         try Data((legacyLine + "\n").utf8).write(to: legacyURL)
 
+        let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
+        XCTAssertNil(legacyRecord.finalReadHalfTrack)
+        XCTAssertNil(legacyRecord.finalWeakBitReadCount)
+        XCTAssertNil(legacyRecord.finalMediaFormat)
+        XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
         XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(milestone.resultKey))
     }
 
@@ -996,6 +1214,37 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(c64.restoreKeyDown)
     }
 
+    func testMilestoneActionSchedulerControlsTapePlayback() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountTape(makeTinyTAP(pulses: [0x02, 0x03]), fileName: "loader.tap"))
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+
+        let scheduler = MilestoneActionScheduler(actions: [
+            .stopTape,
+            .waitCycles(3),
+            .startTape
+        ])
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 0)
+
+        XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertTrue(c64.memory.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 2)
+
+        XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 3)
+
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 0)
+        XCTAssertEqual(c64.tapeUnit.cyclesUntilNextPulse, 16)
+    }
+
     func testMilestoneResultCategoriesAreStable() {
         XCTAssertEqual(MatrixRunResult(passed: true, elapsedCycles: 1, reason: "named milestone reached").category, .pass)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CPU JAM/KIL").category, .cpu)
@@ -1003,6 +1252,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "PC $0801 not in $C000-$C0FF").category, .pc)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "GCR reads 0 < 64").category, .drive)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media capabilities unavailable").category, .media)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "tape.rawPlaybackActive false != true").category, .tape)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "RAM $0801 00 != 01").category, .ram)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "color RAM $0000 00 != 01").category, .screen)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "screen hash abc != def").category, .screen)
@@ -1190,6 +1440,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             let gcrReads = driveStatus.via2PortAReadCount - baseline.via2PortAReadCount
             let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
             let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
+            let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
             let pcReached = milestone.pcRanges.isEmpty || milestone.pcRanges.contains { $0.contains(c64.cpu.pc) }
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
             let driveExpectationMatches = milestone.driveStatus.map { expectation in
@@ -1198,11 +1449,15 @@ final class LocalDiskMatrixTests: XCTestCase {
                     snapshot: driveStatus,
                     gcrReads: gcrReads,
                     byteReady: byteReady,
-                    syncDetections: syncDetections
+                    syncDetections: syncDetections,
+                    weakBitReads: weakBitReads
                 ).isEmpty
             } ?? true
             let mediaExpectationMatches = milestone.mediaStatus.map { expectation in
                 mediaStatusMismatches(expectation, capabilities: c64.emulationStatus.mediaCapabilities).isEmpty
+            } ?? true
+            let tapeExpectationMatches = milestone.tapeStatus.map { expectation in
+                tapeStatusMismatches(expectation, status: c64.emulationStatus).isEmpty
             } ?? true
             let ramMatches = milestone.ramSignatures.allSatisfy { signature in
                 let start = signature.address
@@ -1249,6 +1504,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && driveProgress
                 && driveExpectationMatches
                 && mediaExpectationMatches
+                && tapeExpectationMatches
                 && ramMatches
                 && colorRAMMatches
                 && cpuMatches
@@ -1319,13 +1575,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
-        return manifest.milestones.compactMap { entry in
+        return manifest.milestones.compactMap { entry -> LocalMilestone? in
             guard let url = urls.first(where: { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }) else {
                 return nil
             }
             let driveMode = entry.driveMode ?? .compat1541
             let mediaType = entry.mediaType ?? mediaType(for: url)
-            return LocalMilestone(
+            var milestone = LocalMilestone(
                 url: url,
                 mediaType: mediaType,
                 machineProfile: entry.machineProfile ?? .palC64,
@@ -1350,13 +1606,17 @@ final class LocalDiskMatrixTests: XCTestCase {
                 colorRAMHash: entry.colorRAMHash,
                 screenshotName: entry.screenshotName
             )
+            milestone.tapeStatus = entry.tapeStatus
+            milestone.weakBitRanges = entry.weakBitRanges
+            return milestone
         }
     }
 
     private func mountPrePowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
         switch milestone.mediaType {
         case .d64, .g64:
-            return c64.mountDisk(milestone.url)
+            guard c64.mountDisk(milestone.url) else { return false }
+            return applyWeakBitRanges(milestone.weakBitRanges, to: c64)
         case .t64, .tap:
             return c64.mountTape(milestone.url)
         case .crt:
@@ -1364,6 +1624,19 @@ final class LocalDiskMatrixTests: XCTestCase {
         case .prg:
             return true
         }
+    }
+
+    private func applyWeakBitRanges(_ ranges: [CompatibilityWeakBitRange], to c64: C64) -> Bool {
+        let rangesByHalfTrack = Dictionary(grouping: ranges, by: \.halfTrack)
+        for (halfTrack, halfTrackRanges) in rangesByHalfTrack {
+            guard c64.drive1541.disk.setWeakBitRanges(
+                halfTrackRanges.map(\.diskRange),
+                forHalfTrack: halfTrack
+            ) else {
+                return false
+            }
+        }
+        return true
     }
 
     private func mountPostPowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
@@ -1393,6 +1666,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let gcrReads = driveStatus.via2PortAReadCount - baseline.via2PortAReadCount
         let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
         let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
+        let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
         var unmet: [String] = []
 
         if !milestone.pcRanges.isEmpty && !milestone.pcRanges.contains(where: { $0.contains(c64.cpu.pc) }) {
@@ -1410,13 +1684,20 @@ final class LocalDiskMatrixTests: XCTestCase {
                 snapshot: driveStatus,
                 gcrReads: gcrReads,
                 byteReady: byteReady,
-                syncDetections: syncDetections
+                syncDetections: syncDetections,
+                weakBitReads: weakBitReads
             ))
         }
         if let mediaStatusExpectation = milestone.mediaStatus {
             unmet.append(contentsOf: mediaStatusMismatches(
                 mediaStatusExpectation,
                 capabilities: c64.emulationStatus.mediaCapabilities
+            ))
+        }
+        if let tapeStatusExpectation = milestone.tapeStatus {
+            unmet.append(contentsOf: tapeStatusMismatches(
+                tapeStatusExpectation,
+                status: c64.emulationStatus
             ))
         }
         unmet.append(contentsOf: ramSignatureMismatches(
@@ -1464,7 +1745,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         snapshot: Drive1541.StatusSnapshot,
         gcrReads: UInt64,
         byteReady: UInt64,
-        syncDetections: UInt64
+        syncDetections: UInt64,
+        weakBitReads: UInt64
     ) -> [String] {
         var mismatches: [String] = []
         if let minGCRReads = expectation.minGCRReads, gcrReads < nonNegativeUInt64(minGCRReads) {
@@ -1477,11 +1759,25 @@ final class LocalDiskMatrixTests: XCTestCase {
            syncDetections < nonNegativeUInt64(minSyncDetections) {
             mismatches.append("drive.minSyncDetections \(syncDetections) < \(minSyncDetections)")
         }
+        if let minWeakBitReads = expectation.minWeakBitReads,
+           weakBitReads < nonNegativeUInt64(minWeakBitReads) {
+            mismatches.append("drive.minWeakBitReads \(weakBitReads) < \(minWeakBitReads)")
+        }
         if let track = expectation.track, snapshot.track != track {
             mismatches.append("drive.track \(snapshot.track) != \(track)")
         }
         if let halfTrack = expectation.halfTrack, snapshot.halfTrack != halfTrack {
             mismatches.append("drive.halfTrack \(snapshot.halfTrack) != \(halfTrack)")
+        }
+        if let readTrack = expectation.readTrack, snapshot.readTrack != readTrack {
+            mismatches.append("drive.readTrack \(snapshot.readTrack.map(String.init) ?? "nil") != \(readTrack)")
+        }
+        if let readHalfTrack = expectation.readHalfTrack, snapshot.readHalfTrack != readHalfTrack {
+            mismatches.append("drive.readHalfTrack \(snapshot.readHalfTrack.map(String.init) ?? "nil") != \(readHalfTrack)")
+        }
+        if let usingHalfTrackFallback = expectation.usingHalfTrackFallback,
+           snapshot.usingHalfTrackFallback != usingHalfTrackFallback {
+            mismatches.append("drive.usingHalfTrackFallback \(snapshot.usingHalfTrackFallback) != \(usingHalfTrackFallback)")
         }
         if let motorOn = expectation.motorOn, snapshot.motorOn != motorOn {
             mismatches.append("drive.motorOn \(snapshot.motorOn) != \(motorOn)")
@@ -1559,6 +1855,26 @@ final class LocalDiskMatrixTests: XCTestCase {
            capabilities.preservesSectorErrorInfo != preservesSectorErrorInfo {
             mismatches.append("media.preservesSectorErrorInfo \(capabilities.preservesSectorErrorInfo) != \(preservesSectorErrorInfo)")
         }
+        if let sectorErrorCodeCount = expectation.sectorErrorCodeCount,
+           capabilities.sectorErrorCodeCount != sectorErrorCodeCount {
+            mismatches.append("media.sectorErrorCodeCount \(capabilities.sectorErrorCodeCount) != \(sectorErrorCodeCount)")
+        }
+        if let nonDefaultSectorErrorCodeCount = expectation.nonDefaultSectorErrorCodeCount,
+           capabilities.nonDefaultSectorErrorCodeCount != nonDefaultSectorErrorCodeCount {
+            mismatches.append("media.nonDefaultSectorErrorCodeCount \(capabilities.nonDefaultSectorErrorCodeCount) != \(nonDefaultSectorErrorCodeCount)")
+        }
+        if let weakBitRangeCount = expectation.weakBitRangeCount,
+           capabilities.weakBitRangeCount != weakBitRangeCount {
+            mismatches.append("media.weakBitRangeCount \(capabilities.weakBitRangeCount) != \(weakBitRangeCount)")
+        }
+        if let weakBitTotalBitCount = expectation.weakBitTotalBitCount,
+           capabilities.weakBitTotalBitCount != weakBitTotalBitCount {
+            mismatches.append("media.weakBitTotalBitCount \(capabilities.weakBitTotalBitCount) != \(weakBitTotalBitCount)")
+        }
+        if let variableSpeedZoneByteCount = expectation.variableSpeedZoneByteCount,
+           capabilities.variableSpeedZoneByteCount != variableSpeedZoneByteCount {
+            mismatches.append("media.variableSpeedZoneByteCount \(capabilities.variableSpeedZoneByteCount) != \(variableSpeedZoneByteCount)")
+        }
         if let supportsWraparoundReads = expectation.supportsWraparoundReads,
            capabilities.supportsWraparoundReads != supportsWraparoundReads {
             mismatches.append("media.supportsWraparoundReads \(capabilities.supportsWraparoundReads) != \(supportsWraparoundReads)")
@@ -1576,6 +1892,108 @@ final class LocalDiskMatrixTests: XCTestCase {
             }
         }
         return mismatches
+    }
+
+    private func tapeStatusMismatches(
+        _ expectation: CompatibilityTapeStatus,
+        status: C64.EmulationStatus
+    ) -> [String] {
+        var mismatches: [String] = []
+        if let mountedTapeNameContains = expectation.mountedTapeNameContains {
+            if status.mountedTapeName?.localizedCaseInsensitiveContains(mountedTapeNameContains) != true {
+                mismatches.append("tape.mountedTapeName missing \(mountedTapeNameContains)")
+            }
+        }
+        let actualDecode = compatibilityTapeDecodeStatus(status.tapeDecodeStatus)
+        if let decodeStatus = expectation.decodeStatus,
+           actualDecode.status != decodeStatus {
+            mismatches.append("tape.decodeStatus \(actualDecode.status.rawValue) != \(decodeStatus.rawValue)")
+        }
+        if let pulseCount = expectation.pulseCount,
+           actualDecode.pulseCount != pulseCount {
+            mismatches.append("tape.pulseCount \(actualDecode.pulseCount.map(String.init) ?? "nil") != \(pulseCount)")
+        }
+        if let programCount = expectation.programCount,
+           actualDecode.programCount != programCount {
+            mismatches.append("tape.programCount \(actualDecode.programCount.map(String.init) ?? "nil") != \(programCount)")
+        }
+        if let blockCount = expectation.blockCount,
+           actualDecode.blockCount != blockCount {
+            mismatches.append("tape.blockCount \(actualDecode.blockCount.map(String.init) ?? "nil") != \(blockCount)")
+        }
+        if let decodeFailureReason = expectation.decodeFailureReason,
+           actualDecode.failureReason != decodeFailureReason {
+            mismatches.append("tape.decodeFailureReason \(actualDecode.failureReason?.rawValue ?? "nil") != \(decodeFailureReason.rawValue)")
+        }
+        if let rawPlaybackActive = expectation.rawPlaybackActive,
+           status.tapeRawPlaybackActive != rawPlaybackActive {
+            mismatches.append("tape.rawPlaybackActive \(status.tapeRawPlaybackActive) != \(rawPlaybackActive)")
+        }
+        if let readSignalHigh = expectation.readSignalHigh,
+           status.tapeReadSignalHigh != readSignalHigh {
+            mismatches.append("tape.readSignalHigh \(status.tapeReadSignalHigh) != \(readSignalHigh)")
+        }
+        if let cassetteSenseLineHigh = expectation.cassetteSenseLineHigh,
+           status.cassetteSenseLineHigh != cassetteSenseLineHigh {
+            mismatches.append("tape.cassetteSenseLineHigh \(status.cassetteSenseLineHigh) != \(cassetteSenseLineHigh)")
+        }
+        if let cassetteMotorEnabled = expectation.cassetteMotorEnabled,
+           status.cassetteMotorEnabled != cassetteMotorEnabled {
+            mismatches.append("tape.cassetteMotorEnabled \(status.cassetteMotorEnabled) != \(cassetteMotorEnabled)")
+        }
+        if let hasCapturedWritePulses = expectation.hasCapturedWritePulses,
+           status.tapeHasCapturedWritePulses != hasCapturedWritePulses {
+            mismatches.append("tape.hasCapturedWritePulses \(status.tapeHasCapturedWritePulses) != \(hasCapturedWritePulses)")
+        }
+        if let canExportCapturedTAP = expectation.canExportCapturedTAP,
+           status.canExportCapturedTAP != canExportCapturedTAP {
+            mismatches.append("tape.canExportCapturedTAP \(status.canExportCapturedTAP) != \(canExportCapturedTAP)")
+        }
+        if let hasUnsavedChanges = expectation.hasUnsavedChanges,
+           status.tapeHasUnsavedChanges != hasUnsavedChanges {
+            mismatches.append("tape.hasUnsavedChanges \(status.tapeHasUnsavedChanges) != \(hasUnsavedChanges)")
+        }
+        if let canExportSavedT64 = expectation.canExportSavedT64,
+           status.canExportSavedT64 != canExportSavedT64 {
+            mismatches.append("tape.canExportSavedT64 \(status.canExportSavedT64) != \(canExportSavedT64)")
+        }
+        return mismatches
+    }
+
+    private func compatibilityTapeDecodeStatus(
+        _ status: TapeUnit.TAPDecodeStatus
+    ) -> (
+        status: CompatibilityTapeDecodeStatusKind,
+        pulseCount: Int?,
+        programCount: Int?,
+        blockCount: Int?,
+        failureReason: CompatibilityTapeDecodeFailureReason?
+    ) {
+        switch status {
+        case .none:
+            return (.none, nil, nil, nil, nil)
+        case let .rawPulsesOnly(pulseCount):
+            return (.rawPulsesOnly, pulseCount, nil, nil, nil)
+        case let .decodedPrograms(programCount, pulseCount):
+            return (.decodedPrograms, pulseCount, programCount, nil, nil)
+        case let .standardCBMNoPrograms(blockCount, reason):
+            return (.standardCBMNoPrograms, nil, nil, blockCount, compatibilityTapeDecodeFailureReason(reason))
+        }
+    }
+
+    private func compatibilityTapeDecodeFailureReason(
+        _ reason: TapeUnit.TAPDecodeFailureReason
+    ) -> CompatibilityTapeDecodeFailureReason {
+        switch reason {
+        case .noStandardBlocks:
+            return .noStandardBlocks
+        case .malformedStandardBlocks:
+            return .malformedStandardBlocks
+        case .incompleteHeaderData:
+            return .incompleteHeaderData
+        case .conflictingDuplicateData:
+            return .conflictingDuplicateData
+        }
     }
 
     private func ramSignatureMismatches(
@@ -1861,6 +2279,22 @@ final class LocalDiskMatrixTests: XCTestCase {
         c64.loadROMs(basic: basic, kernal: kernal, charset: charset)
         c64.loadDriveROM(drive)
     }
+
+    private func makeResultLogD64WithErrorTable() -> Data {
+        var image = [UInt8](repeating: 0, count: 174848)
+        let bamOffset = DiskDrive.trackOffset[18]
+        image[bamOffset + 0] = 18
+        image[bamOffset + 1] = 1
+        image[bamOffset + 2] = 0x41
+        image[bamOffset + 0xA2] = 0x41
+        image[bamOffset + 0xA3] = 0x42
+
+        var errors = [UInt8](repeating: 0x01, count: 683)
+        errors[0] = 0x05
+        errors[358] = 0x0B
+        image.append(contentsOf: errors)
+        return Data(image)
+    }
 }
 
 private struct MatrixRunResult {
@@ -1870,8 +2304,13 @@ private struct MatrixRunResult {
 
     func summary(name: String, command: String, c64: C64) -> String {
         let drive = c64.drive1541.statusSnapshot
+        let media = c64.emulationStatus.mediaCapabilities
+        let mediaText = media.map {
+            "\($0.format.displayName):tracks=\($0.populatedHalfTrackCount),native=\($0.nativeLowLevelTrackCount),synthetic=\($0.syntheticGCRTrackCount),errors=\($0.nonDefaultSectorErrorCodeCount),weakRanges=\($0.weakBitRangeCount),speedBytes=\($0.variableSpeedZoneByteCount)"
+        } ?? "none"
+        let readText = drive.readHalfTrack.map { "readHalf=\($0)\(drive.usingHalfTrackFallback ? ",fallback" : "")" } ?? "readHalf=none"
         let verdict = passed ? "PASS" : "FAIL"
-        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) reason=\(reason)"
+        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) weakBits=\(drive.weakBitReadCount) reason=\(reason)"
     }
 
     var category: MilestoneResultCategory {
@@ -1884,6 +2323,9 @@ private struct MatrixRunResult {
 
     func record(for milestone: LocalMilestone, c64: C64, screenshotURL: URL? = nil) -> MilestoneResultRecord {
         let drive = c64.drive1541.statusSnapshot
+        let tapeStatus = c64.emulationStatus
+        let tapeDecode = tapeDecodeRecordFields(tapeStatus.tapeDecodeStatus)
+        let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
             file: milestone.url.lastPathComponent,
             commandSummary: milestone.commandSummary,
@@ -1897,13 +2339,84 @@ private struct MatrixRunResult {
             finalDrivePC: hex16(drive.cpuPC),
             finalTrack: drive.track,
             finalHalfTrack: drive.halfTrack,
+            finalReadTrack: drive.readTrack,
+            finalReadHalfTrack: drive.readHalfTrack,
+            finalUsingHalfTrackFallback: drive.usingHalfTrackFallback,
             finalByteReadyCount: drive.byteReadyCount,
             finalVia2PortAReadCount: drive.via2PortAReadCount,
+            finalWeakBitReadCount: drive.weakBitReadCount,
             finalLastIECCommandSummary: drive.lastIECCommandSummary,
+            finalMediaFormat: media?.format.displayName,
+            finalMediaPopulatedHalfTrackCount: media?.populatedHalfTrackCount,
+            finalMediaNativeLowLevelTrackCount: media?.nativeLowLevelTrackCount,
+            finalMediaSyntheticGCRTrackCount: media?.syntheticGCRTrackCount,
+            finalMediaHasSyntheticGCR: media?.hasSyntheticGCR,
+            finalMediaIsNativeLowLevel: media?.isNativeLowLevel,
+            finalMediaPreservesHalfTracks: media?.preservesHalfTracks,
+            finalMediaPreservesRawTrackLengths: media?.preservesRawTrackLengths,
+            finalMediaPreservesSpeedZones: media?.preservesSpeedZones,
+            finalMediaPreservesVariableSpeedZones: media?.preservesVariableSpeedZones,
+            finalMediaPreservesSectorErrorInfo: media?.preservesSectorErrorInfo,
+            finalMediaSectorErrorCodeCount: media?.sectorErrorCodeCount,
+            finalMediaNonDefaultSectorErrorCodeCount: media?.nonDefaultSectorErrorCodeCount,
+            finalMediaWeakBitRangeCount: media?.weakBitRangeCount,
+            finalMediaWeakBitTotalBitCount: media?.weakBitTotalBitCount,
+            finalMediaVariableSpeedZoneByteCount: media?.variableSpeedZoneByteCount,
+            finalMediaSupportsWraparoundReads: media?.supportsWraparoundReads,
+            finalMediaMaxTrackSize: media?.maxTrackSize,
+            finalMediaUnsupportedFeatures: media?.unsupportedFeatures,
+            finalMountedTapeName: tapeStatus.mountedTapeName,
+            finalTapeDecodeStatus: tapeDecode.status,
+            finalTapePulseCount: tapeDecode.pulseCount,
+            finalTapeProgramCount: tapeDecode.programCount,
+            finalTapeBlockCount: tapeDecode.blockCount,
+            finalTapeDecodeFailureReason: tapeDecode.failureReason,
+            finalTapeRawPlaybackActive: tapeStatus.tapeRawPlaybackActive,
+            finalTapeReadSignalHigh: tapeStatus.tapeReadSignalHigh,
+            finalCassetteSenseLineHigh: tapeStatus.cassetteSenseLineHigh,
+            finalCassetteMotorEnabled: tapeStatus.cassetteMotorEnabled,
+            finalTapeHasCapturedWritePulses: tapeStatus.tapeHasCapturedWritePulses,
+            finalCanExportCapturedTAP: tapeStatus.canExportCapturedTAP,
+            finalTapeHasUnsavedChanges: tapeStatus.tapeHasUnsavedChanges,
+            finalCanExportSavedT64: tapeStatus.canExportSavedT64,
             screenRAMHash: CompatibilityHash.screenRAM(c64.memory.ram),
             colorRAMHash: CompatibilityHash.colorRAM(c64.memory.colorRAM),
             screenshotPath: screenshotURL?.path
         )
+    }
+
+    private func tapeDecodeRecordFields(
+        _ status: TapeUnit.TAPDecodeStatus
+    ) -> (
+        status: String,
+        pulseCount: Int?,
+        programCount: Int?,
+        blockCount: Int?,
+        failureReason: String?
+    ) {
+        switch status {
+        case .none:
+            return ("none", nil, nil, nil, nil)
+        case let .rawPulsesOnly(pulseCount):
+            return ("rawPulsesOnly", pulseCount, nil, nil, nil)
+        case let .decodedPrograms(programCount, pulseCount):
+            return ("decodedPrograms", pulseCount, programCount, nil, nil)
+        case let .standardCBMNoPrograms(blockCount, reason):
+            return ("standardCBMNoPrograms", nil, nil, blockCount, tapeDecodeFailureReasonName(reason))
+        }
+    }
+
+    private func tapeDecodeFailureReasonName(_ reason: TapeUnit.TAPDecodeFailureReason) -> String {
+        switch reason {
+        case .noStandardBlocks:
+            return "noStandardBlocks"
+        case .malformedStandardBlocks:
+            return "malformedStandardBlocks"
+        case .incompleteHeaderData:
+            return "incompleteHeaderData"
+        case .conflictingDuplicateData:
+            return "conflictingDuplicateData"
+        }
     }
 }
 
@@ -1915,6 +2428,7 @@ private enum MilestoneResultCategory: String {
     case pc
     case ram
     case screen
+    case tape
     case video
     case audio
     case cia
@@ -1932,6 +2446,9 @@ private enum MilestoneResultCategory: String {
         }
         if lower.contains("media") {
             return .media
+        }
+        if lower.contains("tape.") || lower.contains("cassette") {
+            return .tape
         }
         if lower.contains("gcr")
             || lower.contains("byte-ready")
@@ -2001,6 +2518,10 @@ private final class MilestoneActionScheduler {
             key.press(on: c64)
         case let .keyUp(key):
             key.release(on: c64)
+        case .startTape:
+            _ = c64.startTapePlayback()
+        case .stopTape:
+            c64.stopTapePlayback()
         case .waitCycles:
             break
         }
@@ -2034,6 +2555,10 @@ private extension CompatibilityAction {
             return "key \(key.summaryName) down"
         case let .keyUp(key):
             return "key \(key.summaryName) up"
+        case .startTape:
+            return "tape start"
+        case .stopTape:
+            return "tape stop"
         }
     }
 }
@@ -2123,6 +2648,8 @@ private struct LocalMilestone {
     let minByteReady: UInt64
     let driveStatus: CompatibilityDriveStatus?
     let mediaStatus: CompatibilityMediaStatus?
+    var weakBitRanges: [CompatibilityWeakBitRange] = []
+    var tapeStatus: CompatibilityTapeStatus? = nil
     let ramSignatures: [CompatibilityRAMSignature]
     let colorRAMSignatures: [CompatibilityRAMSignature]
     var cpuRegisters: CompatibilityCPURegisters? = nil
@@ -2169,9 +2696,46 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalDrivePC: String?
     let finalTrack: Int?
     let finalHalfTrack: Int?
+    let finalReadTrack: Int?
+    let finalReadHalfTrack: Int?
+    let finalUsingHalfTrackFallback: Bool?
     let finalByteReadyCount: UInt64?
     let finalVia2PortAReadCount: UInt64?
+    let finalWeakBitReadCount: UInt64?
     let finalLastIECCommandSummary: String?
+    let finalMediaFormat: String?
+    let finalMediaPopulatedHalfTrackCount: Int?
+    let finalMediaNativeLowLevelTrackCount: Int?
+    let finalMediaSyntheticGCRTrackCount: Int?
+    let finalMediaHasSyntheticGCR: Bool?
+    let finalMediaIsNativeLowLevel: Bool?
+    let finalMediaPreservesHalfTracks: Bool?
+    let finalMediaPreservesRawTrackLengths: Bool?
+    let finalMediaPreservesSpeedZones: Bool?
+    let finalMediaPreservesVariableSpeedZones: Bool?
+    let finalMediaPreservesSectorErrorInfo: Bool?
+    let finalMediaSectorErrorCodeCount: Int?
+    let finalMediaNonDefaultSectorErrorCodeCount: Int?
+    let finalMediaWeakBitRangeCount: Int?
+    let finalMediaWeakBitTotalBitCount: Int?
+    let finalMediaVariableSpeedZoneByteCount: Int?
+    let finalMediaSupportsWraparoundReads: Bool?
+    let finalMediaMaxTrackSize: Int?
+    let finalMediaUnsupportedFeatures: [String]?
+    let finalMountedTapeName: String?
+    let finalTapeDecodeStatus: String?
+    let finalTapePulseCount: Int?
+    let finalTapeProgramCount: Int?
+    let finalTapeBlockCount: Int?
+    let finalTapeDecodeFailureReason: String?
+    let finalTapeRawPlaybackActive: Bool?
+    let finalTapeReadSignalHigh: Bool?
+    let finalCassetteSenseLineHigh: Bool?
+    let finalCassetteMotorEnabled: Bool?
+    let finalTapeHasCapturedWritePulses: Bool?
+    let finalCanExportCapturedTAP: Bool?
+    let finalTapeHasUnsavedChanges: Bool?
+    let finalCanExportSavedT64: Bool?
     let screenRAMHash: String?
     let colorRAMHash: String?
     let screenshotPath: String?
@@ -2189,9 +2753,46 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalDrivePC: String? = nil,
         finalTrack: Int? = nil,
         finalHalfTrack: Int? = nil,
+        finalReadTrack: Int? = nil,
+        finalReadHalfTrack: Int? = nil,
+        finalUsingHalfTrackFallback: Bool? = nil,
         finalByteReadyCount: UInt64? = nil,
         finalVia2PortAReadCount: UInt64? = nil,
+        finalWeakBitReadCount: UInt64? = nil,
         finalLastIECCommandSummary: String? = nil,
+        finalMediaFormat: String? = nil,
+        finalMediaPopulatedHalfTrackCount: Int? = nil,
+        finalMediaNativeLowLevelTrackCount: Int? = nil,
+        finalMediaSyntheticGCRTrackCount: Int? = nil,
+        finalMediaHasSyntheticGCR: Bool? = nil,
+        finalMediaIsNativeLowLevel: Bool? = nil,
+        finalMediaPreservesHalfTracks: Bool? = nil,
+        finalMediaPreservesRawTrackLengths: Bool? = nil,
+        finalMediaPreservesSpeedZones: Bool? = nil,
+        finalMediaPreservesVariableSpeedZones: Bool? = nil,
+        finalMediaPreservesSectorErrorInfo: Bool? = nil,
+        finalMediaSectorErrorCodeCount: Int? = nil,
+        finalMediaNonDefaultSectorErrorCodeCount: Int? = nil,
+        finalMediaWeakBitRangeCount: Int? = nil,
+        finalMediaWeakBitTotalBitCount: Int? = nil,
+        finalMediaVariableSpeedZoneByteCount: Int? = nil,
+        finalMediaSupportsWraparoundReads: Bool? = nil,
+        finalMediaMaxTrackSize: Int? = nil,
+        finalMediaUnsupportedFeatures: [String]? = nil,
+        finalMountedTapeName: String? = nil,
+        finalTapeDecodeStatus: String? = nil,
+        finalTapePulseCount: Int? = nil,
+        finalTapeProgramCount: Int? = nil,
+        finalTapeBlockCount: Int? = nil,
+        finalTapeDecodeFailureReason: String? = nil,
+        finalTapeRawPlaybackActive: Bool? = nil,
+        finalTapeReadSignalHigh: Bool? = nil,
+        finalCassetteSenseLineHigh: Bool? = nil,
+        finalCassetteMotorEnabled: Bool? = nil,
+        finalTapeHasCapturedWritePulses: Bool? = nil,
+        finalCanExportCapturedTAP: Bool? = nil,
+        finalTapeHasUnsavedChanges: Bool? = nil,
+        finalCanExportSavedT64: Bool? = nil,
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
         screenshotPath: String? = nil
@@ -2208,9 +2809,46 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalDrivePC = finalDrivePC
         self.finalTrack = finalTrack
         self.finalHalfTrack = finalHalfTrack
+        self.finalReadTrack = finalReadTrack
+        self.finalReadHalfTrack = finalReadHalfTrack
+        self.finalUsingHalfTrackFallback = finalUsingHalfTrackFallback
         self.finalByteReadyCount = finalByteReadyCount
         self.finalVia2PortAReadCount = finalVia2PortAReadCount
+        self.finalWeakBitReadCount = finalWeakBitReadCount
         self.finalLastIECCommandSummary = finalLastIECCommandSummary
+        self.finalMediaFormat = finalMediaFormat
+        self.finalMediaPopulatedHalfTrackCount = finalMediaPopulatedHalfTrackCount
+        self.finalMediaNativeLowLevelTrackCount = finalMediaNativeLowLevelTrackCount
+        self.finalMediaSyntheticGCRTrackCount = finalMediaSyntheticGCRTrackCount
+        self.finalMediaHasSyntheticGCR = finalMediaHasSyntheticGCR
+        self.finalMediaIsNativeLowLevel = finalMediaIsNativeLowLevel
+        self.finalMediaPreservesHalfTracks = finalMediaPreservesHalfTracks
+        self.finalMediaPreservesRawTrackLengths = finalMediaPreservesRawTrackLengths
+        self.finalMediaPreservesSpeedZones = finalMediaPreservesSpeedZones
+        self.finalMediaPreservesVariableSpeedZones = finalMediaPreservesVariableSpeedZones
+        self.finalMediaPreservesSectorErrorInfo = finalMediaPreservesSectorErrorInfo
+        self.finalMediaSectorErrorCodeCount = finalMediaSectorErrorCodeCount
+        self.finalMediaNonDefaultSectorErrorCodeCount = finalMediaNonDefaultSectorErrorCodeCount
+        self.finalMediaWeakBitRangeCount = finalMediaWeakBitRangeCount
+        self.finalMediaWeakBitTotalBitCount = finalMediaWeakBitTotalBitCount
+        self.finalMediaVariableSpeedZoneByteCount = finalMediaVariableSpeedZoneByteCount
+        self.finalMediaSupportsWraparoundReads = finalMediaSupportsWraparoundReads
+        self.finalMediaMaxTrackSize = finalMediaMaxTrackSize
+        self.finalMediaUnsupportedFeatures = finalMediaUnsupportedFeatures
+        self.finalMountedTapeName = finalMountedTapeName
+        self.finalTapeDecodeStatus = finalTapeDecodeStatus
+        self.finalTapePulseCount = finalTapePulseCount
+        self.finalTapeProgramCount = finalTapeProgramCount
+        self.finalTapeBlockCount = finalTapeBlockCount
+        self.finalTapeDecodeFailureReason = finalTapeDecodeFailureReason
+        self.finalTapeRawPlaybackActive = finalTapeRawPlaybackActive
+        self.finalTapeReadSignalHigh = finalTapeReadSignalHigh
+        self.finalCassetteSenseLineHigh = finalCassetteSenseLineHigh
+        self.finalCassetteMotorEnabled = finalCassetteMotorEnabled
+        self.finalTapeHasCapturedWritePulses = finalTapeHasCapturedWritePulses
+        self.finalCanExportCapturedTAP = finalCanExportCapturedTAP
+        self.finalTapeHasUnsavedChanges = finalTapeHasUnsavedChanges
+        self.finalCanExportSavedT64 = finalCanExportSavedT64
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
         self.screenshotPath = screenshotPath

@@ -52,6 +52,10 @@ public final class C64 {
         public let tapeHasUnsavedChanges: Bool
         public let canExportSavedT64: Bool
         public let tapeDecodeStatus: TapeUnit.TAPDecodeStatus
+        public let tapeRawPlaybackActive: Bool
+        public let tapeReadSignalHigh: Bool
+        public let cassetteSenseLineHigh: Bool
+        public let cassetteMotorEnabled: Bool
         public let mediaCapabilities: DiskImage.Capabilities?
         public let drive: Drive1541.StatusSnapshot
         public let lastFailureReason: String?
@@ -363,6 +367,10 @@ public final class C64 {
             tapeHasUnsavedChanges: tapeUnit.hasUnsavedChanges,
             canExportSavedT64: tapeUnit.exportedT64Image != nil,
             tapeDecodeStatus: tapeUnit.tapDecodeStatus,
+            tapeRawPlaybackActive: tapeUnit.rawPlaybackActive,
+            tapeReadSignalHigh: tapeUnit.readSignalHigh,
+            cassetteSenseLineHigh: memory.cassetteSenseLineHigh,
+            cassetteMotorEnabled: memory.cassetteMotorEnabled,
             mediaCapabilities: mountedDiskImage?.capabilities,
             drive: drive1541.statusSnapshot,
             lastFailureReason: lastFailureReason ?? drive1541.lastFailureReason
@@ -430,13 +438,27 @@ public final class C64 {
         clearFailureStatus()
     }
 
+    @discardableResult
+    public func startTapePlayback() -> Bool {
+        guard tapeUnit.format == .tap, tapeUnit.startRawPlayback() else { return false }
+        memory.cassetteSenseLineHigh = false
+        cia1.setFlagLine(high: true)
+        clearFailureStatus()
+        return true
+    }
+
+    public func stopTapePlayback() {
+        tapeUnit.stopRawPlayback()
+        memory.cassetteSenseLineHigh = true
+        cia1.setFlagLine(high: true)
+        clearFailureStatus()
+    }
+
     func prepareMountedTape() {
         memory.cassetteSenseLineHigh = true
         cia1.setFlagLine(high: true)
 
-        if tapeUnit.format == .tap && tapeUnit.startRawPlayback() {
-            memory.cassetteSenseLineHigh = false
-        }
+        _ = startTapePlayback()
     }
 
     private var effectiveMountedTapeName: String? {
@@ -718,6 +740,9 @@ public final class C64 {
 
         tapeUnit.tickRawPlayback()
         cia1.setFlagLine(high: tapeUnit.readSignalHigh)
+        if !tapeUnit.rawPlaybackActive {
+            memory.cassetteSenseLineHigh = true
+        }
     }
 
     private func clearFailureStatus() {

@@ -20,12 +20,16 @@ public final class Drive1541 {
         public let ledOn: Bool
         public let halfTrack: Int
         public let track: Int
+        public let readHalfTrack: Int?
+        public let readTrack: Int?
+        public let usingHalfTrackFallback: Bool
         public let headBitPosition: Int
         public let syncDetected: Bool
         public let byteReady: Bool
         public let byteReadyCount: UInt64
         public let via2PortAReadCount: UInt64
         public let syncDetectionCount: UInt64
+        public let weakBitReadCount: UInt64
         public let writeProtected: Bool
         public let hasDisk: Bool
         public let mediaChanged: Bool
@@ -126,6 +130,9 @@ public final class Drive1541 {
 
     /// Total SYNC detections since power-on/reset.
     public private(set) var syncDetectionCount: UInt64 = 0
+
+    /// Total unstable weak/random media bits consumed by the GCR head.
+    public private(set) var weakBitReadCount: UInt64 = 0
 
     /// Decoded IEC command bytes observed by the 1541 ROM ATN handler.
     /// This is a compact acceptance-test/debug aid; the ROM remains authoritative.
@@ -303,19 +310,24 @@ public final class Drive1541 {
     }
 
     public var statusSnapshot: StatusSnapshot {
-        StatusSnapshot(
+        let readTrackResolution = resolvedReadTrack(forHalfTrack: halfTrack)
+        return StatusSnapshot(
             enabled: enabled,
             model: driveModel,
             motorOn: motorOn,
             ledOn: ledOn,
             halfTrack: halfTrack,
             track: track,
+            readHalfTrack: readTrackResolution?.halfTrack,
+            readTrack: readTrackResolution.map { ($0.halfTrack / 2) + 1 },
+            usingHalfTrackFallback: readTrackResolution.map { $0.halfTrack != halfTrack } ?? false,
             headBitPosition: headBitPosition,
             syncDetected: syncDetected,
             byteReady: byteReadyLevel || byteReadyEdge,
             byteReadyCount: byteReadyCount,
             via2PortAReadCount: via2PortAReadCount,
             syncDetectionCount: syncDetectionCount,
+            weakBitReadCount: weakBitReadCount,
             writeProtected: disk.writeProtected,
             hasDisk: disk.hasDisk,
             mediaChanged: mediaChanged,
@@ -454,6 +466,7 @@ public final class Drive1541 {
         via2PortAReadCount = 0
         via2PortAReadBytes.removeAll(keepingCapacity: true)
         syncDetectionCount = 0
+        weakBitReadCount = 0
         decodedIECCommandBytes.removeAll(keepingCapacity: true)
         decodedIECDataBytes.removeAll(keepingCapacity: true)
         noProgressCycleCount = 0
@@ -693,13 +706,14 @@ public final class Drive1541 {
     ///   Zone 3: 26 cycles/byte, Zone 2: 28, Zone 1: 30, Zone 0: 32
     func tickGCRHead() {
         let viaSpeedZone = Int((via2.portB >> 5) & 0x03)
-        let trackInfo = disk.trackInfo(halfTrack: halfTrack)
 
-        guard let trackData = trackInfo?.bytes ?? disk.tracks[halfTrack], !trackData.isEmpty else {
+        guard let resolvedTrack = resolvedReadTrack(forHalfTrack: halfTrack) else {
             via2.portAInput = 0x00
             syncDetected = false
             return
         }
+        let trackInfo = resolvedTrack.info
+        let trackData = resolvedTrack.bytes
 
         let totalBits = trackInfo?.bitLength ?? trackData.count * 8
 
@@ -778,6 +792,26 @@ public final class Drive1541 {
         }
     }
 
+    private func resolvedReadTrack(
+        forHalfTrack halfTrack: Int
+    ) -> (halfTrack: Int, bytes: [UInt8], info: DiskImage.Track?)? {
+        func track(at index: Int) -> (halfTrack: Int, bytes: [UInt8], info: DiskImage.Track?)? {
+            guard index >= 0 && index < GCRDisk.maxHalfTracks else { return nil }
+            let info = disk.trackInfo(halfTrack: index)
+            guard let bytes = info?.bytes ?? disk.tracks[index], !bytes.isEmpty else { return nil }
+            return (index, bytes, info)
+        }
+
+        if let exact = track(at: halfTrack) {
+            return exact
+        }
+
+        // Real heads can still pick up adjacent full-track flux when parked on
+        // an unwritten halftrack. Preserve explicit halftrack data when present.
+        guard halfTrack % 2 == 1 else { return nil }
+        return track(at: halfTrack - 1) ?? track(at: halfTrack + 1)
+    }
+
     private func readTrackBit(
         trackData: [UInt8],
         trackInfo: DiskImage.Track?,
@@ -787,6 +821,7 @@ public final class Drive1541 {
     ) -> UInt16 {
         if let trackInfo,
            trackInfo.weakBitRanges.contains(where: { $0.contains(bitPosition) }) {
+            weakBitReadCount += 1
             return nextWeakBit()
         }
         return UInt16((trackData[byteIndex] >> bitIndex) & 1)

@@ -78,9 +78,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - High-level 1541 command-channel `N:`/`NEW:` formatting now clears writable D64 images, rebuilds the BAM and empty directory, preserves D64 geometry/error-table shape, and reports status-channel results
 - High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, `C:NEW=OLD` PRG copies, `V:`/`VALIDATE` BAM rebuilds, `B-R`/`U1` block reads into data channels, and status-channel readback
 - The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
+- Empty odd halftracks now fall back to adjacent full-track flux, while explicit native G64 halftrack data still overrides the fallback
+- Drive status, local milestone expectations, and JSONL results now distinguish requested head halftrack from the effective low-level halftrack being read
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
-- Compatibility milestone runs can now append categorized JSONL result logs with final PC/drive/screen state, write compact aggregate JSON summaries, and resume by skipping milestones that already passed in a previous log
+- Media capability checks now include weak/random-bit range counts, total weak-bit coverage, and per-byte variable-speed-zone coverage for protected G64 validation
+- Compatibility milestone runs can now append categorized JSONL result logs with final PC/drive/media/tape/screen state, write compact aggregate JSON summaries, and resume by skipping milestones that already passed in a previous log
 - Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
@@ -149,6 +152,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
 - TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
 - TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
+- Raw TAP playback now has machine-level play/stop control, app-visible tape signal status, and end-of-tape cassette sense release so TAP playback no longer leaves the machine thinking PLAY is held after the pulse stream ends
 - Stock CBM TAP files now decode short/medium/long pulse pairs into parity-checked bytes for raw PRG-like blocks, header+data block pairs, multiple named programs per TAP, duplicate header/data layouts, clean duplicate data fallback after a parity-damaged first copy, cross-copy byte voting when duplicate data copies have different parity-damaged bytes, and conservative rejection of conflicting duplicate data copies
 - TAP mounts now expose decode diagnostics through emulator status, distinguishing raw pulse-only playback, decoded standard CBM programs, malformed/parity-damaged blocks, incomplete header/data pairs, and conflicting duplicate data copies
 - The 6510 cassette write and motor-control outputs now emit effective line-change callbacks, and the datasette captures motor-gated write pulse timing with C64 status/API visibility, TAP v0/v1 export, and macOS File/toolbar export actions for future SAVE/write support
@@ -161,6 +165,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Extended 40/41/42-track D64 images now keep their extra-track geometry for fast sector reads and synthetic true-drive GCR tracks
 - D64 images with appended sector-error tables now preserve per-sector error metadata for future bad-sector/GCR error simulation
 - D64 sector-error tables now corrupt synthetic GCR sync/header/data/checksum/disk-ID fields for common read-error codes
+- Media capabilities and compatibility manifests now expose total and non-default D64 sector-error code counts so bad-sector fixtures can be validated without opening binary snapshots
 - D64 directory and PRG sector-chain walkers now stop on cyclic chains instead of hanging on malformed media
 - KERNAL VERIFY traps now compare disk data against RAM and report verify mismatches without modifying memory
 - KERNAL SAVE traps now write PRG files with proper load-address headers to mounted D64 images in fast/convenience mode and still report an error when no writable disk path is available
@@ -258,7 +263,7 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swif
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESUME=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The summary records pass/fail/skip counts, category counts, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
+To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include final PC, 1541 drive state, media capability counts including weak-bit and variable-speed-zone counters, tape state, screen hashes, and optional screenshot paths. The aggregate summary records pass/fail/skip counts, category counts including tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
 
 ```sh
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
@@ -302,7 +307,10 @@ Example milestone manifest:
         { "type": "wait", "cycles": 100000 },
         { "type": "joystickUp", "control": "fire" },
         { "type": "keyDown", "key": "space" },
-        { "type": "keyUp", "key": "space" }
+        { "type": "keyUp", "key": "space" },
+        { "type": "stopTape" },
+        { "type": "wait", "cycles": 120000 },
+        { "type": "startTape" }
       ],
       "maxCycles": 24000000,
       "pcStart": 49152,
@@ -315,7 +323,11 @@ Example milestone manifest:
         "minGCRReads": 64,
         "minByteReady": 512,
         "minSyncDetections": 1,
-        "hasNativeLowLevelImage": true
+        "minWeakBitReads": 1,
+        "hasNativeLowLevelImage": true,
+        "readTrack": 18,
+        "readHalfTrack": 34,
+        "usingHalfTrackFallback": false
       },
       "mediaStatus": {
         "populatedHalfTrackCount": 84,
@@ -328,9 +340,33 @@ Example milestone manifest:
         "preservesSpeedZones": true,
         "preservesVariableSpeedZones": true,
         "preservesSectorErrorInfo": false,
+        "sectorErrorCodeCount": 0,
+        "nonDefaultSectorErrorCodeCount": 0,
+        "weakBitRangeCount": 0,
+        "weakBitTotalBitCount": 0,
+        "variableSpeedZoneByteCount": 0,
         "supportsWraparoundReads": true,
         "maxTrackSize": 7928,
         "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
+      },
+      "weakBitRanges": [
+        { "halfTrack": 34, "startBit": 128, "endBit": 255 }
+      ],
+      "tapeStatus": {
+        "mountedTapeNameContains": "loader.tap",
+        "decodeStatus": "rawPulsesOnly",
+        "pulseCount": 1024,
+        "programCount": null,
+        "blockCount": null,
+        "decodeFailureReason": null,
+        "rawPlaybackActive": true,
+        "readSignalHigh": false,
+        "cassetteSenseLineHigh": false,
+        "cassetteMotorEnabled": true,
+        "hasCapturedWritePulses": false,
+        "canExportCapturedTAP": false,
+        "hasUnsavedChanges": false,
+        "canExportSavedT64": false
       },
       "ramSignatures": [
         { "address": 2049, "bytes": "01 08" }
@@ -369,7 +405,7 @@ Example milestone manifest:
 }
 ```
 
-When `actions` is omitted, the runner converts `commands` into cycle-0 typed text actions. Explicit actions can type text, wait a fixed number of C64 cycles, press/release joystick controls (`up`, `down`, `left`, `right`, `fire`), and press/release named C64 keys such as `space`, `return`, `runStop`, `restore`, cursor keys, and function keys. `screenTextContains` checks decoded screen RAM text without requiring a brittle full-screen hash. `cpuRegisters` checks PC/A/X/Y/SP/P state with an optional `pMask`; `sidRegisters`, `vicRegisters`, `cia1Registers`, and `cia2Registers` check effective chip register state with optional masks for audio/video/timer milestones. This lets local milestones cover title screens, loader prompts, CPU handoff points, and basic SID/VIC/CIA initialization without custom test code.
+When `actions` is omitted, the runner converts `commands` into cycle-0 typed text actions. Explicit actions can type text, wait a fixed number of C64 cycles, press/release joystick controls (`up`, `down`, `left`, `right`, `fire`), press/release named C64 keys such as `space`, `return`, `runStop`, `restore`, cursor keys, and function keys, and control TAP playback with `startTape`/`stopTape`. `screenTextContains` checks decoded screen RAM text without requiring a brittle full-screen hash. `cpuRegisters` checks PC/A/X/Y/SP/P state with an optional `pMask`; `sidRegisters`, `vicRegisters`, `cia1Registers`, and `cia2Registers` check effective chip register state with optional masks for audio/video/timer milestones. `tapeStatus` checks mounted tape names, TAP decode diagnostics (`none`, `rawPulsesOnly`, `decodedPrograms`, `standardCBMNoPrograms`), raw TAP playback, cassette read/sense/motor lines, and tape export/dirty state. This lets local milestones cover title screens, loader prompts, CPU handoff points, basic SID/VIC/CIA initialization, and datasette signal milestones without custom test code.
 
 ### Keyboard
 

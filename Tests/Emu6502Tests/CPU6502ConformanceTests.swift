@@ -1,5 +1,5 @@
 import XCTest
-@testable import Emu6502
+import Emu6502
 
 private final class ConformanceRAMBus: Bus {
     var memory = [UInt8](repeating: 0, count: 0x10000)

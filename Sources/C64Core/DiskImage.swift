@@ -24,6 +24,11 @@ public struct DiskImage {
         public let preservesSpeedZones: Bool
         public let preservesVariableSpeedZones: Bool
         public let preservesSectorErrorInfo: Bool
+        public let sectorErrorCodeCount: Int
+        public let nonDefaultSectorErrorCodeCount: Int
+        public let weakBitRangeCount: Int
+        public let weakBitTotalBitCount: Int
+        public let variableSpeedZoneByteCount: Int
         public let supportsWraparoundReads: Bool
         public let maxTrackSize: Int?
         public let unsupportedFeatures: [String]
@@ -103,6 +108,21 @@ public struct DiskImage {
             track.speedZoneMap?.isEmpty == false
         }
         let hasWeakBitRanges = populated.contains { !$0.weakBitRanges.isEmpty }
+        let weakBitRangeCount = populated.reduce(0) { partial, track in
+            partial + track.weakBitRanges.count
+        }
+        let weakBitTotalBitCount = populated.reduce(0) { partial, track in
+            partial + track.weakBitRanges.reduce(0) { rangePartial, range in
+                rangePartial + (range.endBit - range.startBit + 1)
+            }
+        }
+        let variableSpeedZoneByteCount = populated.reduce(0) { partial, track in
+            partial + (track.speedZoneMap?.count ?? 0)
+        }
+        let sectorErrorCodeCount = sectorErrorCodes?.count ?? 0
+        let nonDefaultSectorErrorCodeCount = sectorErrorCodes?.filter { code in
+            code != 0x00 && code != 0x01
+        }.count ?? 0
         var unsupported: [String] = []
 
         switch format {
@@ -126,6 +146,11 @@ public struct DiskImage {
             preservesSpeedZones: format == .g64 && nativeCount > 0,
             preservesVariableSpeedZones: format == .g64 && hasVariableSpeedZones,
             preservesSectorErrorInfo: sectorErrorCodes != nil,
+            sectorErrorCodeCount: sectorErrorCodeCount,
+            nonDefaultSectorErrorCodeCount: nonDefaultSectorErrorCodeCount,
+            weakBitRangeCount: weakBitRangeCount,
+            weakBitTotalBitCount: weakBitTotalBitCount,
+            variableSpeedZoneByteCount: variableSpeedZoneByteCount,
             supportsWraparoundReads: true,
             maxTrackSize: maxTrackSize,
             unsupportedFeatures: unsupported

@@ -19,7 +19,10 @@ final class CompatibilityManifestTests: XCTestCase {
                 { "type": "waitCycles", "cycles": 100000 },
                 { "type": "joystickUp", "button": "fire" },
                 { "type": "keyDown", "key": "RUN/STOP" },
-                { "type": "keyUp", "key": "RUN/STOP" }
+                { "type": "keyUp", "key": "RUN/STOP" },
+                { "type": "stopTape" },
+                { "type": "wait", "cycles": 64 },
+                { "type": "startTape" }
               ],
               "maxCycles": 24000000,
               "pcStart": 49152,
@@ -34,8 +37,12 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minGCRReads": 128,
                 "minByteReady": 1024,
                 "minSyncDetections": 4,
+                "minWeakBitReads": 16,
                 "track": 18,
                 "halfTrack": 34,
+                "readTrack": 18,
+                "readHalfTrack": 34,
+                "usingHalfTrackFallback": false,
                 "motorOn": true,
                 "ledOn": true,
                 "writeProtected": false,
@@ -56,9 +63,34 @@ final class CompatibilityManifestTests: XCTestCase {
                 "preservesSpeedZones": true,
                 "preservesVariableSpeedZones": true,
                 "preservesSectorErrorInfo": true,
+                "sectorErrorCodeCount": 683,
+                "nonDefaultSectorErrorCodeCount": 2,
+                "weakBitRangeCount": 3,
+                "weakBitTotalBitCount": 512,
+                "variableSpeedZoneByteCount": 7928,
                 "supportsWraparoundReads": true,
                 "maxTrackSize": 7928,
                 "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
+              },
+              "weakBitRanges": [
+                { "halfTrack": 34, "startBit": 128, "endBit": 255 },
+                { "halfTrack": 35, "startBit": 64, "endBit": 95 }
+              ],
+              "tapeStatus": {
+                "mountedTapeNameContains": "demo.tap",
+                "decodeStatus": "decodedPrograms",
+                "pulseCount": 512,
+                "programCount": 2,
+                "blockCount": 4,
+                "decodeFailureReason": "incompleteHeaderData",
+                "rawPlaybackActive": true,
+                "readSignalHigh": false,
+                "cassetteSenseLineHigh": false,
+                "cassetteMotorEnabled": true,
+                "hasCapturedWritePulses": false,
+                "canExportCapturedTAP": false,
+                "hasUnsavedChanges": true,
+                "canExportSavedT64": true
               },
               "ramSignatures": [
                 { "address": 2049, "bytes": "01 08 a9 00" },
@@ -117,7 +149,10 @@ final class CompatibilityManifestTests: XCTestCase {
             .waitCycles(100_000),
             .joystickUp(.fire),
             .keyDown(.runStop),
-            .keyUp(.runStop)
+            .keyUp(.runStop),
+            .stopTape,
+            .waitCycles(64),
+            .startTape
         ])
         XCTAssertEqual(milestone.command, "LOAD\"*\",8,1")
         XCTAssertEqual(milestone.pcRange, 0xC000...0xCFFF)
@@ -126,8 +161,12 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minGCRReads, 128)
         XCTAssertEqual(milestone.driveStatus?.minByteReady, 1024)
         XCTAssertEqual(milestone.driveStatus?.minSyncDetections, 4)
+        XCTAssertEqual(milestone.driveStatus?.minWeakBitReads, 16)
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
+        XCTAssertEqual(milestone.driveStatus?.readTrack, 18)
+        XCTAssertEqual(milestone.driveStatus?.readHalfTrack, 34)
+        XCTAssertEqual(milestone.driveStatus?.usingHalfTrackFallback, false)
         XCTAssertEqual(milestone.driveStatus?.motorOn, true)
         XCTAssertEqual(milestone.driveStatus?.ledOn, true)
         XCTAssertEqual(milestone.driveStatus?.writeProtected, false)
@@ -146,9 +185,34 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.preservesSpeedZones, true)
         XCTAssertEqual(milestone.mediaStatus?.preservesVariableSpeedZones, true)
         XCTAssertEqual(milestone.mediaStatus?.preservesSectorErrorInfo, true)
+        XCTAssertEqual(milestone.mediaStatus?.sectorErrorCodeCount, 683)
+        XCTAssertEqual(milestone.mediaStatus?.nonDefaultSectorErrorCodeCount, 2)
+        XCTAssertEqual(milestone.mediaStatus?.weakBitRangeCount, 3)
+        XCTAssertEqual(milestone.mediaStatus?.weakBitTotalBitCount, 512)
+        XCTAssertEqual(milestone.mediaStatus?.variableSpeedZoneByteCount, 7928)
         XCTAssertEqual(milestone.mediaStatus?.supportsWraparoundReads, true)
         XCTAssertEqual(milestone.mediaStatus?.maxTrackSize, 7928)
         XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Write-back"])
+        XCTAssertEqual(milestone.weakBitRanges, [
+            CompatibilityWeakBitRange(halfTrack: 34, startBit: 128, endBit: 255),
+            CompatibilityWeakBitRange(halfTrack: 35, startBit: 64, endBit: 95)
+        ])
+        XCTAssertEqual(milestone.tapeStatus, CompatibilityTapeStatus(
+            mountedTapeNameContains: "demo.tap",
+            decodeStatus: .decodedPrograms,
+            pulseCount: 512,
+            programCount: 2,
+            blockCount: 4,
+            decodeFailureReason: .incompleteHeaderData,
+            rawPlaybackActive: true,
+            readSignalHigh: false,
+            cassetteSenseLineHigh: false,
+            cassetteMotorEnabled: true,
+            hasCapturedWritePulses: false,
+            canExportCapturedTAP: false,
+            hasUnsavedChanges: true,
+            canExportSavedT64: true
+        ))
         XCTAssertEqual(milestone.ramSignatures[0].bytes, [0x01, 0x08, 0xA9, 0x00])
         XCTAssertEqual(milestone.ramSignatures[1].bytes, [0xA9, 0x42, 0x60])
         XCTAssertEqual(milestone.colorRAMSignatures[0].address, 0)
@@ -204,6 +268,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertNil(milestone.machineProfile)
         XCTAssertNil(milestone.driveMode)
         XCTAssertEqual(milestone.commands, ["LOAD\"$\",8"])
+        XCTAssertEqual(milestone.weakBitRanges, [])
         XCTAssertEqual(milestone.actions, [.typeText("LOAD\"$\",8")])
         XCTAssertEqual(milestone.command, "LOAD\"$\",8")
         XCTAssertNil(milestone.pcRange)

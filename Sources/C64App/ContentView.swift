@@ -572,6 +572,7 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Tape Capture", value: tapeCaptureDescription)
                 StatusRow(label: "Tape Save", value: tapeSaveDescription)
                 StatusRow(label: "Tape Decode", value: tapeDecodeDescription)
+                StatusRow(label: "Tape Signal", value: tapeSignalDescription)
                 StatusRow(label: "Capability", value: capabilityDescription)
                 StatusRow(label: "CPU", value: "$\(hex16(status.cpuPC))\(status.cpuJammed ? " JAM" : "")")
             }
@@ -582,8 +583,10 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Drive CPU", value: "$\(hex16(status.drive.cpuPC))\(status.drive.cpuJammed ? " JAM" : "")")
                 StatusRow(label: "LED / Motor", value: "\(onOff(status.drive.ledOn)) / \(onOff(status.drive.motorOn))")
                 StatusRow(label: "Track", value: "\(status.drive.track)  half \(status.drive.halfTrack)")
+                StatusRow(label: "Read Track", value: readTrackDescription)
                 StatusRow(label: "Sync", value: "\(onOff(status.drive.syncDetected))  count \(status.drive.syncDetectionCount)")
                 StatusRow(label: "Byte Ready", value: "\(onOff(status.drive.byteReady))  count \(status.drive.byteReadyCount)")
+                StatusRow(label: "Weak Bits", value: "\(status.drive.weakBitReadCount)")
                 StatusRow(label: "Port A Reads", value: "\(status.drive.via2PortAReadCount)")
                 StatusRow(label: "IEC Bytes", value: status.drive.lastIECCommandSummary)
                 StatusRow(label: "No Progress", value: "\(status.drive.noProgressCycleCount) cycles")
@@ -616,6 +619,15 @@ private struct DriveStatusPopover: View {
 
     private var highLevelMediaDescription: String {
         status.highLevelDiskFormat?.displayName ?? "none"
+    }
+
+    private var readTrackDescription: String {
+        guard let readTrack = status.drive.readTrack,
+              let readHalfTrack = status.drive.readHalfTrack else {
+            return "none"
+        }
+        let fallback = status.drive.usingHalfTrackFallback ? " fallback" : ""
+        return "\(readTrack)  half \(readHalfTrack)\(fallback)"
     }
 
     private var modifiedDescription: String {
@@ -652,6 +664,10 @@ private struct DriveStatusPopover: View {
         }
     }
 
+    private var tapeSignalDescription: String {
+        "\(status.tapeRawPlaybackActive ? "play" : "stop")  read \(line(status.tapeReadSignalHigh))  sense \(line(status.cassetteSenseLineHigh))  motor \(onOff(status.cassetteMotorEnabled))"
+    }
+
     private func tapeFailureDescription(_ reason: TapeUnit.TAPDecodeFailureReason) -> String {
         switch reason {
         case .noStandardBlocks:
@@ -672,7 +688,8 @@ private struct DriveStatusPopover: View {
             suffixes.append("variable speed")
         }
         if caps.preservesSectorErrorInfo {
-            suffixes.append("error table")
+            let nonDefault = caps.nonDefaultSectorErrorCodeCount
+            suffixes.append(nonDefault > 0 ? "error table \(nonDefault)" : "error table")
         }
         let suffix = suffixes.isEmpty ? "" : ", \(suffixes.joined(separator: ", "))"
         if caps.isNativeLowLevel {

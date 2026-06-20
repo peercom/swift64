@@ -213,6 +213,61 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 1)
     }
 
+    func testRawTAPEndOfTapeReleasesCassetteSenseAndThenIdlesFlagHigh() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x01])))
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+
+        c64.memory.write(0x0000, value: 0x20)
+        c64.memory.write(0x0001, value: 0x00)
+
+        tickCycles(c64, 8)
+
+        XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertTrue(c64.memory.cassetteSenseLineHigh)
+        XCTAssertFalse(c64.cia1.flagLineHigh)
+
+        c64.tickOneCycle()
+
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertFalse(c64.emulationStatus.tapeRawPlaybackActive)
+        XCTAssertTrue(c64.emulationStatus.cassetteMotorEnabled)
+        XCTAssertTrue(c64.emulationStatus.cassetteSenseLineHigh)
+    }
+
+    func testRawTAPPlaybackCanBeStoppedAndRestartedThroughMachineAPI() {
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountTape(makeTAP(payload: [0x02, 0x03])))
+        c64.memory.write(0x0000, value: 0x20)
+        c64.memory.write(0x0001, value: 0x00)
+        tickCycles(c64, 8)
+
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertEqual(c64.tapeUnit.cyclesUntilNextPulse, 8)
+
+        c64.stopTapePlayback()
+
+        XCTAssertFalse(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertTrue(c64.memory.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertFalse(c64.emulationStatus.tapeRawPlaybackActive)
+
+        XCTAssertTrue(c64.startTapePlayback())
+
+        XCTAssertTrue(c64.tapeUnit.rawPlaybackActive)
+        XCTAssertFalse(c64.memory.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.cia1.flagLineHigh)
+        XCTAssertEqual(c64.tapeUnit.currentPulseIndex, 0)
+        XCTAssertEqual(c64.tapeUnit.cyclesUntilNextPulse, 16)
+        XCTAssertTrue(c64.emulationStatus.tapeRawPlaybackActive)
+        XCTAssertTrue(c64.emulationStatus.cassetteMotorEnabled)
+        XCTAssertFalse(c64.emulationStatus.cassetteSenseLineHigh)
+        XCTAssertTrue(c64.emulationStatus.tapeReadSignalHigh)
+    }
+
     func testCassetteWriteLineEdgesAreCapturedWhileMotorRuns() {
         let c64 = C64()
 

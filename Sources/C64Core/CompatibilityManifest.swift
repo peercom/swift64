@@ -125,6 +125,8 @@ public enum CompatibilityAction: Decodable, Equatable {
     case joystickUp(CompatibilityJoystickControl)
     case keyDown(CompatibilityKey)
     case keyUp(CompatibilityKey)
+    case startTape
+    case stopTape
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -160,6 +162,10 @@ public enum CompatibilityAction: Decodable, Equatable {
             self = .keyDown(try container.decode(CompatibilityKey.self, forKey: .key))
         case "keyUp", "keyRelease", "releaseKey":
             self = .keyUp(try container.decode(CompatibilityKey.self, forKey: .key))
+        case "startTape", "tapeStart", "pressPlay", "playTape":
+            self = .startTape
+        case "stopTape", "tapeStop", "pressStop":
+            self = .stopTape
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -185,6 +191,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let minByteReady: Int?
     public let driveStatus: CompatibilityDriveStatus?
     public let mediaStatus: CompatibilityMediaStatus?
+    public let weakBitRanges: [CompatibilityWeakBitRange]
+    public let tapeStatus: CompatibilityTapeStatus?
     public let ramSignatures: [CompatibilityRAMSignature]
     public let colorRAMSignatures: [CompatibilityRAMSignature]
     public let cpuRegisters: CompatibilityCPURegisters?
@@ -213,6 +221,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case minByteReady
         case driveStatus
         case mediaStatus
+        case weakBitRanges
+        case tapeStatus
         case ramSignatures
         case colorRAMSignatures
         case cpuRegisters
@@ -240,6 +250,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
+        weakBitRanges: [CompatibilityWeakBitRange] = [],
+        tapeStatus: CompatibilityTapeStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
         cpuRegisters: CompatibilityCPURegisters? = nil,
@@ -266,6 +278,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
+        self.weakBitRanges = weakBitRanges
+        self.tapeStatus = tapeStatus
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
         self.cpuRegisters = cpuRegisters
@@ -294,6 +308,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
+        weakBitRanges: [CompatibilityWeakBitRange] = [],
+        tapeStatus: CompatibilityTapeStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
         cpuRegisters: CompatibilityCPURegisters? = nil,
@@ -320,6 +336,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
+        self.weakBitRanges = weakBitRanges
+        self.tapeStatus = tapeStatus
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
         self.cpuRegisters = cpuRegisters
@@ -376,6 +394,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady = try container.decodeIfPresent(Int.self, forKey: .minByteReady)
         driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
         mediaStatus = try container.decodeIfPresent(CompatibilityMediaStatus.self, forKey: .mediaStatus)
+        weakBitRanges = try container.decodeIfPresent([CompatibilityWeakBitRange].self, forKey: .weakBitRanges) ?? []
+        tapeStatus = try container.decodeIfPresent(CompatibilityTapeStatus.self, forKey: .tapeStatus)
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
         colorRAMSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .colorRAMSignatures) ?? []
         cpuRegisters = try container.decodeIfPresent(CompatibilityCPURegisters.self, forKey: .cpuRegisters)
@@ -451,6 +471,49 @@ public struct CompatibilityPCRange: Decodable, Equatable {
     }
 }
 
+public struct CompatibilityWeakBitRange: Decodable, Equatable {
+    public let halfTrack: Int
+    public let startBit: Int
+    public let endBit: Int
+
+    public var diskRange: DiskImage.Track.WeakBitRange {
+        DiskImage.Track.WeakBitRange(startBit: startBit, endBit: endBit)
+    }
+
+    public init(halfTrack: Int, startBit: Int, endBit: Int) {
+        self.halfTrack = halfTrack
+        self.startBit = startBit
+        self.endBit = endBit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case halfTrack
+        case startBit
+        case endBit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        halfTrack = try container.decode(Int.self, forKey: .halfTrack)
+        startBit = try container.decode(Int.self, forKey: .startBit)
+        endBit = try container.decode(Int.self, forKey: .endBit)
+        guard halfTrack >= 0 && halfTrack < GCRDisk.maxHalfTracks else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .halfTrack,
+                in: container,
+                debugDescription: "Weak-bit halftrack must be in the GCR halftrack table"
+            )
+        }
+        guard startBit >= 0 && startBit <= endBit else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .startBit,
+                in: container,
+                debugDescription: "Weak-bit range must be ordered and non-negative"
+            )
+        }
+    }
+}
+
 public struct CompatibilityMediaStatus: Decodable, Equatable {
     public let populatedHalfTrackCount: Int?
     public let nativeLowLevelTrackCount: Int?
@@ -462,6 +525,11 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
     public let preservesSpeedZones: Bool?
     public let preservesVariableSpeedZones: Bool?
     public let preservesSectorErrorInfo: Bool?
+    public let sectorErrorCodeCount: Int?
+    public let nonDefaultSectorErrorCodeCount: Int?
+    public let weakBitRangeCount: Int?
+    public let weakBitTotalBitCount: Int?
+    public let variableSpeedZoneByteCount: Int?
     public let supportsWraparoundReads: Bool?
     public let maxTrackSize: Int?
     public let unsupportedFeaturesContains: [String]
@@ -477,6 +545,11 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         case preservesSpeedZones
         case preservesVariableSpeedZones
         case preservesSectorErrorInfo
+        case sectorErrorCodeCount
+        case nonDefaultSectorErrorCodeCount
+        case weakBitRangeCount
+        case weakBitTotalBitCount
+        case variableSpeedZoneByteCount
         case supportsWraparoundReads
         case maxTrackSize
         case unsupportedFeaturesContains
@@ -493,6 +566,11 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         preservesSpeedZones: Bool? = nil,
         preservesVariableSpeedZones: Bool? = nil,
         preservesSectorErrorInfo: Bool? = nil,
+        sectorErrorCodeCount: Int? = nil,
+        nonDefaultSectorErrorCodeCount: Int? = nil,
+        weakBitRangeCount: Int? = nil,
+        weakBitTotalBitCount: Int? = nil,
+        variableSpeedZoneByteCount: Int? = nil,
         supportsWraparoundReads: Bool? = nil,
         maxTrackSize: Int? = nil,
         unsupportedFeaturesContains: [String] = []
@@ -507,6 +585,11 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         self.preservesSpeedZones = preservesSpeedZones
         self.preservesVariableSpeedZones = preservesVariableSpeedZones
         self.preservesSectorErrorInfo = preservesSectorErrorInfo
+        self.sectorErrorCodeCount = sectorErrorCodeCount
+        self.nonDefaultSectorErrorCodeCount = nonDefaultSectorErrorCodeCount
+        self.weakBitRangeCount = weakBitRangeCount
+        self.weakBitTotalBitCount = weakBitTotalBitCount
+        self.variableSpeedZoneByteCount = variableSpeedZoneByteCount
         self.supportsWraparoundReads = supportsWraparoundReads
         self.maxTrackSize = maxTrackSize
         self.unsupportedFeaturesContains = unsupportedFeaturesContains
@@ -524,18 +607,90 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         preservesSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesSpeedZones)
         preservesVariableSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesVariableSpeedZones)
         preservesSectorErrorInfo = try container.decodeIfPresent(Bool.self, forKey: .preservesSectorErrorInfo)
+        sectorErrorCodeCount = try container.decodeIfPresent(Int.self, forKey: .sectorErrorCodeCount)
+        nonDefaultSectorErrorCodeCount = try container.decodeIfPresent(Int.self, forKey: .nonDefaultSectorErrorCodeCount)
+        weakBitRangeCount = try container.decodeIfPresent(Int.self, forKey: .weakBitRangeCount)
+        weakBitTotalBitCount = try container.decodeIfPresent(Int.self, forKey: .weakBitTotalBitCount)
+        variableSpeedZoneByteCount = try container.decodeIfPresent(Int.self, forKey: .variableSpeedZoneByteCount)
         supportsWraparoundReads = try container.decodeIfPresent(Bool.self, forKey: .supportsWraparoundReads)
         maxTrackSize = try container.decodeIfPresent(Int.self, forKey: .maxTrackSize)
         unsupportedFeaturesContains = try container.decodeIfPresent([String].self, forKey: .unsupportedFeaturesContains) ?? []
     }
 }
 
+public struct CompatibilityTapeStatus: Decodable, Equatable {
+    public let mountedTapeNameContains: String?
+    public let decodeStatus: CompatibilityTapeDecodeStatusKind?
+    public let pulseCount: Int?
+    public let programCount: Int?
+    public let blockCount: Int?
+    public let decodeFailureReason: CompatibilityTapeDecodeFailureReason?
+    public let rawPlaybackActive: Bool?
+    public let readSignalHigh: Bool?
+    public let cassetteSenseLineHigh: Bool?
+    public let cassetteMotorEnabled: Bool?
+    public let hasCapturedWritePulses: Bool?
+    public let canExportCapturedTAP: Bool?
+    public let hasUnsavedChanges: Bool?
+    public let canExportSavedT64: Bool?
+
+    public init(
+        mountedTapeNameContains: String? = nil,
+        decodeStatus: CompatibilityTapeDecodeStatusKind? = nil,
+        pulseCount: Int? = nil,
+        programCount: Int? = nil,
+        blockCount: Int? = nil,
+        decodeFailureReason: CompatibilityTapeDecodeFailureReason? = nil,
+        rawPlaybackActive: Bool? = nil,
+        readSignalHigh: Bool? = nil,
+        cassetteSenseLineHigh: Bool? = nil,
+        cassetteMotorEnabled: Bool? = nil,
+        hasCapturedWritePulses: Bool? = nil,
+        canExportCapturedTAP: Bool? = nil,
+        hasUnsavedChanges: Bool? = nil,
+        canExportSavedT64: Bool? = nil
+    ) {
+        self.mountedTapeNameContains = mountedTapeNameContains
+        self.decodeStatus = decodeStatus
+        self.pulseCount = pulseCount
+        self.programCount = programCount
+        self.blockCount = blockCount
+        self.decodeFailureReason = decodeFailureReason
+        self.rawPlaybackActive = rawPlaybackActive
+        self.readSignalHigh = readSignalHigh
+        self.cassetteSenseLineHigh = cassetteSenseLineHigh
+        self.cassetteMotorEnabled = cassetteMotorEnabled
+        self.hasCapturedWritePulses = hasCapturedWritePulses
+        self.canExportCapturedTAP = canExportCapturedTAP
+        self.hasUnsavedChanges = hasUnsavedChanges
+        self.canExportSavedT64 = canExportSavedT64
+    }
+}
+
+public enum CompatibilityTapeDecodeStatusKind: String, Decodable, Equatable {
+    case none
+    case rawPulsesOnly
+    case decodedPrograms
+    case standardCBMNoPrograms
+}
+
+public enum CompatibilityTapeDecodeFailureReason: String, Decodable, Equatable {
+    case noStandardBlocks
+    case malformedStandardBlocks
+    case incompleteHeaderData
+    case conflictingDuplicateData
+}
+
 public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let minGCRReads: Int?
     public let minByteReady: Int?
     public let minSyncDetections: Int?
+    public let minWeakBitReads: Int?
     public let track: Int?
     public let halfTrack: Int?
+    public let readTrack: Int?
+    public let readHalfTrack: Int?
+    public let usingHalfTrackFallback: Bool?
     public let motorOn: Bool?
     public let ledOn: Bool?
     public let writeProtected: Bool?
@@ -549,8 +704,12 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         minSyncDetections: Int? = nil,
+        minWeakBitReads: Int? = nil,
         track: Int? = nil,
         halfTrack: Int? = nil,
+        readTrack: Int? = nil,
+        readHalfTrack: Int? = nil,
+        usingHalfTrackFallback: Bool? = nil,
         motorOn: Bool? = nil,
         ledOn: Bool? = nil,
         writeProtected: Bool? = nil,
@@ -563,8 +722,12 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minGCRReads = minGCRReads
         self.minByteReady = minByteReady
         self.minSyncDetections = minSyncDetections
+        self.minWeakBitReads = minWeakBitReads
         self.track = track
         self.halfTrack = halfTrack
+        self.readTrack = readTrack
+        self.readHalfTrack = readHalfTrack
+        self.usingHalfTrackFallback = usingHalfTrackFallback
         self.motorOn = motorOn
         self.ledOn = ledOn
         self.writeProtected = writeProtected

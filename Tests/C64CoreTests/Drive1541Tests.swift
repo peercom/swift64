@@ -104,7 +104,9 @@ final class Drive1541Tests: XCTestCase {
         let weakBytes = readPresentedGCRBytes(from: weakDrive, count: 4)
 
         XCTAssertEqual(fixedBytes, [0x00, 0x00, 0x00, 0x00])
+        XCTAssertEqual(fixedDrive.statusSnapshot.weakBitReadCount, 0)
         XCTAssertTrue(weakBytes.contains { $0 != 0x00 })
+        XCTAssertGreaterThan(weakDrive.statusSnapshot.weakBitReadCount, 0)
     }
 
     func testGCRHeadUsesWeakBitAnnotationsAddedAfterInsert() {
@@ -120,6 +122,41 @@ final class Drive1541Tests: XCTestCase {
 
         let bytes = readPresentedGCRBytes(from: drive, count: 4)
         XCTAssertTrue(bytes.contains { $0 != 0x00 })
+        XCTAssertGreaterThan(drive.statusSnapshot.weakBitReadCount, 0)
+    }
+
+    func testEmptyOddHalfTrackReadsAdjacentFullTrackFlux() {
+        let drive = makeDriveWithTracks([
+            36: [0x00, 0xFF, 0x55, 0xAA, 0x33, 0xCC],
+        ])
+        drive.halfTrack = 37
+
+        let bytes = readPresentedGCRBytes(from: drive, count: 3)
+
+        XCTAssertFalse(bytes.isEmpty)
+        XCTAssertTrue(bytes.contains { $0 != 0x00 })
+        XCTAssertEqual(drive.statusSnapshot.halfTrack, 37)
+        XCTAssertEqual(drive.statusSnapshot.readHalfTrack, 36)
+        XCTAssertEqual(drive.statusSnapshot.readTrack, 19)
+        XCTAssertTrue(drive.statusSnapshot.usingHalfTrackFallback)
+    }
+
+    func testExplicitHalfTrackDataOverridesAdjacentFallback() {
+        let drive = makeDriveWithTracks([
+            36: [UInt8](repeating: 0x00, count: 16),
+            37: [0xFF, 0xFF, 0x00, 0x55, 0xAA],
+        ])
+        drive.halfTrack = 37
+
+        for _ in 0..<80 {
+            drive.tickGCRHead()
+            if drive.statusSnapshot.syncDetected { break }
+        }
+
+        XCTAssertTrue(drive.statusSnapshot.syncDetected)
+        XCTAssertEqual(drive.statusSnapshot.readHalfTrack, 37)
+        XCTAssertEqual(drive.statusSnapshot.readTrack, 19)
+        XCTAssertFalse(drive.statusSnapshot.usingHalfTrackFallback)
     }
 
     func testInsertDiskRefreshesVIA2WriteProtectAndSyncInputs() {
@@ -975,6 +1012,23 @@ final class Drive1541Tests: XCTestCase {
 
         XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: bytes.count)))
         drive.halfTrack = 36
+        drive.motorOn = true
+        return drive
+    }
+
+    private func makeDriveWithTracks(_ trackBytes: [Int: [UInt8]]) -> Drive1541 {
+        let drive = Drive1541()
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        for (halfTrack, bytes) in trackBytes {
+            tracks[halfTrack] = DiskImage.Track(
+                halfTrack: halfTrack,
+                bytes: bytes,
+                speedZone: 2,
+                isNativeLowLevel: true
+            )
+        }
+
+        XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: trackBytes.values.map(\.count).max())))
         drive.motorOn = true
         return drive
     }

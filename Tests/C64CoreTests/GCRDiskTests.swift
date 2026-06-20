@@ -96,6 +96,9 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.image?.capabilities.preservesRawTrackLengths == true)
         XCTAssertTrue(disk.image?.capabilities.preservesSpeedZones == true)
         XCTAssertFalse(disk.image?.capabilities.preservesVariableSpeedZones == true)
+        XCTAssertEqual(disk.image?.capabilities.variableSpeedZoneByteCount, 0)
+        XCTAssertEqual(disk.image?.capabilities.weakBitRangeCount, 0)
+        XCTAssertEqual(disk.image?.capabilities.weakBitTotalBitCount, 0)
         XCTAssertTrue(disk.image?.capabilities.supportsWraparoundReads == true)
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
     }
@@ -182,6 +185,7 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(info?.speedZone, 0)
         XCTAssertEqual(disk.image?.capabilities.preservesSpeedZones, true)
         XCTAssertEqual(disk.image?.capabilities.preservesVariableSpeedZones, true)
+        XCTAssertEqual(disk.image?.capabilities.variableSpeedZoneByteCount, 8)
     }
 
     func testDiskImageWithWeakBitRangesDoesNotReportWeakBitsUnsupported() {
@@ -197,6 +201,8 @@ final class GCRDiskTests: XCTestCase {
 
         XCTAssertFalse(image.capabilities.unsupportedFeatures.contains("Weak/random bits"))
         XCTAssertTrue(image.capabilities.unsupportedFeatures.contains("Flux-level timing"))
+        XCTAssertEqual(image.capabilities.weakBitRangeCount, 1)
+        XCTAssertEqual(image.capabilities.weakBitTotalBitCount, 16)
     }
 
     func testSetWeakBitRangesAnnotatesLoadedTrackAndUpdatesCapabilities() {
@@ -222,6 +228,8 @@ final class GCRDiskTests: XCTestCase {
             DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
         ])
         XCTAssertFalse(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
+        XCTAssertEqual(disk.image?.capabilities.weakBitRangeCount, 1)
+        XCTAssertEqual(disk.image?.capabilities.weakBitTotalBitCount, 16)
     }
 
     func testSetWeakBitRangesRejectsMissingOrOutOfRangeTracks() {
@@ -284,6 +292,8 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.sectorErrorCodes?.first, 0x05)
         XCTAssertEqual(disk.image?.sectorErrorCodes?[358], 0x0B)
         XCTAssertTrue(disk.image?.capabilities.preservesSectorErrorInfo == true)
+        XCTAssertEqual(disk.image?.capabilities.sectorErrorCodeCount, 683)
+        XCTAssertEqual(disk.image?.capabilities.nonDefaultSectorErrorCodeCount, 2)
     }
 
     func testD64SectorDataChecksumErrorCorruptsSyntheticGCRDataBlock() throws {
@@ -380,6 +390,8 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.sectorErrorCodes?.count, 784)
         XCTAssertEqual(disk.image?.sectorErrorCodes?[783], 0x0F)
         XCTAssertTrue(disk.image?.capabilities.preservesSectorErrorInfo == true)
+        XCTAssertEqual(disk.image?.capabilities.sectorErrorCodeCount, 784)
+        XCTAssertEqual(disk.image?.capabilities.nonDefaultSectorErrorCodeCount, 1)
     }
 
     func testExtendedD64LoadCreatesSyntheticLowLevelTracks() {
