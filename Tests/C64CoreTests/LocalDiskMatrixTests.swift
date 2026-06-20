@@ -11,6 +11,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneResumeEnv = "SWIFT64_LOCAL_MILESTONE_RESUME"
     private let milestoneResumeStrictManifestEnv = "SWIFT64_LOCAL_MILESTONE_RESUME_STRICT_MANIFEST"
     private let milestoneScreenshotDirEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR"
+    private let milestoneScreenshotFailuresEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_FAILURES"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
 
@@ -273,6 +274,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             )
             : []
         let screenshotDirectoryURL = milestoneScreenshotDirectoryURL()
+        let screenshotFailuresEnabled = shouldWriteFailedMilestoneScreenshots
         let summaryURL = milestoneSummaryURL()
         var summaries: [String] = []
         var runSummary = MilestoneRunSummary()
@@ -283,6 +285,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             screenshotDirectoryURL: screenshotDirectoryURL,
             resumeEnabled: shouldResumeMilestoneResults,
             strictManifestResumeEnabled: shouldResumeOnlyMatchingManifest,
+            screenshotFailuresEnabled: screenshotFailuresEnabled,
             milestoneLimit: localMilestoneLimit,
             failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures
         )
@@ -310,6 +313,13 @@ final class LocalDiskMatrixTests: XCTestCase {
             var screenshotURL: URL?
             if result.passed {
                 screenshotURL = try writeMilestoneScreenshot(for: milestone, c64: c64, to: screenshotDirectoryURL)
+            } else if screenshotFailuresEnabled {
+                screenshotURL = try writeMilestoneScreenshot(
+                    for: milestone,
+                    c64: c64,
+                    to: screenshotDirectoryURL,
+                    suffix: "failed"
+                )
             }
             let record = result.record(for: milestone, c64: c64, manifestHash: manifestHash, screenshotURL: screenshotURL)
             runSummary.record(record)
@@ -856,6 +866,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             screenshotDirectoryURL: URL(fileURLWithPath: "/tmp/screens", isDirectory: true),
             resumeEnabled: true,
             strictManifestResumeEnabled: true,
+            screenshotFailuresEnabled: true,
             milestoneLimit: 5,
             failOnUnclassified: true
         )
@@ -880,6 +891,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.screenshotDirectoryPath, "/tmp/screens")
         XCTAssertEqual(decoded.resumeEnabled, true)
         XCTAssertEqual(decoded.strictManifestResumeEnabled, true)
+        XCTAssertEqual(decoded.screenshotFailuresEnabled, true)
         XCTAssertEqual(decoded.milestoneLimit, 5)
         XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
@@ -1502,6 +1514,39 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(data[headerData.count + 2], 0x32)
     }
 
+    func testPPMScreenshotWriterAddsFailureSuffix() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.g64"),
+            mediaType: .g64,
+            machineProfile: .palC64,
+            driveMode: .compat1541,
+            commands: [#"LOAD"*",8,1"#],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: "giana title"
+        )
+
+        let screenshotURL = try XCTUnwrap(
+            writeMilestoneScreenshot(for: milestone, c64: C64(), to: directory, suffix: "failed")
+        )
+
+        XCTAssertEqual(screenshotURL.lastPathComponent, "giana_title-failed.ppm")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: screenshotURL.path))
+    }
+
     private func requireEnvironment(_ name: String) throws {
         guard ProcessInfo.processInfo.environment[name] == "1" else {
             throw XCTSkip("Set \(name)=1 to run local disk image matrix tests")
@@ -1554,6 +1599,10 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private var shouldResumeOnlyMatchingManifest: Bool {
         ProcessInfo.processInfo.environment[milestoneResumeStrictManifestEnv] == "1"
+    }
+
+    private var shouldWriteFailedMilestoneScreenshots: Bool {
+        ProcessInfo.processInfo.environment[milestoneScreenshotFailuresEnv] == "1"
     }
 
     private var shouldFailOnUnclassifiedMilestoneFailures: Bool {
@@ -2477,7 +2526,12 @@ final class LocalDiskMatrixTests: XCTestCase {
         return keys
     }
 
-    private func writeMilestoneScreenshot(for milestone: LocalMilestone, c64: C64, to directory: URL?) throws -> URL? {
+    private func writeMilestoneScreenshot(
+        for milestone: LocalMilestone,
+        c64: C64,
+        to directory: URL?,
+        suffix: String? = nil
+    ) throws -> URL? {
         guard let directory,
               let screenshotName = milestone.screenshotName,
               !screenshotName.isEmpty else {
@@ -2485,7 +2539,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let filename = sanitizedScreenshotName(screenshotName) + ".ppm"
+        let baseName = sanitizedScreenshotName(screenshotName)
+        let suffixPart = suffix.map { "-" + sanitizedScreenshotName($0) } ?? ""
+        let filename = baseName + suffixPart + ".ppm"
         let url = directory.appendingPathComponent(filename)
         try ppmData(
             framebuffer: c64.vic.framebuffer,
@@ -3259,6 +3315,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var screenshotDirectoryPath: String?
     var resumeEnabled: Bool = false
     var strictManifestResumeEnabled: Bool = false
+    var screenshotFailuresEnabled: Bool = false
     var milestoneLimit: Int?
     var failOnUnclassified: Bool = false
     var total: Int = 0
@@ -3283,6 +3340,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         screenshotDirectoryURL: URL?,
         resumeEnabled: Bool,
         strictManifestResumeEnabled: Bool,
+        screenshotFailuresEnabled: Bool,
         milestoneLimit: Int?,
         failOnUnclassified: Bool
     ) {
@@ -3293,6 +3351,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         screenshotDirectoryPath = screenshotDirectoryURL?.path
         self.resumeEnabled = resumeEnabled
         self.strictManifestResumeEnabled = strictManifestResumeEnabled
+        self.screenshotFailuresEnabled = screenshotFailuresEnabled
         self.milestoneLimit = milestoneLimit
         self.failOnUnclassified = failOnUnclassified
     }
