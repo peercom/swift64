@@ -687,7 +687,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(passed.contains(milestone.resultKey))
         XCTAssertTrue(log.contains("\"passed\":false"))
         XCTAssertTrue(log.contains("\"passed\":true"))
+        XCTAssertTrue(log.contains(#""mediaType":"g64""#))
         XCTAssertTrue(log.contains(#""commandSummary":"LOAD\"*\",8,1 | RUN""#))
+        XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
+        XCTAssertTrue(log.contains(#""maxCycles":1"#))
         XCTAssertTrue(log.contains(#""category":"#))
         XCTAssertTrue(log.contains(#""finalPC":"#))
         XCTAssertTrue(log.contains(#""screenRAMHash":"#))
@@ -698,6 +701,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
+        XCTAssertEqual(records.last?.mediaType, "g64")
+        XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
+        XCTAssertEqual(records.last?.maxCycles, 1)
         XCTAssertEqual(records.last?.finalReadTrack, 18)
         XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
         XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
@@ -736,6 +742,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         try Data((legacyLine + "\n").utf8).write(to: legacyURL)
 
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
+        XCTAssertNil(legacyRecord.mediaType)
+        XCTAssertNil(legacyRecord.actionSummary)
+        XCTAssertNil(legacyRecord.maxCycles)
         XCTAssertNil(legacyRecord.finalReadHalfTrack)
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
@@ -2392,9 +2401,12 @@ private struct MatrixRunResult {
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
             file: milestone.url.lastPathComponent,
+            mediaType: milestone.mediaType.rawValue,
             commandSummary: milestone.commandSummary,
+            actionSummary: milestone.scheduledActions.map(\.summary),
             machineProfile: milestone.machineProfile.rawValue,
             driveMode: milestone.driveMode.rawValue,
+            maxCycles: milestone.maxCycles,
             passed: passed,
             elapsedCycles: elapsedCycles,
             reason: reason,
@@ -2765,9 +2777,12 @@ private struct LocalMilestone {
 
 private struct MilestoneResultRecord: Codable, Equatable {
     let file: String
+    let mediaType: String?
     let commandSummary: String
+    let actionSummary: [String]?
     let machineProfile: String
     let driveMode: String
+    let maxCycles: Int?
     let passed: Bool
     let elapsedCycles: UInt64
     let reason: String
@@ -2824,9 +2839,12 @@ private struct MilestoneResultRecord: Codable, Equatable {
 
     init(
         file: String,
+        mediaType: String? = nil,
         commandSummary: String,
+        actionSummary: [String]? = nil,
         machineProfile: String,
         driveMode: String,
+        maxCycles: Int? = nil,
         passed: Bool,
         elapsedCycles: UInt64,
         reason: String,
@@ -2882,9 +2900,12 @@ private struct MilestoneResultRecord: Codable, Equatable {
         screenshotPath: String? = nil
     ) {
         self.file = file
+        self.mediaType = mediaType
         self.commandSummary = commandSummary
+        self.actionSummary = actionSummary
         self.machineProfile = machineProfile
         self.driveMode = driveMode
+        self.maxCycles = maxCycles
         self.passed = passed
         self.elapsedCycles = elapsedCycles
         self.reason = reason
