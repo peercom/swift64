@@ -1286,6 +1286,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CPU JAM/KIL").category, .cpu)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "C64 PC reached $FFFF").category, .cpu)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "PC $0801 not in $C000-$C0FF").category, .pc)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "cartridge ROML bank mismatch").category, .cartridge)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "app.fullscreen toolbar visible").category, .app)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "GCR reads 0 < 64").category, .drive)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media capabilities unavailable").category, .media)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minWeakBitReads 0 < 1").category, .protectedMedia)
@@ -2508,6 +2510,8 @@ private enum MilestoneResultCategory: String {
     case drive
     case media
     case protectedMedia
+    case cartridge
+    case app
     case pc
     case ram
     case screen
@@ -2526,6 +2530,25 @@ private enum MilestoneResultCategory: String {
         }
         if lower.contains("pc $") {
             return .pc
+        }
+        if lower.contains("cartridge")
+            || lower.contains("crt ")
+            || lower.contains(".crt")
+            || lower.contains("roml")
+            || lower.contains("romh")
+            || lower.contains("ultimax")
+            || lower.contains("exrom")
+            || lower.contains("game line") {
+            return .cartridge
+        }
+        if lower.contains("app.")
+            || lower.contains("rom setup")
+            || lower.contains("roms need setup")
+            || lower.contains("fullscreen")
+            || lower.contains("full screen")
+            || lower.contains("settings")
+            || lower.contains("release bundle") {
+            return .app
         }
         if lower.contains("weakbit")
             || lower.contains("weak bit")
