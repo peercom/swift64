@@ -5,6 +5,37 @@ import Emu6502
 final class Drive1541Tests: XCTestCase {
     private static let slowTrueDriveEnv = "SWIFT64_SLOW_TRUE_DRIVE_TESTS"
 
+    func testDriveRAMMirrorsThroughAddressRangeBeforeVIAWindows() {
+        let memory = DriveMemoryMap()
+
+        memory.write(0x0012, value: 0xA5)
+        XCTAssertEqual(memory.read(0x0812), 0xA5)
+        XCTAssertEqual(memory.read(0x1012), 0xA5)
+
+        memory.write(0x17FF, value: 0x5A)
+
+        XCTAssertEqual(memory.read(0x07FF), 0x5A)
+        XCTAssertEqual(memory.read(0x0FFF), 0x5A)
+    }
+
+    func testDriveRAMMirrorDoesNotCoverVIAWindows() {
+        let memory = DriveMemoryMap()
+        let via1 = VIA6522()
+        let via2 = VIA6522()
+        memory.via1 = via1
+        memory.via2 = via2
+
+        memory.write(0x1802, value: 0xFF)
+        memory.write(0x1800, value: 0x12)
+        memory.write(0x1C02, value: 0xFF)
+        memory.write(0x1C00, value: 0x34)
+
+        XCTAssertEqual(memory.read(0x1800), 0x12)
+        XCTAssertEqual(memory.read(0x1C00), 0x34)
+        XCTAssertNotEqual(memory.ram[0x0000], 0x12)
+        XCTAssertNotEqual(memory.ram[0x0400], 0x34)
+    }
+
     func testFireByteReadyPulsesSOAndClearsOnPortARead() {
         let drive = Drive1541()
 
@@ -101,6 +132,42 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(portB & 0x10, 0x00, "Write-protected disks should hold VIA2 PB4 low")
         XCTAssertEqual(portB & 0x80, 0x80, "No active sync should leave VIA2 PB7 high")
         XCTAssertTrue(drive.statusSnapshot.writeProtected)
+    }
+
+    func testInsertDiskMarksMediaChangedWithGenerationCounter() {
+        let drive = Drive1541()
+
+        XCTAssertFalse(drive.statusSnapshot.mediaChanged)
+        XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 0)
+
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        XCTAssertTrue(drive.statusSnapshot.mediaChanged)
+        XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 1)
+    }
+
+    func testMediaChangeCanBeAcknowledgedAndEjectAdvancesCounter() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        drive.acknowledgeMediaChange()
+        XCTAssertFalse(drive.statusSnapshot.mediaChanged)
+        XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 1)
+
+        drive.ejectDisk()
+
+        XCTAssertFalse(drive.statusSnapshot.hasDisk)
+        XCTAssertTrue(drive.statusSnapshot.mediaChanged)
+        XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 2)
+    }
+
+    func testFailedDiskInsertDoesNotChangeMediaGeneration() {
+        let drive = Drive1541()
+
+        XCTAssertFalse(drive.insertDisk(Data([0x00, 0x01, 0x02]), isG64: true))
+
+        XCTAssertFalse(drive.statusSnapshot.mediaChanged)
+        XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 0)
     }
 
     func testInsertDiskClearsStaleGCRReadPipelineState() {
@@ -744,6 +811,22 @@ final class Drive1541Tests: XCTestCase {
         let c64 = C64()
         c64.trueDriveEmulationMode = .compat1541
         XCTAssertTrue(c64.mountDisk(makeNativeOnlyG64(), fileName: "native-only.g64"))
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
+
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+
+        XCTAssertFalse(c64.shouldUseKernalTrapAtCurrentInstruction())
+    }
+
+    func testNativeOnlyG64MountClearsPreviousHighLevelDiskTrapState() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        XCTAssertTrue(c64.diskDrive.isMounted)
+
+        XCTAssertTrue(c64.mountDisk(makeNativeOnlyG64(), fileName: "native-only.g64"))
+
         XCTAssertFalse(c64.diskDrive.isMounted)
         XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
 

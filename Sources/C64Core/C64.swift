@@ -297,6 +297,7 @@ public final class C64 {
     /// Load 1541 drive ROM (16KB).
     public func loadDriveROM(_ data: Data) {
         drive1541.loadROM(data)
+        configureDriveForCurrentMode()
     }
 
     /// Load 1541 drive ROM after validating the expected 16KB size.
@@ -386,6 +387,12 @@ public final class C64 {
 
         // Also load into the 1541's GCR disk for true drive emulation.
         lowLevelResult = drive1541.insertDisk(data, isG64: isG64)
+
+        if highLevelResult && !lowLevelResult {
+            drive1541.ejectDisk()
+        } else if !highLevelResult && lowLevelResult {
+            diskDrive.unmount()
+        }
 
         if highLevelResult || lowLevelResult {
             mountedDiskName = fileName
@@ -559,6 +566,14 @@ public final class C64 {
     // MARK: - Power on / Reset
 
     public func powerOn() {
+        vic.reset()
+        sid.reset()
+        cia1.reset()
+        cia2.reset()
+        restoreKeyDown = false
+        pendingTypedText.removeAll(keepingCapacity: true)
+        driveClockAccumulator = 0
+
         // Initialize RAM with typical power-on pattern
         for i in stride(from: 0, to: 0x10000, by: 128) {
             for j in 0..<64 {

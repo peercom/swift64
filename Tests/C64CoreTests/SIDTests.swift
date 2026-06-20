@@ -53,6 +53,34 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.readRegister(0x1A), 0xA5)
     }
 
+    func testDebugRegisterValueReportsEffectiveSIDWriteState() {
+        let sid = SID()
+
+        sid.writeRegister(0x00, value: 0x34)
+        sid.writeRegister(0x01, value: 0x12)
+        sid.writeRegister(0x02, value: 0x78)
+        sid.writeRegister(0x03, value: 0x5F)
+        sid.writeRegister(0x04, value: 0x21)
+        sid.writeRegister(0x05, value: 0xAD)
+        sid.writeRegister(0x06, value: 0xF6)
+        sid.writeRegister(0x15, value: 0x07)
+        sid.writeRegister(0x16, value: 0xAB)
+        sid.writeRegister(0x17, value: 0xF5)
+        sid.writeRegister(0x18, value: 0x8F)
+
+        XCTAssertEqual(sid.debugRegisterValue(0x00), 0x34)
+        XCTAssertEqual(sid.debugRegisterValue(0x01), 0x12)
+        XCTAssertEqual(sid.debugRegisterValue(0x02), 0x78)
+        XCTAssertEqual(sid.debugRegisterValue(0x03), 0x0F)
+        XCTAssertEqual(sid.debugRegisterValue(0x04), 0x21)
+        XCTAssertEqual(sid.debugRegisterValue(0x05), 0xAD)
+        XCTAssertEqual(sid.debugRegisterValue(0x06), 0xF6)
+        XCTAssertEqual(sid.debugRegisterValue(0x15), 0x07)
+        XCTAssertEqual(sid.debugRegisterValue(0x16), 0xAB)
+        XCTAssertEqual(sid.debugRegisterValue(0x17), 0xF5)
+        XCTAssertEqual(sid.debugRegisterValue(0xD418), 0x8F)
+    }
+
     func testDirectWriteOnlySIDReadsReturnLocalDataBusLatch() {
         let sid = SID()
 

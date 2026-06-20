@@ -101,9 +101,6 @@ final class LocalDiskMatrixTests: XCTestCase {
                 XCTAssertTrue(c64.runFrame())
             }
 
-            for command in milestone.commands {
-                c64.typeText(command + "\r")
-            }
             let result = runUntilMilestone(c64, milestone: milestone)
             let summary = result.summary(name: milestone.url.lastPathComponent, command: milestone.commandSummary, c64: c64)
             summaries.append(summary)
@@ -418,7 +415,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             pcRanges: [0xC000...0xC0FF],
             minGCRReads: 1,
             minByteReady: 1,
-            driveStatus: CompatibilityDriveStatus(track: 18, hasDisk: true),
+            driveStatus: CompatibilityDriveStatus(track: 17, hasDisk: true),
             mediaStatus: CompatibilityMediaStatus(isNativeLowLevel: true),
             ramSignatures: [CompatibilityRAMSignature(address: 0x0801, bytes: [0x01, 0x08])],
             colorRAMSignatures: [CompatibilityRAMSignature(address: 0, bytes: [0x01, 0x02])],
@@ -622,6 +619,383 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(result.reason.contains("color RAM $0000"))
     }
 
+    func testNamedMilestoneCanMatchScreenText() {
+        let c64 = C64()
+        writeScreenText("READY.", into: c64, row: 4, column: 2)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenTextContains: ["ready."],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresScreenText() {
+        let c64 = C64()
+        writeScreenText("READY.", into: c64, row: 4, column: 2)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenTextContains: ["press fire"],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .screen)
+        XCTAssertTrue(result.reason.contains("screen text missing press fire"))
+    }
+
+    func testNamedMilestoneCanMatchSIDRegisters() {
+        let c64 = C64()
+        c64.sid.writeRegister(0x04, value: 0x21)
+        c64.sid.writeRegister(0x18, value: 0x8F)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            sidRegisters: [
+                CompatibilitySIDRegisterExpectation(register: 0x04, value: 0x21),
+                CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x0F, mask: 0x0F)
+            ],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresSIDRegisters() {
+        let c64 = C64()
+        c64.sid.writeRegister(0x18, value: 0x0F)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            sidRegisters: [CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x10, mask: 0x1F)],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .audio)
+        XCTAssertTrue(result.reason.contains("SID $D418"))
+    }
+
+    func testNamedMilestoneCanMatchVICRegisters() {
+        let c64 = C64()
+        c64.vic.writeRegister(0x11, value: 0x3B)
+        c64.vic.writeRegister(0x16, value: 0x18)
+        c64.vic.writeRegister(0x20, value: 0x06)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRegisters: [
+                CompatibilityVICRegisterExpectation(register: 0xD011, value: 0x3B),
+                CompatibilityVICRegisterExpectation(register: 0xD016, value: 0x18, mask: 0x1F),
+                CompatibilityVICRegisterExpectation(register: 0xD020, value: 0x06, mask: 0x0F)
+            ],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresVICRegisters() {
+        let c64 = C64()
+        c64.vic.writeRegister(0x20, value: 0x06)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRegisters: [CompatibilityVICRegisterExpectation(register: 0xD020, value: 0x02, mask: 0x0F)],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .video)
+        XCTAssertTrue(result.reason.contains("VIC $D020"))
+    }
+
+    func testNamedMilestoneCanMatchCIARegisters() {
+        let c64 = C64()
+        c64.cia1.writeRegister(0x04, value: 0x34)
+        c64.cia1.writeRegister(0x05, value: 0x12)
+        c64.cia1.writeRegister(0x0E, value: 0x41)
+        c64.cia2.writeRegister(0x02, value: 0x3F)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            cia1Registers: [
+                CompatibilityCIARegisterExpectation(register: 0xDC04, value: 0x33),
+                CompatibilityCIARegisterExpectation(register: 0xDC05, value: 0x12),
+                CompatibilityCIARegisterExpectation(register: 0xDC0E, value: 0x01, mask: 0x01)
+            ],
+            cia2Registers: [CompatibilityCIARegisterExpectation(register: 0xDD02, value: 0x3F)],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresCIARegisters() {
+        let c64 = C64()
+        c64.cia1.writeRegister(0x0E, value: 0x41)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            cia1Registers: [CompatibilityCIARegisterExpectation(register: 0xDC0E, value: 0x00, mask: 0x01)],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .cia)
+        XCTAssertTrue(result.reason.contains("CIA1 $DC0E"))
+    }
+
+    func testNamedMilestoneCanMatchCPURegisters() {
+        let c64 = C64()
+        c64.cpu.pc = 0xC000
+        c64.cpu.a = 0x01
+        c64.cpu.x = 0x02
+        c64.cpu.y = 0x03
+        c64.cpu.sp = 0xFA
+        c64.cpu.p = 0xB4
+
+        let mismatches = cpuRegisterMismatches(
+            CompatibilityCPURegisters(
+                pc: 0xC000,
+                a: 0x01,
+                x: 0x02,
+                y: 0x03,
+                sp: 0xFA,
+                p: 0x24,
+                pMask: 0x6F
+            ),
+            c64: c64
+        )
+
+        XCTAssertEqual(mismatches, [])
+    }
+
+    func testNamedMilestoneRequiresCPURegisters() {
+        let c64 = C64()
+        c64.cpu.pc = 0x0801
+        c64.cpu.a = 0x00
+        c64.cpu.x = 0x02
+        c64.cpu.y = 0x03
+        c64.cpu.sp = 0xFA
+        c64.cpu.p = 0x24
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 0,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            cpuRegisters: CompatibilityCPURegisters(pc: 0xC000, a: 0x01, x: 0x02, y: 0x03, sp: 0xFA, p: 0x24),
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .cpu)
+        XCTAssertTrue(result.reason.contains("CPU.PC $0801 != $C000"))
+        XCTAssertTrue(result.reason.contains("CPU.A $00 != $01"))
+    }
+
+    func testMilestoneActionSchedulerAppliesJoystickEventsAtWaitedCycles() {
+        let c64 = C64()
+        let scheduler = MilestoneActionScheduler(actions: [
+            .waitCycles(3),
+            .joystickDown(.fire),
+            .waitCycles(2),
+            .joystickUp(.fire)
+        ])
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 0)
+        XCTAssertEqual(c64.joystick.port1 & 0x10, 0x10)
+        XCTAssertEqual(c64.joystick.port2 & 0x10, 0x10)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 3)
+        XCTAssertEqual(c64.joystick.port1 & 0x10, 0)
+        XCTAssertEqual(c64.joystick.port2 & 0x10, 0)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 4)
+        XCTAssertEqual(c64.joystick.port1 & 0x10, 0)
+        XCTAssertEqual(c64.joystick.port2 & 0x10, 0)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 5)
+        XCTAssertEqual(c64.joystick.port1 & 0x10, 0x10)
+        XCTAssertEqual(c64.joystick.port2 & 0x10, 0x10)
+    }
+
+    func testMilestoneActionSchedulerAppliesKeyboardEventsAtWaitedCycles() {
+        let c64 = C64()
+        let scheduler = MilestoneActionScheduler(actions: [
+            .waitCycles(2),
+            .keyDown(.space),
+            .waitCycles(2),
+            .keyUp(.space),
+            .keyDown(.cursorLeft),
+            .keyUp(.cursorLeft)
+        ])
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 0)
+        XCTAssertEqual(c64.cia1.keyboardMatrix[7] & 0x10, 0x10)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 2)
+        XCTAssertEqual(c64.cia1.keyboardMatrix[7] & 0x10, 0)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 4)
+        XCTAssertEqual(c64.cia1.keyboardMatrix[7] & 0x10, 0x10)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 5)
+        XCTAssertEqual(c64.cia1.keyboardMatrix[0] & 0x04, 0x04)
+        XCTAssertEqual(c64.cia1.keyboardMatrix[1] & 0x80, 0x80)
+    }
+
+    func testMilestoneActionSchedulerAppliesRestoreKeyEvents() {
+        let c64 = C64()
+        let scheduler = MilestoneActionScheduler(actions: [
+            .keyDown(.restore),
+            .waitCycles(1),
+            .keyUp(.restore)
+        ])
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 0)
+        XCTAssertTrue(c64.restoreKeyDown)
+
+        scheduler.applyDueActions(to: c64, elapsedCycles: 1)
+        XCTAssertFalse(c64.restoreKeyDown)
+    }
+
     func testMilestoneResultCategoriesAreStable() {
         XCTAssertEqual(MatrixRunResult(passed: true, elapsedCycles: 1, reason: "named milestone reached").category, .pass)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CPU JAM/KIL").category, .cpu)
@@ -632,6 +1006,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "RAM $0801 00 != 01").category, .ram)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "color RAM $0000 00 != 01").category, .screen)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "screen hash abc != def").category, .screen)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "VIC $D020 06 != 02 mask 0F").category, .video)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID $D418 0F != 10 mask FF").category, .audio)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CIA1 $DC0E 01 != 00 mask 01").category, .cia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CPU.A $00 != $01").category, .cpu)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "named milestone timeout").category, .timeout)
     }
 
@@ -792,8 +1170,10 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private func runUntilMilestone(_ c64: C64, milestone: LocalMilestone) -> MatrixRunResult {
         let baseline = c64.drive1541.statusSnapshot
+        let actionScheduler = MilestoneActionScheduler(actions: milestone.scheduledActions)
 
-        for _ in 0..<milestone.maxCycles {
+        for elapsedCycles in 0..<milestone.maxCycles {
+            actionScheduler.applyDueActions(to: c64, elapsedCycles: elapsedCycles)
             c64.tickOneCycle()
 
             if let reason = c64.emulationStatus.lastFailureReason {
@@ -838,12 +1218,32 @@ final class LocalDiskMatrixTests: XCTestCase {
                 let expected = signature.bytes.map { $0 & 0x0F }
                 return actual == expected
             }
+            let cpuMatches = cpuRegisterMismatches(milestone.cpuRegisters, c64: c64).isEmpty
+            let sidMatches = milestone.sidRegisters.allSatisfy { expectation in
+                let actual = c64.sid.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
+                return (actual & expectation.mask) == (expectation.value & expectation.mask)
+            }
+            let vicMatches = milestone.vicRegisters.allSatisfy { expectation in
+                let actual = c64.vic.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
+                return (actual & expectation.mask) == (expectation.value & expectation.mask)
+            }
+            let cia1Matches = milestone.cia1Registers.allSatisfy { expectation in
+                let actual = c64.cia1.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
+                return (actual & expectation.mask) == (expectation.value & expectation.mask)
+            }
+            let cia2Matches = milestone.cia2Registers.allSatisfy { expectation in
+                let actual = c64.cia2.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
+                return (actual & expectation.mask) == (expectation.value & expectation.mask)
+            }
             let screenMatches = milestone.screenRAMHash.map {
                 CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
             let colorRAMHashMatches = milestone.colorRAMHash.map {
                 CompatibilityHash.colorRAM(c64.memory.colorRAM).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
+            let screenTextMatches = milestone.screenTextContains.allSatisfy {
+                screenText(c64.memory.ram).localizedCaseInsensitiveContains($0)
+            }
 
             if pcReached
                 && driveProgress
@@ -851,6 +1251,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && mediaExpectationMatches
                 && ramMatches
                 && colorRAMMatches
+                && cpuMatches
+                && sidMatches
+                && vicMatches
+                && cia1Matches
+                && cia2Matches
+                && screenTextMatches
                 && screenMatches
                 && colorRAMHashMatches {
                 return MatrixRunResult(passed: true, elapsedCycles: c64.cpu.totalCycles, reason: "named milestone reached")
@@ -893,6 +1299,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 mediaStatus: nil,
                 ramSignatures: [],
                 colorRAMSignatures: [],
+                cpuRegisters: nil,
+                sidRegisters: [],
+                vicRegisters: [],
+                cia1Registers: [],
+                cia2Registers: [],
+                screenTextContains: [],
                 screenRAMHash: nil,
                 colorRAMHash: nil,
                 screenshotName: nil
@@ -919,6 +1331,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 machineProfile: entry.machineProfile ?? .palC64,
                 driveMode: driveMode,
                 commands: entry.commands,
+                actions: entry.actions,
                 maxCycles: entry.maxCycles ?? 24_000_000,
                 pcRanges: entry.expectedPCRanges,
                 minGCRReads: nonNegativeUInt64(entry.driveStatus?.minGCRReads ?? entry.minGCRReads ?? defaultMinGCRReads(for: driveMode)),
@@ -927,6 +1340,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 mediaStatus: entry.mediaStatus,
                 ramSignatures: entry.ramSignatures,
                 colorRAMSignatures: entry.colorRAMSignatures,
+                cpuRegisters: entry.cpuRegisters,
+                sidRegisters: entry.sidRegisters,
+                vicRegisters: entry.vicRegisters,
+                cia1Registers: entry.cia1Registers,
+                cia2Registers: entry.cia2Registers,
+                screenTextContains: entry.screenTextContains,
                 screenRAMHash: entry.screenRAMHash,
                 colorRAMHash: entry.colorRAMHash,
                 screenshotName: entry.screenshotName
@@ -1012,11 +1431,20 @@ final class LocalDiskMatrixTests: XCTestCase {
             label: "color RAM",
             valueMask: 0x0F
         ))
+        unmet.append(contentsOf: cpuRegisterMismatches(milestone.cpuRegisters, c64: c64))
+        unmet.append(contentsOf: sidRegisterMismatches(milestone.sidRegisters, sid: c64.sid))
+        unmet.append(contentsOf: vicRegisterMismatches(milestone.vicRegisters, vic: c64.vic))
+        unmet.append(contentsOf: ciaRegisterMismatches(milestone.cia1Registers, cia: c64.cia1, label: "CIA1"))
+        unmet.append(contentsOf: ciaRegisterMismatches(milestone.cia2Registers, cia: c64.cia2, label: "CIA2"))
         if let expectedScreenHash = milestone.screenRAMHash {
             let actualScreenHash = CompatibilityHash.screenRAM(c64.memory.ram)
             if actualScreenHash.caseInsensitiveCompare(expectedScreenHash) != .orderedSame {
                 unmet.append("screen hash \(actualScreenHash) != \(expectedScreenHash)")
             }
+        }
+        let actualScreenText = screenText(c64.memory.ram)
+        for expectedText in milestone.screenTextContains where !actualScreenText.localizedCaseInsensitiveContains(expectedText) {
+            unmet.append("screen text missing \(expectedText)")
         }
         if let expectedColorRAMHash = milestone.colorRAMHash {
             let actualColorRAMHash = CompatibilityHash.colorRAM(c64.memory.colorRAM)
@@ -1066,6 +1494,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         if let hasDisk = expectation.hasDisk, snapshot.hasDisk != hasDisk {
             mismatches.append("drive.hasDisk \(snapshot.hasDisk) != \(hasDisk)")
+        }
+        if let mediaChanged = expectation.mediaChanged, snapshot.mediaChanged != mediaChanged {
+            mismatches.append("drive.mediaChanged \(snapshot.mediaChanged) != \(mediaChanged)")
+        }
+        if let minMediaChangeCount = expectation.minMediaChangeCount,
+           snapshot.mediaChangeCount < nonNegativeUInt64(minMediaChangeCount) {
+            mismatches.append("drive.mediaChangeCount \(snapshot.mediaChangeCount) < \(minMediaChangeCount)")
         }
         if let hasNativeLowLevelImage = expectation.hasNativeLowLevelImage,
            snapshot.hasNativeLowLevelImage != hasNativeLowLevelImage {
@@ -1166,6 +1601,82 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
     }
 
+    private func sidRegisterMismatches(
+        _ expectations: [CompatibilitySIDRegisterExpectation],
+        sid: SID
+    ) -> [String] {
+        expectations.compactMap { expectation in
+            let register = UInt16(truncatingIfNeeded: expectation.register)
+            let actual = sid.debugRegisterValue(register)
+            let maskedActual = actual & expectation.mask
+            let maskedExpected = expectation.value & expectation.mask
+            guard maskedActual != maskedExpected else { return nil }
+            return "SID $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
+        }
+    }
+
+    private func vicRegisterMismatches(
+        _ expectations: [CompatibilityVICRegisterExpectation],
+        vic: VIC
+    ) -> [String] {
+        expectations.compactMap { expectation in
+            let register = UInt16(truncatingIfNeeded: expectation.register)
+            let actual = vic.debugRegisterValue(register)
+            let maskedActual = actual & expectation.mask
+            let maskedExpected = expectation.value & expectation.mask
+            guard maskedActual != maskedExpected else { return nil }
+            return "VIC $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
+        }
+    }
+
+    private func ciaRegisterMismatches(
+        _ expectations: [CompatibilityCIARegisterExpectation],
+        cia: CIA,
+        label: String
+    ) -> [String] {
+        expectations.compactMap { expectation in
+            let register = UInt16(truncatingIfNeeded: expectation.register)
+            let actual = cia.debugRegisterValue(register)
+            let maskedActual = actual & expectation.mask
+            let maskedExpected = expectation.value & expectation.mask
+            guard maskedActual != maskedExpected else { return nil }
+            return "\(label) $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
+        }
+    }
+
+    private func cpuRegisterMismatches(
+        _ expectation: CompatibilityCPURegisters?,
+        c64: C64
+    ) -> [String] {
+        guard let expectation else { return [] }
+        var mismatches: [String] = []
+
+        if let expectedPC = expectation.pc, c64.cpu.pc != UInt16(expectedPC) {
+            mismatches.append("CPU.PC $\(hex16(c64.cpu.pc)) != $\(hex16(UInt16(expectedPC)))")
+        }
+        if let expectedA = expectation.a, c64.cpu.a != expectedA {
+            mismatches.append("CPU.A $\(hex8(c64.cpu.a)) != $\(hex8(expectedA))")
+        }
+        if let expectedX = expectation.x, c64.cpu.x != expectedX {
+            mismatches.append("CPU.X $\(hex8(c64.cpu.x)) != $\(hex8(expectedX))")
+        }
+        if let expectedY = expectation.y, c64.cpu.y != expectedY {
+            mismatches.append("CPU.Y $\(hex8(c64.cpu.y)) != $\(hex8(expectedY))")
+        }
+        if let expectedSP = expectation.sp, c64.cpu.sp != expectedSP {
+            mismatches.append("CPU.SP $\(hex8(c64.cpu.sp)) != $\(hex8(expectedSP))")
+        }
+        if let expectedP = expectation.p {
+            let maskedActual = c64.cpu.p & expectation.pMask
+            let maskedExpected = expectedP & expectation.pMask
+            if maskedActual != maskedExpected {
+                mismatches.append("CPU.P $\(hex8(maskedActual)) != $\(hex8(maskedExpected)) mask \(hex8(expectation.pMask))")
+            }
+        }
+
+        return mismatches
+    }
+
     private func formatRanges(_ ranges: [ClosedRange<UInt16>]) -> String {
         ranges.map { "$\(hex16($0.lowerBound))-$\(hex16($0.upperBound))" }
             .joined(separator: ",")
@@ -1177,8 +1688,59 @@ final class LocalDiskMatrixTests: XCTestCase {
             .joined(separator: " ")
     }
 
+    private func writeScreenText(_ text: String, into c64: C64, row: Int, column: Int) {
+        let start = 0x0400 + row * 40 + column
+        for (offset, byte) in text.utf8.enumerated() where start + offset < 0x0800 {
+            c64.memory.ram[start + offset] = asciiToScreenCode(byte)
+        }
+    }
+
+    private func screenText(_ ram: [UInt8]) -> String {
+        guard ram.count >= 0x0800 else { return "" }
+        return (0..<25)
+            .map { row in
+                let start = 0x0400 + row * 40
+                let end = start + 40
+                return ram[start..<end].map(screenCodeCharacter).joined()
+            }
+            .joined(separator: "\n")
+    }
+
+    private func screenCodeCharacter(_ byte: UInt8) -> String {
+        switch byte {
+        case 0x00: return "@"
+        case 0x01...0x1A:
+            return String(UnicodeScalar(UInt8(ascii: "A") + byte - 1))
+        case 0x1B: return "["
+        case 0x1C: return "\\"
+        case 0x1D: return "]"
+        case 0x1E: return "^"
+        case 0x20: return " "
+        case 0x21...0x3F:
+            return String(UnicodeScalar(byte))
+        case 0x40: return "-"
+        default:
+            return " "
+        }
+    }
+
+    private func asciiToScreenCode(_ byte: UInt8) -> UInt8 {
+        switch byte {
+        case UInt8(ascii: "A")...UInt8(ascii: "Z"):
+            return byte - UInt8(ascii: "A") + 1
+        case UInt8(ascii: "a")...UInt8(ascii: "z"):
+            return byte - UInt8(ascii: "a") + 1
+        default:
+            return byte
+        }
+    }
+
     private func hex16(_ value: UInt16) -> String {
         String(format: "%04X", value)
+    }
+
+    private func hex8(_ value: UInt8) -> String {
+        String(format: "%02X", value)
     }
 
     private func nonNegativeUInt64(_ value: Int) -> UInt64 {
@@ -1353,6 +1915,9 @@ private enum MilestoneResultCategory: String {
     case pc
     case ram
     case screen
+    case video
+    case audio
+    case cia
     case emulator
     case timeout
 
@@ -1375,9 +1940,19 @@ private enum MilestoneResultCategory: String {
             return .drive
         }
         if lower.contains("screen hash")
+            || lower.contains("screen text")
             || lower.contains("color ram hash")
             || lower.contains("color ram $") {
             return .screen
+        }
+        if lower.contains("vic $") {
+            return .video
+        }
+        if lower.contains("sid $") {
+            return .audio
+        }
+        if lower.contains("cia1 $") || lower.contains("cia2 $") {
+            return .cia
         }
         if lower.contains("ram $") {
             return .ram
@@ -1389,12 +1964,159 @@ private enum MilestoneResultCategory: String {
     }
 }
 
+private final class MilestoneActionScheduler {
+    private let events: [(cycle: Int, action: CompatibilityAction)]
+    private var nextEventIndex = 0
+
+    init(actions: [CompatibilityAction]) {
+        var scheduledEvents: [(cycle: Int, action: CompatibilityAction)] = []
+        var cycle = 0
+        for action in actions {
+            switch action {
+            case let .waitCycles(waitCycles):
+                cycle += max(0, waitCycles)
+            default:
+                scheduledEvents.append((cycle, action))
+            }
+        }
+        self.events = scheduledEvents
+    }
+
+    func applyDueActions(to c64: C64, elapsedCycles: Int) {
+        while nextEventIndex < events.count && events[nextEventIndex].cycle <= elapsedCycles {
+            apply(events[nextEventIndex].action, to: c64)
+            nextEventIndex += 1
+        }
+    }
+
+    private func apply(_ action: CompatibilityAction, to c64: C64) {
+        switch action {
+        case let .typeText(text):
+            c64.typeText(text.hasSuffix("\r") ? text : text + "\r")
+        case let .joystickDown(control):
+            _ = c64.joystick.handleKeyDown(keyCode: control.keyCode)
+        case let .joystickUp(control):
+            _ = c64.joystick.handleKeyUp(keyCode: control.keyCode)
+        case let .keyDown(key):
+            key.press(on: c64)
+        case let .keyUp(key):
+            key.release(on: c64)
+        case .waitCycles:
+            break
+        }
+    }
+}
+
+private extension CompatibilityJoystickControl {
+    var keyCode: UInt16 {
+        switch self {
+        case .up: return 91
+        case .down: return 84
+        case .left: return 86
+        case .right: return 88
+        case .fire: return 82
+        }
+    }
+}
+
+private extension CompatibilityAction {
+    var summary: String {
+        switch self {
+        case let .typeText(text):
+            return text
+        case let .waitCycles(cycles):
+            return "wait \(cycles) cycles"
+        case let .joystickDown(control):
+            return "joystick \(control.rawValue) down"
+        case let .joystickUp(control):
+            return "joystick \(control.rawValue) up"
+        case let .keyDown(key):
+            return "key \(key.summaryName) down"
+        case let .keyUp(key):
+            return "key \(key.summaryName) up"
+        }
+    }
+}
+
+private extension CompatibilityKey {
+    var summaryName: String {
+        switch self {
+        case .space: return "space"
+        case .returnKey: return "return"
+        case .runStop: return "runStop"
+        case .restore: return "restore"
+        case .home: return "home"
+        case .delete: return "delete"
+        case .cursorUp: return "cursorUp"
+        case .cursorDown: return "cursorDown"
+        case .cursorLeft: return "cursorLeft"
+        case .cursorRight: return "cursorRight"
+        case .f1: return "f1"
+        case .f3: return "f3"
+        case .f5: return "f5"
+        case .f7: return "f7"
+        case .leftShift: return "leftShift"
+        case .rightShift: return "rightShift"
+        case .control: return "control"
+        case .commodore: return "commodore"
+        }
+    }
+
+    var matrixMapping: (row: Int, col: Int, shifted: Bool)? {
+        switch self {
+        case .space: return (7, 4, false)
+        case .returnKey: return (0, 1, false)
+        case .runStop: return (7, 7, false)
+        case .home: return (6, 3, false)
+        case .delete: return (0, 0, false)
+        case .cursorUp: return (0, 7, true)
+        case .cursorDown: return (0, 7, false)
+        case .cursorLeft: return (0, 2, true)
+        case .cursorRight: return (0, 2, false)
+        case .f1: return (0, 4, false)
+        case .f3: return (0, 5, false)
+        case .f5: return (0, 6, false)
+        case .f7: return (0, 3, false)
+        case .leftShift: return (1, 7, false)
+        case .rightShift: return (6, 4, false)
+        case .control: return (7, 2, false)
+        case .commodore: return (7, 5, false)
+        case .restore: return nil
+        }
+    }
+
+    func press(on c64: C64) {
+        if self == .restore {
+            _ = c64.pressRestoreKey()
+            return
+        }
+        guard let mapping = matrixMapping else { return }
+        if mapping.shifted {
+            c64.keyboard.pressKey(row: 1, col: 7)
+        }
+        c64.keyboard.pressKey(row: mapping.row, col: mapping.col)
+    }
+
+    func release(on c64: C64) {
+        if self == .restore {
+            c64.releaseRestoreKey()
+            return
+        }
+        guard let mapping = matrixMapping else { return }
+        c64.keyboard.releaseKey(row: mapping.row, col: mapping.col)
+        if mapping.shifted {
+            c64.keyboard.releaseKey(row: 1, col: 7)
+        }
+    }
+}
+
 private struct LocalMilestone {
     let url: URL
     let mediaType: CompatibilityMediaType
     let machineProfile: CompatibilityMachineProfile
     let driveMode: CompatibilityDriveMode
     let commands: [String]
+    var actions: [CompatibilityAction] = []
     let maxCycles: Int
     let pcRanges: [ClosedRange<UInt16>]
     let minGCRReads: UInt64
@@ -1403,12 +2125,25 @@ private struct LocalMilestone {
     let mediaStatus: CompatibilityMediaStatus?
     let ramSignatures: [CompatibilityRAMSignature]
     let colorRAMSignatures: [CompatibilityRAMSignature]
+    var cpuRegisters: CompatibilityCPURegisters? = nil
+    var sidRegisters: [CompatibilitySIDRegisterExpectation] = []
+    var vicRegisters: [CompatibilityVICRegisterExpectation] = []
+    var cia1Registers: [CompatibilityCIARegisterExpectation] = []
+    var cia2Registers: [CompatibilityCIARegisterExpectation] = []
+    var screenTextContains: [String] = []
     let screenRAMHash: String?
     let colorRAMHash: String?
     let screenshotName: String?
 
     var commandSummary: String {
-        commands.joined(separator: " | ")
+        if !commands.isEmpty {
+            return commands.joined(separator: " | ")
+        }
+        return actions.map(\.summary).joined(separator: " | ")
+    }
+
+    var scheduledActions: [CompatibilityAction] {
+        actions.isEmpty ? commands.map { .typeText($0) } : actions
     }
 
     var resultKey: MilestoneResultKey {

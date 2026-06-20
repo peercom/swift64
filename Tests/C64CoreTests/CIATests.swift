@@ -2,6 +2,46 @@ import XCTest
 @testable import C64Core
 
 final class CIATests: XCTestCase {
+    func testDebugRegisterValueReportsCIAStateWithoutReadSideEffects() {
+        let cia = CIA(isCIA1: true)
+        cia.writeRegister(0x00, value: 0x12)
+        cia.writeRegister(0x01, value: 0x34)
+        cia.writeRegister(0x02, value: 0xFF)
+        cia.writeRegister(0x03, value: 0x0F)
+        cia.timerA = 0x1234
+        cia.timerB = 0xABCD
+        cia.writeRegister(0x08, value: 0x05)
+        cia.writeRegister(0x09, value: 0x42)
+        cia.writeRegister(0x0A, value: 0x31)
+        cia.writeRegister(0x0B, value: 0x81)
+        cia.writeRegister(0x0C, value: 0x5A)
+        cia.interruptData = 0x83
+        cia.interruptActive = true
+        cia.writeRegister(0x0E, value: 0x41)
+        cia.writeRegister(0x0F, value: 0x81)
+
+        XCTAssertEqual(cia.debugRegisterValue(0xDC00), 0x12)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC01), 0xF4)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC02), 0xFF)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC03), 0x0F)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC04), 0x34)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC05), 0x12)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC06), 0xCD)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC07), 0xAB)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC08), 0x05)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC09), 0x42)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0A), 0x31)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0B), 0x81)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0C), 0x5A)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0D), 0x83)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0E), 0x41)
+        XCTAssertEqual(cia.debugRegisterValue(0xDC0F), 0x81)
+
+        XCTAssertNil(cia.timerAHighLatched)
+        XCTAssertEqual(cia.interruptData, 0x83)
+        XCTAssertTrue(cia.interruptActive)
+    }
+
     func testTimerBCountsTimerAUnderflows() {
         let cia = CIA(isCIA1: true)
         cia.writeRegister(0x04, value: 0x01)
@@ -645,6 +685,29 @@ final class CIATests: XCTestCase {
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.readRegister(0x0D), 0x89)
         XCTAssertFalse(cia.interruptActive)
+    }
+
+    func testSerialOutputCallbackReportsEveryShiftedSPBit() {
+        let cia = CIA(isCIA1: true)
+        var outputBits: [Bool] = []
+        var clockPulses = 0
+        cia.onSerialOutputBit = { outputBits.append($0) }
+        cia.onSerialClockPulse = { clockPulses += 1 }
+
+        cia.writeRegister(0x04, value: 0x01)
+        cia.writeRegister(0x05, value: 0x00)
+        cia.writeRegister(0x0D, value: 0x88)
+        cia.writeRegister(0x0E, value: 0x41)
+        cia.writeRegister(0x0C, value: 0b1100_0011)
+
+        for _ in 0..<8 {
+            tickTimerAUnderflow(cia)
+        }
+
+        XCTAssertEqual(outputBits, [true, true, false, false, false, false, true, true])
+        XCTAssertEqual(clockPulses, 8)
+        XCTAssertEqual(cia.spLineHigh, true)
+        XCTAssertTrue(cia.interruptActive)
     }
 
     private func tickTODTenth(_ cia: CIA) {

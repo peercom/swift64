@@ -94,4 +94,38 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(c64.drive1541.driveModel, .model1541)
         XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 1_022_727.0, accuracy: 0.000001)
     }
+
+    func testDriveROMLoadPreservesSelectedCompatDriveProfile() {
+        let c64 = C64(machineProfile: .palC64With1541II)
+        c64.trueDriveEmulationMode = .compat1541
+
+        c64.loadDriveROM(makeDetectable1541CROM())
+
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541II)
+        XCTAssertFalse(c64.drive1541.is1541C)
+        XCTAssertEqual(c64.driveClockRatio, 1.0)
+    }
+
+    func testDriveROMLoadPreservesStandardTrueDriveModelAndClockRatio() {
+        let c64 = C64(machineProfile: .ntscC64CWith1541II)
+        c64.trueDriveEmulationMode = .standard1541
+
+        c64.loadDriveROM(makeDetectable1541CROM())
+
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541)
+        XCTAssertFalse(c64.drive1541.is1541C)
+        XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 1_022_727.0, accuracy: 0.000001)
+    }
+
+    private func makeDetectable1541CROM() -> Data {
+        var rom = [UInt8](repeating: 0xEA, count: C64.drive1541ROMSize)
+        rom[0] = 0xAD
+        rom[1] = 0x00
+        rom[2] = 0x18
+        rom[3] = 0x29
+        rom[4] = 0x01
+        rom[0x3FFC] = 0x00
+        rom[0x3FFD] = 0xC0
+        return Data(rom)
+    }
 }

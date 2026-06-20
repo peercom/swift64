@@ -2,6 +2,106 @@ import XCTest
 @testable import C64Core
 
 final class C64ResetTests: XCTestCase {
+    func testPowerOnInitializesRAMWithDeterministicColdStartPattern() {
+        let c64 = C64()
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+
+        c64.powerOn()
+
+        XCTAssertEqual(c64.memory.ram[0x0000], 0x00)
+        XCTAssertEqual(c64.memory.ram[0x003F], 0x00)
+        XCTAssertEqual(c64.memory.ram[0x0040], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x007F], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x0080], 0x00)
+        XCTAssertEqual(c64.memory.ram[0x00BF], 0x00)
+        XCTAssertEqual(c64.memory.ram[0x00C0], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x00FF], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0xFF80], 0x00)
+        XCTAssertEqual(c64.memory.ram[0xFFBF], 0x00)
+        XCTAssertEqual(c64.memory.ram[0xFFC0], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0xFFFF], 0xFF)
+    }
+
+    func testPowerOnColdResetsVideoAudioAndCIAState() {
+        let c64 = C64()
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+        c64.vic.writeRegister(0x20, value: 0x06)
+        c64.vic.writeRegister(0x1A, value: 0x01)
+        c64.sid.writeRegister(0x18, value: 0x0F)
+        c64.cia1.writeRegister(0x0D, value: 0x81)
+        c64.cia1.interruptData = 0x01
+        c64.cia1.interruptActive = true
+        c64.cia2.writeRegister(0x00, value: 0x00)
+        c64.cia2.writeRegister(0x02, value: 0x03)
+
+        c64.powerOn()
+
+        XCTAssertEqual(c64.vic.readRegister(0x20), 0xFE)
+        XCTAssertEqual(c64.vic.readRegister(0x1A), 0xF0)
+        XCTAssertEqual(c64.sid.debugRegisterValue(0x18), 0x00)
+        XCTAssertEqual(c64.cia1.interruptData, 0x00)
+        XCTAssertFalse(c64.cia1.interruptActive)
+        XCTAssertEqual(c64.cia2.readRegister(0x00) & 0x03, 0x03)
+    }
+
+    func testPowerOnClearsPendingTypedTextRestoreAndDriveClockResidue() {
+        let c64 = C64()
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+        c64.typeText("LOAD\"*\",8,1\r")
+        XCTAssertEqual(c64.memory.ram[0x00C6], 10)
+        XCTAssertTrue(c64.pressRestoreKey())
+        c64.driveClockAccumulator = 0.75
+
+        c64.powerOn()
+        c64.memory.ram[0x00C6] = 0
+        c64.tickOneCycle()
+
+        XCTAssertFalse(c64.restoreKeyDown)
+        XCTAssertEqual(c64.driveClockAccumulator, 0)
+        XCTAssertEqual(c64.memory.ram[0x00C6], 0)
+    }
+
+    func testResetPreservesRAMContentsLikeWarmReset() {
+        let c64 = C64()
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+        c64.powerOn()
+        c64.memory.ram[0x0801] = 0x42
+        c64.memory.ram[0xC000] = 0x99
+
+        c64.reset()
+
+        XCTAssertEqual(c64.memory.ram[0x0801], 0x42)
+        XCTAssertEqual(c64.memory.ram[0xC000], 0x99)
+    }
+
     func testResetRecoversJammedCPUAndFetchesKernalVector() {
         let c64 = C64()
         var kernal = Data(repeating: 0, count: C64.kernalROMSize)

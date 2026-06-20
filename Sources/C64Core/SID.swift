@@ -605,6 +605,46 @@ public final class SID {
         return value
     }
 
+    public func debugRegisterValue(_ reg: UInt16) -> UInt8 {
+        let normalizedReg = reg & 0x1F
+        let voice = Int(normalizedReg / 7)
+        let voiceReg = Int(normalizedReg % 7)
+
+        if normalizedReg < 21 && voice < 3 {
+            switch voiceReg {
+            case 0: return UInt8(voices[voice].frequency & 0x00FF)
+            case 1: return UInt8(voices[voice].frequency >> 8)
+            case 2: return UInt8(voices[voice].pulseWidth & 0x00FF)
+            case 3: return UInt8((voices[voice].pulseWidth >> 8) & 0x0F)
+            case 4: return voices[voice].control
+            case 5: return voices[voice].attackDecay
+            case 6: return voices[voice].sustainRelease
+            default: break
+            }
+        }
+
+        switch normalizedReg {
+        case 0x15:
+            return UInt8(filterCutoff & 0x0007)
+        case 0x16:
+            return UInt8((filterCutoff >> 3) & 0x00FF)
+        case 0x17:
+            return (filterResonance << 4) | (filterControl & 0x0F)
+        case 0x18:
+            return volumeFilter
+        case 0x19:
+            return paddleX
+        case 0x1A:
+            return paddleY
+        case 0x1B:
+            return UInt8((oscillatorOutput(2) >> 4) & 0xFF)
+        case 0x1C:
+            return voices[2].envelopeLevel
+        default:
+            return dataBusLatch
+        }
+    }
+
     public func writeRegister(_ reg: UInt16, value: UInt8) {
         latchDataBus(value)
 

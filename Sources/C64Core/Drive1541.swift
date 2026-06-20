@@ -28,6 +28,8 @@ public final class Drive1541 {
         public let syncDetectionCount: UInt64
         public let writeProtected: Bool
         public let hasDisk: Bool
+        public let mediaChanged: Bool
+        public let mediaChangeCount: UInt64
         public let hasNativeLowLevelImage: Bool
         public let cpuPC: UInt16
         public let cpuJammed: Bool
@@ -135,6 +137,8 @@ public final class Drive1541 {
     /// Diagnostic fields populated by the host C64 progress monitor.
     public var noProgressCycleCount: UInt64 = 0
     public var lastFailureReason: String?
+    public private(set) var mediaChanged: Bool = false
+    public private(set) var mediaChangeCount: UInt64 = 0
 
     var debugBytesRead: Int = 0
     var gcrTraceLog: Int = 0
@@ -257,6 +261,7 @@ public final class Drive1541 {
     public func insertDisk(_ data: Data, isG64: Bool = false) -> Bool {
         let mounted = isG64 ? disk.loadG64(data) : disk.loadD64(data)
         if mounted {
+            markMediaChanged()
             resetGCRReadPipeline()
             updateVIA2Inputs()
         }
@@ -269,6 +274,7 @@ public final class Drive1541 {
         disk.image = image
         let mounted = image.tracks.contains { $0 != nil }
         if mounted {
+            markMediaChanged()
             resetGCRReadPipeline()
             updateVIA2Inputs()
         }
@@ -276,9 +282,13 @@ public final class Drive1541 {
     }
 
     public func ejectDisk() {
+        let hadDisk = disk.hasDisk || disk.image != nil
         disk.tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.image = nil
+        if hadDisk {
+            markMediaChanged()
+        }
         resetGCRReadPipeline()
         updateVIA2Inputs()
     }
@@ -286,6 +296,10 @@ public final class Drive1541 {
     public func setWriteProtected(_ protected: Bool) {
         disk.writeProtected = protected
         updateVIA2Inputs()
+    }
+
+    public func acknowledgeMediaChange() {
+        mediaChanged = false
     }
 
     public var statusSnapshot: StatusSnapshot {
@@ -304,6 +318,8 @@ public final class Drive1541 {
             syncDetectionCount: syncDetectionCount,
             writeProtected: disk.writeProtected,
             hasDisk: disk.hasDisk,
+            mediaChanged: mediaChanged,
+            mediaChangeCount: mediaChangeCount,
             hasNativeLowLevelImage: disk.hasNativeLowLevelImage,
             cpuPC: cpu.pc,
             cpuJammed: cpu.jammed,
@@ -338,6 +354,11 @@ public final class Drive1541 {
             if iec.driveAtn { value &+= 256 }
         }
         return value
+    }
+
+    private func markMediaChanged() {
+        mediaChanged = true
+        mediaChangeCount &+= 1
     }
 
     private static func hexSummary<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
@@ -837,8 +858,8 @@ public final class DriveMemoryMap: Bus {
         case 0x0000...0x07FF:
             value = ram[addr]
 
-        case 0x0800...0x0FFF:
-            value = ram[addr & 0x07FF]  // RAM mirror
+        case 0x0800...0x17FF:
+            value = ram[addr & 0x07FF]  // RAM mirrors up to the VIA window
 
         case 0x1800...0x180F:
             value = via1?.readRegister(address & 0x0F) ?? driveDataBus
@@ -871,8 +892,8 @@ public final class DriveMemoryMap: Bus {
         case 0x0000...0x07FF:
             ram[addr] = value
 
-        case 0x0800...0x0FFF:
-            ram[addr & 0x07FF] = value  // RAM mirror
+        case 0x0800...0x17FF:
+            ram[addr & 0x07FF] = value  // RAM mirrors up to the VIA window
 
         case 0x1800...0x180F:
             let reg = address & 0x0F

@@ -928,6 +928,105 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertTrue(cpu.getFlag(Flags.negative))
     }
 
+    func testAHXAbsoluteYStoresAXAndHighBytePlusOne() {
+        let (cpu, bus) = makeCPU([
+            0xA9, 0xFF,        // LDA #$FF
+            0xA2, 0xFF,        // LDX #$FF
+            0xA0, 0x01,        // LDY #$01
+            0x9F, 0xFE, 0x20   // AHX $20FE,Y
+        ])
+
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(bus.memory[0x20FF], 0x21)
+    }
+
+    func testAHXAbsoluteYPageCrossUsesUnstableAddressHighByte() {
+        let (cpu, bus) = makeCPU([
+            0xA9, 0xFF,        // LDA #$FF
+            0xA2, 0xFF,        // LDX #$FF
+            0xA0, 0x01,        // LDY #$01
+            0x9F, 0xFF, 0x20   // AHX $20FF,Y
+        ])
+
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(bus.memory[0x2100], 0x00)
+        XCTAssertEqual(bus.memory[0x2200], 0x22)
+    }
+
+    func testAHXIndirectYPageCrossUsesUnstableAddressHighByte() {
+        let (cpu, bus) = makeCPU([
+            0xA9, 0xFF,  // LDA #$FF
+            0xA2, 0xFF,  // LDX #$FF
+            0xA0, 0x01,  // LDY #$01
+            0x93, 0x40   // AHX ($40),Y
+        ])
+        bus.memory[0x40] = 0xFF
+        bus.memory[0x41] = 0x20
+
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(bus.memory[0x2100], 0x00)
+        XCTAssertEqual(bus.memory[0x2200], 0x22)
+    }
+
+    func testTASAbsoluteYUpdatesStackPointerAndStoresMaskedValue() {
+        let (cpu, bus) = makeCPU([
+            0xA9, 0xF7,        // LDA #$F7
+            0xA2, 0x3F,        // LDX #$3F
+            0xA0, 0x01,        // LDY #$01
+            0x9B, 0xFE, 0x20   // TAS $20FE,Y
+        ])
+
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(cpu.sp, 0x37)
+        XCTAssertEqual(bus.memory[0x20FF], 0x21)
+    }
+
+    func testSHXAbsoluteYStoresXAndHighBytePlusOne() {
+        let (cpu, bus) = makeCPU([
+            0xA2, 0x7F,        // LDX #$7F
+            0xA0, 0x02,        // LDY #$02
+            0x9E, 0x01, 0x20   // SHX $2001,Y
+        ])
+
+        runInstructions(cpu, count: 3)
+
+        XCTAssertEqual(bus.memory[0x2003], 0x21)
+    }
+
+    func testSHYAbsoluteXStoresYAndHighBytePlusOne() {
+        let (cpu, bus) = makeCPU([
+            0xA0, 0x7F,        // LDY #$7F
+            0xA2, 0x02,        // LDX #$02
+            0x9C, 0x01, 0x20   // SHY $2001,X
+        ])
+
+        runInstructions(cpu, count: 3)
+
+        XCTAssertEqual(bus.memory[0x2003], 0x21)
+    }
+
+    func testLASAbsoluteYLoadsAAndXAndStackFromMemoryAndStackMask() {
+        let (cpu, bus) = makeCPU([
+            0xA2, 0xF0,        // LDX #$F0
+            0x9A,              // TXS
+            0xA0, 0x01,        // LDY #$01
+            0xBB, 0xFE, 0x20   // LAS $20FE,Y
+        ])
+        bus.memory[0x20FF] = 0x3C
+
+        runInstructions(cpu, count: 4)
+
+        XCTAssertEqual(cpu.a, 0x30)
+        XCTAssertEqual(cpu.x, 0x30)
+        XCTAssertEqual(cpu.sp, 0x30)
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
+    }
+
     func testKILJam() {
         let (cpu, _) = makeCPU([0x02])  // KIL
         runInstructions(cpu, count: 1)
@@ -1045,6 +1144,39 @@ final class CPU6502Tests: XCTestCase {
         cpu.setRDYLine(high: false)
         cpu.powerOn()
         XCTAssertTrue(cpu.rdyLine)
+    }
+
+    func testSOPinSetsOverflowForBranchPollingLoops() {
+        let (cpu, _) = makeCPU([
+            0x70, 0x02, // BVS +2
+            0xA9, 0x00, // LDA #$00 (skipped when SO has set V)
+            0xA9, 0x42  // LDA #$42
+        ])
+
+        XCTAssertFalse(cpu.getFlag(Flags.overflow))
+
+        cpu.pulseSO()
+        runInstructions(cpu, count: 2)
+
+        XCTAssertTrue(cpu.getFlag(Flags.overflow))
+        XCTAssertEqual(cpu.a, 0x42)
+    }
+
+    func testCLVClearsOverflowSetBySOPin() {
+        let (cpu, _) = makeCPU([
+            0xB8,       // CLV
+            0x50, 0x02, // BVC +2
+            0xA9, 0x00, // LDA #$00 (skipped after CLV clears V)
+            0xA9, 0x24  // LDA #$24
+        ])
+
+        cpu.pulseSO()
+        XCTAssertTrue(cpu.getFlag(Flags.overflow))
+
+        runInstructions(cpu, count: 3)
+
+        XCTAssertFalse(cpu.getFlag(Flags.overflow))
+        XCTAssertEqual(cpu.a, 0x24)
     }
 
     // MARK: - BCD mode

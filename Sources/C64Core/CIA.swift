@@ -123,6 +123,10 @@ public final class CIA {
 
     /// Callback when port A is written (used by CIA2 for IEC bus).
     public var onPortAWrite: ((UInt8) -> Void)?
+    /// Callback fired for each bit shifted out through the serial SP line.
+    public var onSerialOutputBit: ((Bool) -> Void)?
+    /// Callback fired when Timer A clocks a serial output bit on CNT.
+    public var onSerialClockPulse: (() -> Void)?
 
     // MARK: - Serial port
 
@@ -407,7 +411,9 @@ public final class CIA {
     func shiftSerialOutputBit() {
         guard serialOutputMode, serialOutputBitsRemaining > 0 else { return }
 
+        onSerialClockPulse?()
         spLineHigh = serialOutputShift & 0x80 != 0
+        onSerialOutputBit?(spLineHigh)
         serialOutputShift <<= 1
         serialOutputBitsRemaining -= 1
 
@@ -582,6 +588,37 @@ public final class CIA {
         case 0x0E: return timerAControl
         case 0x0F: return timerBControl
 
+        default: return 0
+        }
+    }
+
+    public func debugRegisterValue(_ reg: UInt16) -> UInt8 {
+        switch reg & 0x0F {
+        case 0x00:
+            if isCIA1 {
+                return readKeyboardPortA() & joystickPort2
+            }
+            let external = readPortAExternal?() ?? 0xFF
+            return (portA & ddra) | (external & ~ddra)
+        case 0x01:
+            if isCIA1 {
+                return readKeyboardPortB() & joystickPort1
+            }
+            return portBOut
+        case 0x02: return ddra
+        case 0x03: return ddrb
+        case 0x04: return UInt8(timerA & 0x00FF)
+        case 0x05: return UInt8(timerA >> 8)
+        case 0x06: return UInt8(timerB & 0x00FF)
+        case 0x07: return UInt8(timerB >> 8)
+        case 0x08: return todLatched ? todLatchTenths : todTenths
+        case 0x09: return todLatched ? todLatchSeconds : todSeconds
+        case 0x0A: return todLatched ? todLatchMinutes : todMinutes
+        case 0x0B: return todLatched ? todLatchHours : todHours
+        case 0x0C: return serialData
+        case 0x0D: return interruptData
+        case 0x0E: return timerAControl
+        case 0x0F: return timerBControl
         default: return 0
         }
     }

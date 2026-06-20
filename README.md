@@ -295,6 +295,15 @@ Example milestone manifest:
       "machineProfile": "palC64",
       "driveMode": "compat1541",
       "commands": ["LOAD\"*\",8,1", "RUN"],
+      "actions": [
+        { "type": "text", "text": "LOAD\"*\",8,1" },
+        { "type": "wait", "cycles": 1200000 },
+        { "type": "joystickDown", "control": "fire" },
+        { "type": "wait", "cycles": 100000 },
+        { "type": "joystickUp", "control": "fire" },
+        { "type": "keyDown", "key": "space" },
+        { "type": "keyUp", "key": "space" }
+      ],
       "maxCycles": 24000000,
       "pcStart": 49152,
       "pcEnd": 53247,
@@ -329,12 +338,38 @@ Example milestone manifest:
       "colorRAMSignatures": [
         { "address": 0, "bytes": "06 0e 01" }
       ],
+      "cpuRegisters": {
+        "pc": "$c000",
+        "a": "$01",
+        "x": "$02",
+        "y": "$03",
+        "sp": "$fa",
+        "p": "$24",
+        "pMask": "$ef"
+      },
+      "sidRegisters": [
+        { "register": "$D418", "value": "$0f" },
+        { "register": "$D404", "value": "$21", "mask": "$f1" }
+      ],
+      "vicRegisters": [
+        { "register": "$D020", "value": "$06", "mask": "$0f" },
+        { "register": "$D011", "value": "$3b" }
+      ],
+      "cia1Registers": [
+        { "register": "$DC0E", "value": "$41", "mask": "$41" }
+      ],
+      "cia2Registers": [
+        { "register": "$DD02", "value": "$3f" }
+      ],
+      "screenTextContains": ["READY.", "PRESS FIRE"],
       "screenRAMHash": "optional-fnv1a64-screen-ram-hash",
       "colorRAMHash": "optional-fnv1a64-color-ram-hash"
     }
   ]
 }
 ```
+
+When `actions` is omitted, the runner converts `commands` into cycle-0 typed text actions. Explicit actions can type text, wait a fixed number of C64 cycles, press/release joystick controls (`up`, `down`, `left`, `right`, `fire`), and press/release named C64 keys such as `space`, `return`, `runStop`, `restore`, cursor keys, and function keys. `screenTextContains` checks decoded screen RAM text without requiring a brittle full-screen hash. `cpuRegisters` checks PC/A/X/Y/SP/P state with an optional `pMask`; `sidRegisters`, `vicRegisters`, `cia1Registers`, and `cia2Registers` check effective chip register state with optional masks for audio/video/timer milestones. This lets local milestones cover title screens, loader prompts, CPU handoff points, and basic SID/VIC/CIA initialization without custom test code.
 
 ### Keyboard
 

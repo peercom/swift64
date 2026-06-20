@@ -453,8 +453,6 @@ public final class VIC {
             renderRasterline()
         }
 
-        checkRasterInterrupt()
-
         // Advance rasterline
         rasterCycle = 0
         rasterLine += 1
@@ -467,6 +465,7 @@ public final class VIC {
             frameReady = true
         }
         rasterIRQTriggeredThisLine = false
+        checkRasterInterrupt()
 
         // Video counter management
         if rasterLine == UInt16(VIC.displayTop) && displayEnabled {
@@ -1195,6 +1194,46 @@ public final class VIC {
         case 0x26: return spriteMulticolor1 | 0xF0
         case 0x27...0x2E: return spriteColors[Int(reg) - 0x27] | 0xF0
         default: return 0xFF  // Unused registers read as $FF
+        }
+    }
+
+    public func debugRegisterValue(_ reg: UInt16) -> UInt8 {
+        switch reg & 0x3F {
+        case 0x00...0x0F:
+            let sprite = Int(reg & 0x0F) / 2
+            if reg & 1 == 0 {
+                return UInt8(spriteX[sprite] & 0xFF)
+            } else {
+                return spriteY[sprite]
+            }
+        case 0x10: return spriteXMSB
+        case 0x11:
+            var value = controlReg1 & 0x7F
+            if rasterLine > 255 { value |= 0x80 }
+            return value
+        case 0x12: return UInt8(rasterLine & 0xFF)
+        case 0x13: return lightPenX
+        case 0x14: return lightPenY
+        case 0x15: return spriteEnabled
+        case 0x16: return controlReg2 | 0xE0
+        case 0x17: return spriteExpandY
+        case 0x18: return memoryPointers | 0x01
+        case 0x19: return interruptRegister | 0x70
+        case 0x1A: return interruptEnable | 0xF0
+        case 0x1B: return spritePriority
+        case 0x1C: return spriteMulticolor
+        case 0x1D: return spriteExpandX
+        case 0x1E: return spriteSpriteCollision
+        case 0x1F: return spriteDataCollision
+        case 0x20: return borderColor | 0xF0
+        case 0x21: return backgroundColor[0] | 0xF0
+        case 0x22: return backgroundColor[1] | 0xF0
+        case 0x23: return backgroundColor[2] | 0xF0
+        case 0x24: return backgroundColor[3] | 0xF0
+        case 0x25: return spriteMulticolor0 | 0xF0
+        case 0x26: return spriteMulticolor1 | 0xF0
+        case 0x27...0x2E: return spriteColors[Int((reg & 0x3F) - 0x27)] | 0xF0
+        default: return 0xFF
         }
     }
 

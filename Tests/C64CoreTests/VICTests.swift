@@ -2,6 +2,33 @@ import XCTest
 @testable import C64Core
 
 final class VICTests: XCTestCase {
+    func testDebugRegisterValueReportsEffectiveVICStateWithoutReadSideEffects() {
+        let vic = VIC()
+        vic.writeRegister(0x00, value: 0x34)
+        vic.writeRegister(0x01, value: 0x56)
+        vic.writeRegister(0x10, value: 0x01)
+        vic.writeRegister(0x11, value: 0x3B)
+        vic.writeRegister(0x16, value: 0x18)
+        vic.writeRegister(0x18, value: 0x14)
+        vic.writeRegister(0x20, value: 0x06)
+        vic.writeRegister(0x21, value: 0x0E)
+        vic.spriteSpriteCollision = 0x03
+        vic.spriteDataCollision = 0x01
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD000), 0x34)
+        XCTAssertEqual(vic.debugRegisterValue(0xD001), 0x56)
+        XCTAssertEqual(vic.debugRegisterValue(0xD010), 0x01)
+        XCTAssertEqual(vic.debugRegisterValue(0xD011), 0x3B)
+        XCTAssertEqual(vic.debugRegisterValue(0xD016), 0xF8)
+        XCTAssertEqual(vic.debugRegisterValue(0xD018), 0x15)
+        XCTAssertEqual(vic.debugRegisterValue(0xD020), 0xF6)
+        XCTAssertEqual(vic.debugRegisterValue(0xD021), 0xFE)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01E), 0x03)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x01)
+        XCTAssertEqual(vic.spriteSpriteCollision, 0x03)
+        XCTAssertEqual(vic.spriteDataCollision, 0x01)
+    }
+
     func testResetClearsRegistersRasterStateAndDeassertsIRQ() {
         let vic = VIC()
         var irqStates: [Bool] = []
@@ -475,6 +502,40 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.readRegister(0x19), 0x70)
         XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testRasterInterruptFiresWhenEnteringCompareLine() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0033
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+
+        vic.writeRegister(0x12, value: 0x34)
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0x0034)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.readRegister(0x19), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+    }
+
+    func testRasterInterruptDoesNotWaitUntilEndOfCompareLine() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0034
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+
+        vic.writeRegister(0x12, value: 0x34)
+        vic.writeRegister(0x19, value: 0x01)
+        irqStates.removeAll()
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0x0035)
+        XCTAssertEqual(vic.readRegister(0x19), 0x70)
+        XCTAssertEqual(irqStates, [])
     }
 
     func testMemoryPointerRegisterUnusedBitReadsHighButDoesNotAffectCharacterFetch() {
@@ -1576,6 +1637,7 @@ final class VICTests: XCTestCase {
         let vic = VIC()
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
 
         vic.writeRegister(0x12, value: 0x00)
         vic.writeRegister(0x1A, value: 0x01)
@@ -1595,6 +1657,7 @@ final class VICTests: XCTestCase {
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
 
         vic.writeRegister(0x1A, value: 0x05)
         vic.endOfLine()
