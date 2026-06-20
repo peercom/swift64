@@ -127,6 +127,8 @@ public final class CIA {
     public var onSerialOutputBit: ((Bool) -> Void)?
     /// Callback fired when Timer A clocks a serial output bit on CNT.
     public var onSerialClockPulse: (() -> Void)?
+    /// Callback fired after eight SP bits have shifted into the serial data register.
+    public var onSerialInputByte: ((UInt8) -> Void)?
 
     // MARK: - Serial port
 
@@ -401,6 +403,7 @@ public final class CIA {
 
         if serialInputBitsReceived == 8 {
             serialData = serialInputShift
+            onSerialInputByte?(serialData)
             serialInputShift = 0
             serialInputBitsReceived = 0
             interruptData |= 0x08

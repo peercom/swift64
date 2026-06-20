@@ -632,6 +632,25 @@ final class CIATests: XCTestCase {
         XCTAssertFalse(cia.interruptActive)
     }
 
+    func testSerialInputCallbackReportsCompletedByteAfterEightCNTPulses() {
+        let cia = CIA(isCIA1: true)
+        var receivedBytes: [UInt8] = []
+        cia.onSerialInputByte = { receivedBytes.append($0) }
+
+        for bit in [true, false, true, false, false, true, false] {
+            cia.setSPLine(high: bit)
+            cia.pulseCNT()
+        }
+
+        XCTAssertTrue(receivedBytes.isEmpty)
+
+        cia.setSPLine(high: true)
+        cia.pulseCNT()
+
+        XCTAssertEqual(receivedBytes, [0b1010_0101])
+        XCTAssertEqual(cia.readRegister(0x0C), 0b1010_0101)
+    }
+
     func testSerialOutputShiftsMSBFirstOnTimerAUnderflowsAndRaisesInterrupt() {
         let cia = CIA(isCIA1: true)
 
