@@ -350,6 +350,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 expectedFailureMismatches.isEmpty ? summary : summary + " expectedFailureMismatch=\(expectedFailureMismatches.joined(separator: "; "))"
             )
         }
+        runSummary.refreshDerivedFields()
         try writeMilestoneRunSummary(runSummary, to: summaryURL)
         if shouldFailOnUnclassifiedMilestoneFailures {
             assertNoUnclassifiedMilestoneFailures(runSummary)
@@ -990,6 +991,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.milestoneLimit, 5)
         XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.failOnUnexpected, true)
+        XCTAssertEqual(decoded.outcome, "acceptanceFailed")
+        XCTAssertEqual(decoded.acceptanceFailures, ["unclassifiedFailures", "unexpectedFailures"])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
         XCTAssertEqual(decoded.formatVersion, 1)
         XCTAssertEqual(decoded.totalElapsedCycles, 60)
@@ -1051,9 +1054,62 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("outcome=acceptanceFailed"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("cycles=60"))
+    }
+
+    func testMilestoneRunSummaryDerivesOutcomeStates() {
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.g64"),
+            mediaType: .g64,
+            machineProfile: .palC64,
+            driveMode: .compat1541,
+            commands: [#"LOAD"*",8,1"#],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        var empty = MilestoneRunSummary()
+        empty.refreshDerivedFields()
+        XCTAssertEqual(empty.outcome, "notRun")
+        XCTAssertEqual(empty.acceptanceFailures, [])
+
+        var passed = MilestoneRunSummary()
+        passed.record(MatrixRunResult(passed: true, elapsedCycles: 1, reason: "named milestone reached").record(for: milestone, c64: C64()))
+        passed.refreshDerivedFields()
+        XCTAssertEqual(passed.outcome, "passed")
+
+        var expected = MilestoneRunSummary()
+        expected.record(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "PC $0801 not in $C000-$C0FF").record(
+            for: milestone,
+            c64: C64(),
+            expectedFailureMatched: true
+        ))
+        expected.refreshDerivedFields()
+        XCTAssertEqual(expected.outcome, "expectedFailures")
+
+        var unexpected = MilestoneRunSummary()
+        unexpected.record(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "PC $0801 not in $C000-$C0FF").record(for: milestone, c64: C64()))
+        unexpected.refreshDerivedFields()
+        XCTAssertEqual(unexpected.outcome, "unexpectedFailures")
+        XCTAssertEqual(unexpected.acceptanceFailures, [])
+
+        var gated = unexpected
+        gated.failOnUnexpected = true
+        gated.refreshDerivedFields()
+        XCTAssertEqual(gated.outcome, "acceptanceFailed")
+        XCTAssertEqual(gated.acceptanceFailures, ["unexpectedFailures"])
     }
 
     func testMilestoneRunSummaryAcceptanceGateIgnoresCategorizedFailures() {
@@ -2754,6 +2810,8 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private func writeMilestoneRunSummary(_ summary: MilestoneRunSummary, to url: URL?) throws {
         guard let url else { return }
+        var summary = summary
+        summary.refreshDerivedFields()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let directory = url.deletingLastPathComponent()
@@ -3732,6 +3790,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var milestoneLimit: Int?
     var failOnUnclassified: Bool = false
     var failOnUnexpected: Bool = false
+    var outcome: String?
+    var acceptanceFailures: [String]?
     var total: Int = 0
     var executed: Int = 0
     var passed: Int = 0
@@ -3821,13 +3881,37 @@ private struct MilestoneRunSummary: Codable, Equatable {
         skippedMilestones.append(milestone.resultKey)
     }
 
+    mutating func refreshDerivedFields() {
+        var gateFailures: [String] = []
+        if failOnUnclassified && hasUnclassifiedFailures {
+            gateFailures.append("unclassifiedFailures")
+        }
+        if failOnUnexpected && hasUnexpectedFailures {
+            gateFailures.append("unexpectedFailures")
+        }
+        acceptanceFailures = gateFailures
+
+        if !gateFailures.isEmpty {
+            outcome = "acceptanceFailed"
+        } else if total == 0 {
+            outcome = "notRun"
+        } else if failed == 0 {
+            outcome = "passed"
+        } else if unexpectedFailures == 0 {
+            outcome = "expectedFailures"
+        } else {
+            outcome = "unexpectedFailures"
+        }
+    }
+
     var consoleSummary: String {
         let categorySummary = categories
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
-        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        let outcomeText = outcome ?? "unresolved"
+        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 
     var hasUnclassifiedFailures: Bool {
