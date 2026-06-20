@@ -83,7 +83,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
 - Media capability checks now include weak/random-bit range counts, total weak-bit coverage, and per-byte variable-speed-zone coverage for protected G64 validation
-- Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, write compact aggregate JSON summaries with run configuration metadata and manifest content fingerprints, optionally fail acceptance runs on unclassified failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL
+- Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, expected-failure metadata, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, write compact aggregate JSON summaries with run configuration metadata and manifest content fingerprints, optionally fail acceptance runs on unclassified failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL
 - Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
@@ -279,7 +279,7 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR=/tmp/swi
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR=/tmp/swift64-screens SWIFT64_LOCAL_MILESTONE_SCREENSHOT_FAILURES=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen, color RAM, RAM, drive, media, and one-or-more-PC-range milestones with an untracked `C64/DISKS/compatibility.json` file.
+The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/T64/TAP/CRT screen, color RAM, RAM, drive, media, and one-or-more-PC-range milestones with an untracked `C64/DISKS/compatibility.json` file. Known regressions can be kept in the corpus with an `expectedFailure` object containing a subsystem `category`, optional `reasonContains` string/list, and optional `note`; the runner still records the milestone as failed, but does not fail the XCTest slice unless the actual failure category or reason markers change.
 
 Useful fast regression slices:
 

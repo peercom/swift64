@@ -321,6 +321,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             let result = runUntilMilestone(c64, milestone: milestone)
             let summary = result.summary(name: milestone.url.lastPathComponent, command: milestone.commandSummary, c64: c64)
             summaries.append(summary)
+            let expectedFailureMismatches = result.expectedFailureMismatches(for: milestone.expectedFailure)
             var screenshotURL: URL?
             if result.passed {
                 screenshotURL = try writeMilestoneScreenshot(for: milestone, c64: c64, to: screenshotDirectoryURL)
@@ -336,12 +337,16 @@ final class LocalDiskMatrixTests: XCTestCase {
                 for: milestone,
                 c64: c64,
                 runID: runID,
+                expectedFailureMatched: !result.passed && milestone.expectedFailure != nil && expectedFailureMismatches.isEmpty,
                 manifestHash: manifestHash,
                 screenshotURL: screenshotURL
             )
             runSummary.record(record)
             try appendMilestoneResult(record, to: resultLogURL)
-            XCTAssertTrue(result.passed, summary)
+            XCTAssertTrue(
+                result.passed || (milestone.expectedFailure != nil && expectedFailureMismatches.isEmpty),
+                expectedFailureMismatches.isEmpty ? summary : summary + " expectedFailureMismatch=\(expectedFailureMismatches.joined(separator: "; "))"
+            )
         }
         try writeMilestoneRunSummary(runSummary, to: summaryURL)
         if shouldFailOnUnclassifiedMilestoneFailures {
@@ -768,6 +773,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(records.last?.skipped)
         XCTAssertEqual(records.last?.runID, runID)
         XCTAssertEqual(records.last?.manifestHash, currentManifestHash)
+        XCTAssertNil(records.last?.expectedFailureCategory)
+        XCTAssertNil(records.last?.expectedFailureReasonContains)
+        XCTAssertNil(records.last?.expectedFailureMatched)
         XCTAssertEqual(records.last?.milestoneID, "demo-loader")
         XCTAssertEqual(records.last?.milestoneName, "Demo Loader")
         XCTAssertEqual(records.last?.key.id, "demo-loader")
@@ -831,6 +839,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.skipped)
         XCTAssertNil(legacyRecord.runID)
         XCTAssertNil(legacyRecord.manifestHash)
+        XCTAssertNil(legacyRecord.expectedFailureCategory)
+        XCTAssertNil(legacyRecord.expectedFailureReasonContains)
+        XCTAssertNil(legacyRecord.expectedFailureMatched)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.milestoneID)
         XCTAssertNil(legacyRecord.milestoneName)
@@ -898,6 +909,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(skippedRecord.category, "skipped")
         XCTAssertEqual(skippedRecord.runID, runID)
         XCTAssertEqual(skippedRecord.manifestHash, currentManifestHash)
+        XCTAssertNil(skippedRecord.expectedFailureMatched)
         XCTAssertEqual(skippedRecord.key, milestone.resultKey)
         XCTAssertFalse(try passedMilestoneKeys(from: skippedLogURL).contains(milestone.resultKey))
     }
@@ -941,7 +953,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             failOnUnclassified: true
         )
         summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(for: milestone, c64: C64()))
-        summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(for: milestone, c64: C64()))
+        summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(
+            for: milestone,
+            c64: C64(),
+            expectedFailureMatched: true
+        ))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(for: milestone, c64: C64()))
         summary.recordSkipped(milestone)
 
@@ -953,6 +969,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.passed, 1)
         XCTAssertEqual(decoded.failed, 2)
         XCTAssertEqual(decoded.skipped, 1)
+        XCTAssertEqual(decoded.expectedFailures, 1)
         XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
         XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
         XCTAssertEqual(decoded.runID, "summary-run")
@@ -1003,6 +1020,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
@@ -1538,6 +1556,60 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "named milestone timeout").category, .timeout)
     }
 
+    func testExpectedFailureMatchesCategoryAndReason() {
+        let c64 = C64()
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 0,
+            pcRanges: [0xC000...0xC0FF],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil,
+            expectedFailure: CompatibilityExpectedFailure(
+                category: .pc,
+                reasonContains: ["PC $0000 not in"]
+            )
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .pc)
+        XCTAssertTrue(result.expectedFailureMismatches(for: milestone.expectedFailure).isEmpty)
+        XCTAssertEqual(
+            result.expectedFailureMismatches(for: CompatibilityExpectedFailure(category: .drive)),
+            ["category pc != drive"]
+        )
+        XCTAssertEqual(
+            result.expectedFailureMismatches(for: CompatibilityExpectedFailure(category: .pc, reasonContains: ["GCR reads"])),
+            ["reason missing GCR reads"]
+        )
+
+        let record = result.record(
+            for: milestone,
+            c64: c64,
+            expectedFailureMatched: true
+        )
+        XCTAssertEqual(record.expectedFailureCategory, "pc")
+        XCTAssertEqual(record.expectedFailureReasonContains, ["PC $0000 not in"])
+        XCTAssertEqual(record.expectedFailureMatched, true)
+
+        var summary = MilestoneRunSummary()
+        summary.record(record)
+        XCTAssertEqual(summary.failed, 1)
+        XCTAssertEqual(summary.expectedFailures, 1)
+    }
+
     func testLegacyMilestoneResultRecordsDecodeWithoutCategory() throws {
         let legacyLine = #"{"commandSummary":"RUN","driveMode":"fastLoad","elapsedCycles":5,"file":"demo.prg","machineProfile":"palC64","passed":false,"reason":"named milestone timeout"}"#
         let record = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
@@ -1922,7 +1994,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 screenTextContains: [],
                 screenRAMHash: nil,
                 colorRAMHash: nil,
-                screenshotName: nil
+                screenshotName: nil,
+                expectedFailure: nil
             )
         ]
     }
@@ -1963,7 +2036,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 screenTextContains: entry.screenTextContains,
                 screenRAMHash: entry.screenRAMHash,
                 colorRAMHash: entry.colorRAMHash,
-                screenshotName: entry.screenshotName
+                screenshotName: entry.screenshotName,
+                expectedFailure: entry.expectedFailure
             )
             milestone.id = entry.id
             milestone.name = entry.name
@@ -2745,6 +2819,7 @@ private struct MatrixRunResult {
         for milestone: LocalMilestone,
         c64: C64,
         runID: String? = nil,
+        expectedFailureMatched: Bool? = nil,
         manifestHash: String? = nil,
         screenshotURL: URL? = nil
     ) -> MilestoneResultRecord {
@@ -2756,6 +2831,9 @@ private struct MatrixRunResult {
             formatVersion: MilestoneResultRecord.currentFormatVersion,
             runID: runID,
             manifestHash: manifestHash,
+            expectedFailureCategory: milestone.expectedFailure?.category.rawValue,
+            expectedFailureReasonContains: milestone.expectedFailure?.reasonContains,
+            expectedFailureMatched: expectedFailureMatched,
             milestoneID: milestone.id,
             milestoneName: milestone.name,
             file: milestone.url.lastPathComponent,
@@ -2833,6 +2911,21 @@ private struct MatrixRunResult {
             colorRAMHash: CompatibilityHash.colorRAM(c64.memory.colorRAM),
             screenshotPath: screenshotURL?.path
         )
+    }
+
+    func expectedFailureMismatches(for expectedFailure: CompatibilityExpectedFailure?) -> [String] {
+        guard let expectedFailure else {
+            return []
+        }
+        var mismatches: [String] = []
+        if category.rawValue != expectedFailure.category.rawValue {
+            mismatches.append("category \(category.rawValue) != \(expectedFailure.category.rawValue)")
+        }
+        for expectedReason in expectedFailure.reasonContains
+            where !reason.localizedCaseInsensitiveContains(expectedReason) {
+            mismatches.append("reason missing \(expectedReason)")
+        }
+        return mismatches
     }
 
     private func tapeDecodeRecordFields(
@@ -3148,6 +3241,7 @@ private struct LocalMilestone {
     let screenRAMHash: String?
     let colorRAMHash: String?
     let screenshotName: String?
+    var expectedFailure: CompatibilityExpectedFailure? = nil
 
     var commandSummary: String {
         if !commands.isEmpty {
@@ -3176,6 +3270,9 @@ private struct LocalMilestone {
             skipped: true,
             runID: runID,
             manifestHash: manifestHash,
+            expectedFailureCategory: expectedFailure?.category.rawValue,
+            expectedFailureReasonContains: expectedFailure?.reasonContains,
+            expectedFailureMatched: nil,
             milestoneID: id,
             milestoneName: name,
             file: url.lastPathComponent,
@@ -3194,12 +3291,15 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 8
+    static let currentFormatVersion = 9
 
     let formatVersion: Int?
     let skipped: Bool?
     let runID: String?
     let manifestHash: String?
+    let expectedFailureCategory: String?
+    let expectedFailureReasonContains: [String]?
+    let expectedFailureMatched: Bool?
     let milestoneID: String?
     let milestoneName: String?
     let file: String
@@ -3282,6 +3382,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         skipped: Bool? = nil,
         runID: String? = nil,
         manifestHash: String? = nil,
+        expectedFailureCategory: String? = nil,
+        expectedFailureReasonContains: [String]? = nil,
+        expectedFailureMatched: Bool? = nil,
         milestoneID: String? = nil,
         milestoneName: String? = nil,
         file: String,
@@ -3363,6 +3466,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.skipped = skipped
         self.runID = runID
         self.manifestHash = manifestHash
+        self.expectedFailureCategory = expectedFailureCategory
+        self.expectedFailureReasonContains = expectedFailureReasonContains
+        self.expectedFailureMatched = expectedFailureMatched
         self.milestoneID = milestoneID
         self.milestoneName = milestoneName
         self.file = file
@@ -3478,6 +3584,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var passed: Int = 0
     var failed: Int = 0
     var skipped: Int = 0
+    var expectedFailures: Int = 0
     var unclassifiedFailureCount: Int = 0
     var totalElapsedCycles: UInt64 = 0
     var maxElapsedCycles: UInt64 = 0
@@ -3526,6 +3633,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
             passed += 1
         } else {
             failed += 1
+            if record.expectedFailureMatched == true {
+                expectedFailures += 1
+            }
             failedMilestones.append(record.key)
             failedMilestoneDetails.append(MilestoneFailureSummary(
                 key: record.key,
@@ -3558,7 +3668,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
-        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 
     var hasUnclassifiedFailures: Bool {

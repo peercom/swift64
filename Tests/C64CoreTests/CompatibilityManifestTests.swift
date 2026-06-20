@@ -134,7 +134,12 @@ final class CompatibilityManifestTests: XCTestCase {
               "screenTextContains": ["READY.", "PRESS FIRE"],
               "screenRAMHash": "0123456789abcdef",
               "colorRAMHash": "fedcba9876543210",
-              "screenshotName": "demo-title"
+              "screenshotName": "demo-title",
+              "expectedFailure": {
+                "category": "drive",
+                "reasonContains": ["GCR reads", "byte-ready"],
+                "note": "Known protected-loader regression"
+              }
             }
           ]
         }
@@ -262,6 +267,11 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.screenRAMHash, "0123456789abcdef")
         XCTAssertEqual(milestone.colorRAMHash, "fedcba9876543210")
         XCTAssertEqual(milestone.screenshotName, "demo-title")
+        XCTAssertEqual(milestone.expectedFailure, CompatibilityExpectedFailure(
+            category: .drive,
+            reasonContains: ["GCR reads", "byte-ready"],
+            note: "Known protected-loader regression"
+        ))
     }
 
     func testManifestKeepsLegacyMilestoneFieldsOptional() throws {
@@ -303,6 +313,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.screenTextContains, [])
         XCTAssertNil(milestone.screenRAMHash)
         XCTAssertNil(milestone.colorRAMHash)
+        XCTAssertNil(milestone.expectedFailure)
         XCTAssertEqual(milestone.pcRanges, [])
         XCTAssertEqual(milestone.expectedPCRanges, [])
     }

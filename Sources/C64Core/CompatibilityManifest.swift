@@ -55,6 +55,62 @@ public enum CompatibilityDriveMode: String, Decodable, Equatable {
     }
 }
 
+public enum CompatibilityFailureCategory: String, Decodable, Equatable {
+    case cpu
+    case drive
+    case media
+    case protectedMedia
+    case cartridge
+    case app
+    case pc
+    case ram
+    case screen
+    case tape
+    case video
+    case audio
+    case cia
+    case emulator
+    case timeout
+}
+
+public struct CompatibilityExpectedFailure: Decodable, Equatable {
+    public let category: CompatibilityFailureCategory
+    public let reasonContains: [String]
+    public let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case reasonContains
+        case reason
+        case note
+    }
+
+    public init(
+        category: CompatibilityFailureCategory,
+        reasonContains: [String] = [],
+        note: String? = nil
+    ) {
+        self.category = category
+        self.reasonContains = reasonContains
+        self.note = note
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        category = try container.decode(CompatibilityFailureCategory.self, forKey: .category)
+        if let reasonList = try? container.decode([String].self, forKey: .reasonContains) {
+            reasonContains = reasonList
+        } else if let reason = try? container.decode(String.self, forKey: .reasonContains) {
+            reasonContains = [reason]
+        } else if let reason = try? container.decode(String.self, forKey: .reason) {
+            reasonContains = [reason]
+        } else {
+            reasonContains = []
+        }
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+    }
+}
+
 public enum CompatibilityJoystickControl: String, Decodable, Equatable {
     case up
     case down
@@ -207,6 +263,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let screenRAMHash: String?
     public let colorRAMHash: String?
     public let screenshotName: String?
+    public let expectedFailure: CompatibilityExpectedFailure?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -240,6 +297,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case screenRAMHash
         case colorRAMHash
         case screenshotName
+        case expectedFailure
     }
 
     public init(
@@ -271,7 +329,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenTextContains: [String] = [],
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
-        screenshotName: String? = nil
+        screenshotName: String? = nil,
+        expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
         self.id = id
         self.name = name
@@ -303,6 +362,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
         self.screenshotName = screenshotName
+        self.expectedFailure = expectedFailure
     }
 
     public init(
@@ -335,7 +395,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenTextContains: [String] = [],
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
-        screenshotName: String? = nil
+        screenshotName: String? = nil,
+        expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
         self.id = id
         self.name = name
@@ -367,6 +428,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
         self.screenshotName = screenshotName
+        self.expectedFailure = expectedFailure
     }
 
     public init(from decoder: Decoder) throws {
@@ -434,6 +496,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
         colorRAMHash = try container.decodeIfPresent(String.self, forKey: .colorRAMHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
+        expectedFailure = try container.decodeIfPresent(CompatibilityExpectedFailure.self, forKey: .expectedFailure)
     }
 
     public var command: String {
