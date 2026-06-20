@@ -20,6 +20,7 @@ public final class Keyboard {
 
     /// Current key state: maps (row, col) to pressed state
     var keyState = [[Bool]](repeating: [Bool](repeating: false, count: 8), count: 8)
+    private var symbolicKeyState: [UInt16: (row: Int, col: Int, shift: Bool)] = [:]
 
     public init() {}
 
@@ -57,6 +58,13 @@ public final class Keyboard {
     public func handleKeyDown(keyCode: UInt16, characters: String? = nil) -> Bool {
         // Symbolic mapping: Mac shifted symbols → C64 keys
         if let mapping = symbolMapping(characters) {
+            if let previous = symbolicKeyState[keyCode] {
+                releaseKey(row: previous.row, col: previous.col)
+                if previous.shift {
+                    releaseKey(row: 1, col: 7)
+                }
+            }
+            symbolicKeyState[keyCode] = mapping
             // Release Mac shift — C64 may or may not need shift for this symbol
             releaseKey(row: 1, col: 7)
             releaseKey(row: 6, col: 4)
@@ -79,7 +87,7 @@ public final class Keyboard {
     }
 
     public func handleKeyUp(keyCode: UInt16, characters: String? = nil) -> Bool {
-        if let mapping = symbolMapping(characters) {
+        if let mapping = symbolicKeyState.removeValue(forKey: keyCode) ?? symbolMapping(characters) {
             releaseKey(row: mapping.row, col: mapping.col)
             if mapping.shift {
                 releaseKey(row: 1, col: 7)
@@ -103,7 +111,18 @@ public final class Keyboard {
     func symbolMapping(_ characters: String?) -> (row: Int, col: Int, shift: Bool)? {
         guard let ch = characters?.first else { return nil }
         switch ch {
+        case "\"": return (7, 3, true)   // C64 " is Shift+2
+        case "$": return (1, 3, true)    // C64 $ is Shift+4
         case "*": return (6, 1, false)   // C64 * is its own key
+        case "+": return (5, 0, false)   // C64 + is its own key
+        case ",": return (5, 7, false)
+        case "-": return (5, 3, false)
+        case ".": return (5, 4, false)
+        case "/": return (6, 7, false)
+        case ":": return (5, 5, false)
+        case ";": return (6, 2, false)
+        case "=": return (6, 5, false)
+        case "@": return (5, 6, false)
         case "(": return (3, 3, true)    // C64 ( is Shift+8
         case ")": return (4, 0, true)    // C64 ) is Shift+9
         case "&": return (2, 3, true)    // C64 & is Shift+6

@@ -26,7 +26,7 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minByteReady": 1024,
                 "minSyncDetections": 4,
                 "track": 18,
-                "halfTrack": 36,
+                "halfTrack": 34,
                 "motorOn": true,
                 "ledOn": true,
                 "writeProtected": false,
@@ -83,7 +83,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minByteReady, 1024)
         XCTAssertEqual(milestone.driveStatus?.minSyncDetections, 4)
         XCTAssertEqual(milestone.driveStatus?.track, 18)
-        XCTAssertEqual(milestone.driveStatus?.halfTrack, 36)
+        XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
         XCTAssertEqual(milestone.driveStatus?.motorOn, true)
         XCTAssertEqual(milestone.driveStatus?.ledOn, true)
         XCTAssertEqual(milestone.driveStatus?.writeProtected, false)

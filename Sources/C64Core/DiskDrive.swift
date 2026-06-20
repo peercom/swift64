@@ -493,6 +493,85 @@ public final class DiskDrive {
             return result == .renamed
         }
 
+        if upper.hasPrefix("C:") || upper.hasPrefix("C0:") || upper.hasPrefix("COPY:") {
+            let expression: String
+            if upper.hasPrefix("COPY:") {
+                expression = String(trimmed.dropFirst("COPY:".count))
+            } else if upper.hasPrefix("C0:") {
+                expression = String(trimmed.dropFirst(3))
+            } else {
+                expression = String(trimmed.dropFirst(2))
+            }
+
+            guard let result = copyFile(expression: expression) else {
+                commandStatus = "74, DRIVE NOT READY,00,00\r"
+                return false
+            }
+
+            switch result {
+            case .copied:
+                commandStatus = "00, OK,00,00\r"
+            case .missingSource:
+                commandStatus = "62, FILE NOT FOUND,00,00\r"
+            case .destinationExists:
+                commandStatus = "63, FILE EXISTS,00,00\r"
+            case .syntaxError:
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+            }
+            return result == .copied
+        }
+
+        if upper.hasPrefix("N:") || upper.hasPrefix("N0:") || upper.hasPrefix("NEW:") {
+            let expression: String
+            if upper.hasPrefix("NEW:") {
+                expression = String(trimmed.dropFirst("NEW:".count))
+            } else if upper.hasPrefix("N0:") {
+                expression = String(trimmed.dropFirst(3))
+            } else {
+                expression = String(trimmed.dropFirst(2))
+            }
+
+            guard let request = parseNewDiskCommand(expression) else {
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+                return false
+            }
+
+            guard formatD64(diskName: request.name, diskID: request.id) else {
+                commandStatus = "74, DRIVE NOT READY,00,00\r"
+                return false
+            }
+
+            commandStatus = "00, OK,00,00\r"
+            return true
+        }
+
+        if upper.hasPrefix("B-R") || upper.hasPrefix("U1") || upper.hasPrefix("UA") {
+            guard let result = blockRead(command: trimmed) else {
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+                return false
+            }
+
+            switch result {
+            case .read:
+                commandStatus = "00, OK,00,00\r"
+            case .invalidBlock:
+                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .syntaxError:
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+            }
+            return result == .read
+        }
+
+        if upper == "V" || upper == "V:" || upper == "V0:" || upper == "VALIDATE" || upper == "VALIDATE:" {
+            guard validateD64() else {
+                commandStatus = "74, DRIVE NOT READY,00,00\r"
+                return false
+            }
+
+            commandStatus = "00, OK,00,00\r"
+            return true
+        }
+
         commandStatus = "30, SYNTAX ERROR,00,00\r"
         return false
     }
@@ -512,11 +591,192 @@ public final class DiskDrive {
         let replaceExisting: Bool
     }
 
+    private struct NewDiskCommand {
+        let name: String
+        let id: String
+    }
+
     private enum RenameResult {
         case renamed
         case missingSource
         case destinationExists
         case syntaxError
+    }
+
+    private enum CopyResult {
+        case copied
+        case missingSource
+        case destinationExists
+        case syntaxError
+    }
+
+    private enum BlockReadResult: Equatable {
+        case read
+        case invalidBlock
+        case syntaxError
+    }
+
+    private func parseNewDiskCommand(_ expression: String) -> NewDiskCommand? {
+        let parts = expression.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+        let name = String(parts.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != "$" else { return nil }
+
+        let id: String
+        if parts.count > 1 {
+            id = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            id = diskID.isEmpty ? "00" : diskID
+        }
+        guard !id.isEmpty else { return nil }
+
+        return NewDiskCommand(name: String(name.prefix(16)), id: String(id.prefix(2)))
+    }
+
+    private func blockRead(command: String) -> BlockReadResult? {
+        guard isMounted else { return .invalidBlock }
+        let upper = command.uppercased()
+        let prefix: String
+        if upper.hasPrefix("B-R") {
+            prefix = "B-R"
+        } else if upper.hasPrefix("U1") {
+            prefix = "U1"
+        } else if upper.hasPrefix("UA") {
+            prefix = "UA"
+        } else {
+            return nil
+        }
+
+        var expression = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        if expression.hasPrefix(":") || expression.hasPrefix(",") {
+            expression.removeFirst()
+        }
+
+        let parts = expression
+            .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
+            .map(String.init)
+        guard parts.count == 4,
+              let channel = Int(parts[0]),
+              let driveNumber = Int(parts[1]),
+              let track = Int(parts[2]),
+              let sector = Int(parts[3]),
+              (0...14).contains(channel),
+              driveNumber == 0 else {
+            return .syntaxError
+        }
+
+        guard let sectorData = readSector(track: track, sector: sector) else {
+            return .invalidBlock
+        }
+        channels[channel] = Channel(data: sectorData, position: 0, isOpen: true)
+        return .read
+    }
+
+    @discardableResult
+    private func formatD64(diskName newDiskName: String, diskID newDiskID: String) -> Bool {
+        guard var image = imageData,
+              let geometry = mountedGeometry,
+              mountedFormat == .d64,
+              geometry.trackCount >= 35,
+              geometry.dataSize <= image.count else {
+            return false
+        }
+
+        for offset in 0..<geometry.dataSize {
+            image[offset] = 0
+        }
+        if let errorInfoOffset = geometry.errorInfoOffset, errorInfoOffset < image.count {
+            for offset in errorInfoOffset..<image.count {
+                image[offset] = 0x01
+            }
+        }
+
+        imageData = image
+        initializeBAMAndDirectory(diskName: newDiskName, diskID: newDiskID)
+        parseDirectory()
+        hasUnsavedChanges = true
+        return true
+    }
+
+    private func initializeBAMAndDirectory(diskName newDiskName: String, diskID newDiskID: String) {
+        guard var bam = readSector(track: 18, sector: 0),
+              var directorySector = readSector(track: 18, sector: 1) else {
+            return
+        }
+
+        bam = [UInt8](repeating: 0, count: 256)
+        bam[0] = 18
+        bam[1] = 1
+        bam[2] = 0x41
+
+        for track in 1...35 {
+            let sectors = Self.sectorsPerTrack[track]
+            var bitmap = [UInt8](repeating: 0, count: 3)
+            for sector in 0..<sectors {
+                bitmap[sector / 8] |= 1 << UInt8(sector % 8)
+            }
+
+            if track == 18 {
+                bitmap[0] &= ~UInt8(0x03)
+                bam[track * 4] = UInt8(sectors - 2)
+            } else {
+                bam[track * 4] = UInt8(sectors)
+            }
+            bam[track * 4 + 1] = bitmap[0]
+            bam[track * 4 + 2] = bitmap[1]
+            bam[track * 4 + 3] = bitmap[2]
+        }
+
+        let nameBytes = petsciiFilenameBytes(newDiskName)
+        for index in 0..<16 {
+            bam[0x90 + index] = nameBytes[index]
+        }
+
+        let idBytes = petsciiFilenameBytes(newDiskID)
+        bam[0xA0] = 0xA0
+        bam[0xA1] = 0xA0
+        bam[0xA2] = idBytes[0]
+        bam[0xA3] = idBytes[1]
+        bam[0xA4] = 0xA0
+        bam[0xA5] = 0x32
+        bam[0xA6] = 0x41
+
+        directorySector = [UInt8](repeating: 0, count: 256)
+        directorySector[0] = 0
+        directorySector[1] = 0xFF
+
+        writeSector(track: 18, sector: 0, data: bam)
+        writeSector(track: 18, sector: 1, data: directorySector)
+    }
+
+    @discardableResult
+    private func validateD64() -> Bool {
+        guard isMounted,
+              let geometry = mountedGeometry,
+              mountedFormat == .d64,
+              geometry.trackCount >= 35,
+              readSector(track: 18, sector: 0) != nil else {
+            return false
+        }
+
+        let occupied = occupiedSectors()
+        for track in 1...35 {
+            let sectors = Self.sectorsPerTrack[track]
+            var freeCount = UInt8(0)
+            for sector in 0..<sectors {
+                let free = !occupied.contains(sectorChainKey(track: track, sector: sector))
+                markBAMSector(track: track, sector: sector, free: free)
+                if free { freeCount += 1 }
+            }
+
+            let countOffset = bamEntryOffset(forTrack: track)
+            if countOffset < (imageData?.count ?? 0) {
+                imageData?[countOffset] = freeCount
+            }
+        }
+
+        parseDirectory()
+        hasUnsavedChanges = true
+        return true
     }
 
     private func parseDiskFilename(_ filename: String) -> DiskFilenameRequest {
@@ -644,6 +904,25 @@ public final class DiskDrive {
         parseDirectory()
         hasUnsavedChanges = true
         return .renamed
+    }
+
+    private func copyFile(expression: String) -> CopyResult? {
+        guard isMounted, mountedFormat == .d64 else { return nil }
+        guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
+
+        let destination = parseDiskFilename(String(expression[..<separator])).name
+        let source = parseDiskFilename(String(expression[expression.index(after: separator)...])).name
+        guard !destination.isEmpty, !source.isEmpty, destination != "$", source != "$" else {
+            return .syntaxError
+        }
+        guard findDirectorySlot(named: destination) == nil else { return .destinationExists }
+        guard let sourceEntry = findFile(source) else { return .missingSource }
+
+        let data = readFileData(sourceEntry)
+        guard savePRG(filename: destination, data: data) else {
+            return .syntaxError
+        }
+        return .copied
     }
 
     private func directorySlots(matching name: String) -> [(slot: DirectorySlot, entry: DirectoryEntry)] {

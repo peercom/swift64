@@ -323,6 +323,22 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
     }
 
+    func testDiskLoadTrapAutostartsSystemAreaLoader() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "BOOT", data: [0xA2, 0x02, 0xEA, 0x60]))
+        prepareKernalLoadTrap(c64, filename: "BOOT", verify: false, secondary: 1)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.memory.ram[0x02A2], 0xEA)
+        XCTAssertEqual(c64.memory.ram[0x02A3], 0x60)
+        XCTAssertEqual(c64.cpu.pc, 0x02A2)
+        XCTAssertEqual(c64.cpu.x, 0xA4)
+        XCTAssertEqual(c64.cpu.y, 0x02)
+        XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+    }
+
     func testSaveTrapReplaceSyntaxOverwritesExistingPRG() throws {
         let c64 = C64()
         XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
@@ -390,6 +406,143 @@ final class KernalTrapsTests: XCTestCase {
         prepareKernalCHKINTrap(c64, channel: 15)
         XCTAssertTrue(c64.kernalTraps.checkTrap())
         XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+    }
+
+    func testOpenCommandChannelCopyDuplicatesFileAndStatusCanBeRead() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        c64.memory.ram[0x002B] = 0x00
+        c64.memory.ram[0x002C] = 0x20
+        c64.memory.ram[0x2000] = 0xA9
+        c64.memory.ram[0x2001] = 0x7F
+        prepareKernalSaveTrap(c64, filename: "SOURCE", startPointer: 0x2B, endAddress: 0x2002)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalOpenTrap(c64, filename: "C:COPY=SOURCE", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertNotNil(c64.diskDrive.findFile("SOURCE"))
+        let copied = try XCTUnwrap(c64.diskDrive.findFile("COPY"))
+        XCTAssertEqual(c64.diskDrive.readFileData(copied), [0x00, 0x20, 0xA9, 0x7F])
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+    }
+
+    func testOpenCommandChannelNewFormatsDiskAndStatusCanBeRead() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        let blankFreeBlocks = c64.diskDrive.freeBlocks()
+        c64.memory.ram[0x002B] = 0x00
+        c64.memory.ram[0x002C] = 0x20
+        c64.memory.ram[0x2000] = 0xA9
+        c64.memory.ram[0x2001] = 0x7F
+        prepareKernalSaveTrap(c64, filename: "OLD", startPointer: 0x2B, endAddress: 0x2002)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertNotNil(c64.diskDrive.findFile("OLD"))
+
+        prepareKernalOpenTrap(c64, filename: "N:FORMATTED,FT", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.diskDrive.diskName, "formatted")
+        XCTAssertEqual(c64.diskDrive.diskID, "ft")
+        XCTAssertEqual(c64.diskDrive.directory.count, 0)
+        XCTAssertNil(c64.diskDrive.findFile("OLD"))
+        XCTAssertEqual(c64.diskDrive.freeBlocks(), blankFreeBlocks)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+    }
+
+    func testOpenCommandChannelValidateRebuildsBAMAndStatusCanBeRead() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        let blankFreeBlocks = c64.diskDrive.freeBlocks()
+        c64.memory.ram[0x002B] = 0x00
+        c64.memory.ram[0x002C] = 0x20
+        c64.memory.ram[0x2000] = 0xA9
+        c64.memory.ram[0x2001] = 0x7F
+        prepareKernalSaveTrap(c64, filename: "KEEP", startPointer: 0x2B, endAddress: 0x2002)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.diskDrive.freeBlocks(), blankFreeBlocks - 1)
+
+        var corrupted = try XCTUnwrap(c64.exportedD64Image).map { $0 }
+        let trackOneBAM = DiskDrive.trackOffset[18] + 1 * 4
+        corrupted[trackOneBAM] = 0
+        corrupted[trackOneBAM + 1] = 0
+        corrupted[trackOneBAM + 2] = 0
+        corrupted[trackOneBAM + 3] = 0
+        XCTAssertTrue(c64.mountDisk(Data(corrupted), fileName: "corrupt.d64"))
+        XCTAssertLessThan(c64.diskDrive.freeBlocks(), blankFreeBlocks - 1)
+
+        prepareKernalOpenTrap(c64, filename: "V:", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.diskDrive.freeBlocks(), blankFreeBlocks - 1)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        let entry = try XCTUnwrap(c64.diskDrive.findFile("KEEP"))
+        XCTAssertEqual(c64.diskDrive.readFileData(entry), [0x00, 0x20, 0xA9, 0x7F])
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+    }
+
+    func testOpenCommandChannelBlockReadFeedsTargetChannel() {
+        let c64 = C64()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0xDE
+        image[sectorOffset + 1] = 0xAD
+        image[sectorOffset + 2] = 0xBE
+        XCTAssertTrue(c64.mountDisk(Data(image), fileName: "block.d64"))
+
+        prepareKernalOpenTrap(c64, filename: "B-R:2,0,1,2", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+
+        prepareKernalCHKINTrap(c64, channel: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHRINTrap(c64)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.cpu.a, 0xDE)
+        prepareKernalCHRINTrap(c64)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.cpu.a, 0xAD)
+        prepareKernalCHRINTrap(c64)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.cpu.a, 0xBE)
+    }
+
+    func testCompatTrueDriveAllowsKernalChannelTrapsThroughC64Gate() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+
+        prepareKernalOpenTrap(c64, filename: "", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHRINTrap(c64)
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.cpu.a, UInt8(ascii: "0"))
+
+        prepareKernalCloseTrap(c64, channel: 15)
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
     }
 
     private func prepareKernalLoadTrap(

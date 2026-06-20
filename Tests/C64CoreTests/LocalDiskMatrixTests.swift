@@ -140,20 +140,45 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         let baseline = c64.drive1541.statusSnapshot
-        c64.typeText("LOAD\"*\",8,1\rRUN\r")
+        c64.typeText(gianaRunCommand(env: "SWIFT64_LOCAL_GIANA_RUN_COMMAND"))
 
         let maxCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_RUN_MAX_CYCLES"] ?? "") ?? 8_000_000
+        let stopOnScreenChange = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_CONTINUE_AFTER_SCREEN_CHANGE"] == nil
         var loaded = false
         var loadScreenHash: String?
         var screenChangedAfterLoad = false
         var ranPostLoadCycles = 0
         var enteredProgramCode = false
+        var failureReason: String?
+        var lowLoadSnapshot: String?
+        var kernalPCRangeHits: [UInt16: Int] = [:]
+        var lastKernalPC: UInt16?
+        var sameKernalPCCycles = 0
 
-        for _ in 0..<maxCycles {
+        for cycle in 0..<maxCycles {
             c64.tickOneCycle()
             enteredProgramCode = enteredProgramCode || (0x0801...0xBFFF).contains(c64.cpu.pc)
+            if (0xFFB0...0xFFE4).contains(c64.cpu.pc) {
+                kernalPCRangeHits[c64.cpu.pc, default: 0] += 1
+                if lastKernalPC == c64.cpu.pc {
+                    sameKernalPCCycles += 1
+                } else {
+                    lastKernalPC = c64.cpu.pc
+                    sameKernalPCCycles = 1
+                }
+            } else {
+                lastKernalPC = nil
+                sameKernalPCCycles = 0
+            }
+            if cycle & 0x03FF == 0, let reason = c64.emulationStatus.lastFailureReason {
+                failureReason = reason
+                break
+            }
 
             let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+            if lowLoadSnapshot == nil && hasGianaFirstStageLoaded(c64, loadEndAddress: loadEndAddress) {
+                lowLoadSnapshot = firstStageLoadSnapshot(c64)
+            }
             if !loaded && loadEndAddress > 0x0900 {
                 loaded = true
                 loadScreenHash = CompatibilityHash.screenRAM(c64.memory.ram)
@@ -165,7 +190,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                    let loadScreenHash,
                    CompatibilityHash.screenRAM(c64.memory.ram) != loadScreenHash {
                     screenChangedAfterLoad = true
-                    break
+                    if stopOnScreenChange {
+                        break
+                    }
                 }
             }
         }
@@ -175,9 +202,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         let drivePC = String(format: "%04X", drive.cpuPC)
         let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
         let loadEnd = String(format: "%04X", loadEndAddress)
-        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) reason=\(c64.emulationStatus.lastFailureReason ?? "none")"
+        let pcBytes = cpuBytes(c64, at: c64.cpu.pc, count: 12)
+        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) pcBytes=\(pcBytes) vic=\(vicSummary(c64)) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) reason=\(failureReason ?? c64.emulationStatus.lastFailureReason ?? "none")"
         print(summary)
 
+        XCTAssertNil(failureReason, summary)
         XCTAssertTrue(loaded || enteredProgramCode, summary)
     }
 
@@ -200,19 +229,39 @@ final class LocalDiskMatrixTests: XCTestCase {
             XCTAssertTrue(c64.runFrame())
         }
 
-        c64.typeText("LOAD\"*\",8,1\rRUN\r")
+        c64.typeText(gianaRunCommand(env: "SWIFT64_LOCAL_GIANA_FAST_RUN_COMMAND"))
         let maxCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_FAST_RUN_MAX_CYCLES"] ?? "") ?? 4_000_000
+        let stopOnScreenChange = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_CONTINUE_AFTER_SCREEN_CHANGE"] == nil
         var loaded = false
         var loadScreenHash: String?
         var screenChangedAfterLoad = false
         var ranPostLoadCycles = 0
         var enteredProgramCode = false
+        var lowLoadSnapshot: String?
+        var kernalPCRangeHits: [UInt16: Int] = [:]
+        var lastKernalPC: UInt16?
+        var sameKernalPCCycles = 0
 
         for _ in 0..<maxCycles {
             c64.tickOneCycle()
             enteredProgramCode = enteredProgramCode || (0x0801...0xBFFF).contains(c64.cpu.pc)
+            if (0xFFB0...0xFFE4).contains(c64.cpu.pc) {
+                kernalPCRangeHits[c64.cpu.pc, default: 0] += 1
+                if lastKernalPC == c64.cpu.pc {
+                    sameKernalPCCycles += 1
+                } else {
+                    lastKernalPC = c64.cpu.pc
+                    sameKernalPCCycles = 1
+                }
+            } else {
+                lastKernalPC = nil
+                sameKernalPCCycles = 0
+            }
 
             let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+            if lowLoadSnapshot == nil && hasGianaFirstStageLoaded(c64, loadEndAddress: loadEndAddress) {
+                lowLoadSnapshot = firstStageLoadSnapshot(c64)
+            }
             if !loaded && loadEndAddress > 0x0900 {
                 loaded = true
                 loadScreenHash = CompatibilityHash.screenRAM(c64.memory.ram)
@@ -224,7 +273,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                    let loadScreenHash,
                    CompatibilityHash.screenRAM(c64.memory.ram) != loadScreenHash {
                     screenChangedAfterLoad = true
-                    break
+                    if stopOnScreenChange {
+                        break
+                    }
                 }
             }
         }
@@ -232,10 +283,127 @@ final class LocalDiskMatrixTests: XCTestCase {
         let pc = String(format: "%04X", c64.cpu.pc)
         let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
         let loadEnd = String(format: "%04X", loadEndAddress)
-        let summary = "Giana fast run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) loadEnd=$\(loadEnd) reason=\(c64.emulationStatus.lastFailureReason ?? "none")"
+        let pcBytes = cpuBytes(c64, at: c64.cpu.pc, count: 12)
+        let summary = "Giana fast run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) pcBytes=\(pcBytes) vic=\(vicSummary(c64)) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) loadEnd=$\(loadEnd) reason=\(c64.emulationStatus.lastFailureReason ?? "none")"
         print(summary)
 
         XCTAssertTrue(loaded || enteredProgramCode, summary)
+    }
+
+    private func cpuBytes(_ c64: C64, at address: UInt16, count: Int) -> String {
+        (0..<count).map {
+            String(format: "%02X", c64.memory.read(address &+ UInt16($0)))
+        }.joined(separator: " ")
+    }
+
+    private func gianaRunCommand(env: String) -> String {
+        ProcessInfo.processInfo.environment[env] ?? "LOAD\"*\",8,1\rRUN\r"
+    }
+
+    private func loadTrapSummary(_ c64: C64) -> String {
+        let start = c64.kernalTraps.lastLoadTrapAddress.map { String(format: "%04X", $0) } ?? "none"
+        let end = c64.kernalTraps.lastLoadTrapEndAddress.map { String(format: "%04X", $0) } ?? "none"
+        return "count=\(c64.kernalTraps.handledLoadTrapCount),last=\(c64.kernalTraps.lastLoadTrapFilename ?? "none"),addr=$\(start)-$\(end)"
+    }
+
+    private func kernalHitSummary(_ hits: [UInt16: Int]) -> String {
+        hits.sorted { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.key < rhs.key
+            }
+            return lhs.value > rhs.value
+        }
+        .prefix(8)
+        .map { "$\(String(format: "%04X", $0.key)):\($0.value)" }
+        .joined(separator: ",")
+    }
+
+    private func vicSummary(_ c64: C64) -> String {
+        "$D011=\(String(format: "%02X", c64.memory.read(0xD011))) $D012=\(String(format: "%02X", c64.memory.read(0xD012))) raster=\(c64.vic.rasterLine) cycle=\(c64.vic.rasterCycle)"
+    }
+
+    private func hasGianaFirstStageLoaded(_ c64: C64, loadEndAddress: UInt16) -> Bool {
+        loadEndAddress == 0x0300
+            && c64.memory.ram[0x02A2] == 0xA2
+            && c64.memory.ram[0x02A4] == 0x8E
+    }
+
+    private func firstStageLoadSnapshot(_ c64: C64) -> String {
+        let pc = String(format: "%04X", c64.cpu.pc)
+        let stackReturn = UInt16(c64.memory.ram[0x0100 + Int(c64.cpu.sp &+ 1)])
+            | (UInt16(c64.memory.ram[0x0100 + Int(c64.cpu.sp &+ 2)]) << 8)
+        return "cycle=\(c64.cpu.totalCycles) pc=$\(pc) sp=$\(String(format: "%02X", c64.cpu.sp)) ret=$\(String(format: "%04X", stackReturn)) bytes02A2=\(cpuBytes(c64, at: 0x02A2, count: 8)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2]))"
+    }
+
+    private func bootFileSummary(_ c64: C64) -> String {
+        guard let entry = c64.diskDrive.findFile("*") else { return "bootFile=missing" }
+        let data = c64.diskDrive.readFileData(entry)
+        let loadAddress = data.count >= 2
+            ? UInt16(data[0]) | (UInt16(data[1]) << 8)
+            : 0
+        let preview = data.prefix(128).map { String(format: "%02X", $0) }.joined(separator: " ")
+        return "bootFile=\"\(entry.filename)\" bootLoad=$\(String(format: "%04X", loadAddress)) bootBytes=\(preview)"
+    }
+
+    private func diskFileSummary(_ c64: C64, name: String) -> String {
+        guard let entry = c64.diskDrive.findFile(name) else { return "missing" }
+        let data = c64.diskDrive.readFileData(entry)
+        let loadAddress = data.count >= 2
+            ? UInt16(data[0]) | (UInt16(data[1]) << 8)
+            : 0
+        let preview = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+        return "\"\(entry.filename)\"@$\(String(format: "%04X", loadAddress)):\(preview)"
+    }
+
+    private func prepareKernalLoadTrap(_ c64: C64, filename: String, device: UInt8, secondary: UInt8) {
+        let nameAddress = 0x0200
+        let bytes = Array(filename.utf8)
+        for (index, byte) in bytes.enumerated() {
+            c64.memory.ram[nameAddress + index] = byte
+        }
+
+        c64.memory.ram[Int(KernalTraps.fnLen)] = UInt8(bytes.count)
+        c64.memory.ram[Int(KernalTraps.fnAddr)] = UInt8(nameAddress & 0xFF)
+        c64.memory.ram[Int(KernalTraps.fnAddr + 1)] = UInt8(nameAddress >> 8)
+        c64.memory.ram[Int(KernalTraps.logicalFile)] = 1
+        c64.memory.ram[Int(KernalTraps.device)] = device
+        c64.memory.ram[Int(KernalTraps.secondaryAddr)] = secondary
+        c64.cpu.a = 0
+        c64.cpu.pc = KernalTraps.loadRoutine
+        c64.cpu.sp = 0xFB
+        c64.memory.ram[0x01FC] = 0x34
+        c64.memory.ram[0x01FD] = 0x12
+    }
+
+    func testLocalGreatGianaSistersDirectoryDecodeWhenEnabled() throws {
+        try requireEnvironment(gianaFastRunEnv)
+
+        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_GIANA_RUN_LIMIT", extensions: Self.diskImageExtensions)
+        let giana = try XCTUnwrap(urls.first {
+            $0.lastPathComponent.lowercased().contains("great_giana_sisters")
+            && $0.pathExtension.lowercased() == "g64"
+        })
+
+        let data = try Data(contentsOf: giana)
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mountG64(data), "Failed to decode G64 into fast media: \(giana.path)")
+
+        let entries = drive.directory.map {
+            "\($0.filename) type=\($0.typeName) first=\($0.firstTrack)/\($0.firstSector) blocks=\($0.fileSize)"
+        }
+        print("Giana decoded directory count=\(drive.directory.count) diskName=\"\(drive.diskName)\" diskID=\"\(drive.diskID)\" entries=\(entries)")
+        print("Giana lookup star=\(String(describing: drive.findFile("*")?.filename)) dollar=\(drive.isDirectoryListingRequest("$"))")
+
+        XCTAssertNotNil(drive.findFile("*"), "Decoded G64 should expose a wildcard-loadable first PRG")
+
+        let c64 = C64(machineProfile: .palC64)
+        XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.memory.ram[0x02A2], 0xA2)
+        XCTAssertEqual(c64.memory.ram[0x02A3], 0x00)
+        XCTAssertEqual(c64.memory.ram[0x02A4], 0x8E)
+        XCTAssertEqual(c64.memory.ram[0x02E2], 0x46)
     }
 
     func testNamedMilestoneFailureReasonReportsUnmetExpectations() {

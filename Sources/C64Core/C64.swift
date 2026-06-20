@@ -685,7 +685,7 @@ public final class C64 {
         case .off:
             return true
         case .compat1541:
-            return kernalTraps.isDiskLoadRequest()
+            return diskDrive.isMounted && kernalTraps.isDiskIORequest()
         case .standard1541:
             return false
         }
@@ -716,8 +716,6 @@ public final class C64 {
     }
 
     private func monitorEmulationProgress() {
-        monitorCPUFailureState()
-
         guard trueDriveEmulationMode != .off, drive1541.enabled, isLoadActivityLikely else {
             loadNoProgressCycleCount = 0
             drive1541.noProgressCycleCount = 0
@@ -754,6 +752,8 @@ public final class C64 {
             if pcFFFFCycleCount > 20_000 {
                 recordFailure("C64 PC stuck at $FFFF")
             }
+        } else {
+            pcFFFFCycleCount = 0
         }
     }
 

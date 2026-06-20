@@ -64,7 +64,7 @@ public final class Drive1541 {
     public var track0SensorEnabled: Bool = true
 
     /// Current half-track position (0-83, where 0 = track 1.0, 1 = track 1.5, etc.)
-    public var halfTrack: Int = 36  // Start on track 18 (directory)
+    public var halfTrack: Int = 34  // Start on track 18 (directory)
 
     /// Current track number (1-based)
     public var track: Int { (halfTrack / 2) + 1 }
@@ -208,7 +208,7 @@ public final class Drive1541 {
             }
             s.byteReadyLevel = false
             s.byteReadyEdge = false
-            s.via2.ca1 = false  // release byte-ready level signal
+            s.via2.ca1 = true  // release byte-ready line to idle high
         }
     }
 
@@ -414,7 +414,7 @@ public final class Drive1541 {
             cpu.powerOn()
         }
 
-        halfTrack = 36  // Track 18
+        halfTrack = 34  // Track 18
         headBitPosition = 0
         stepperPhase = 0
         motorOn = false
@@ -423,7 +423,7 @@ public final class Drive1541 {
         ledOn = false
         resetGCRReadPipeline()
         byteReadyActive = true
-        via2.ca1 = false
+        via2.ca1 = true
         via2.portAInput = 0xFF
         updateVIA2Inputs()
         updateBusFromVIA1()
@@ -452,7 +452,7 @@ public final class Drive1541 {
         byteReadyEdge = false
         byteReadyLevel = false
         soDelay = 0
-        via2.ca1 = false
+        via2.ca1 = true
     }
 
     // MARK: - Tick (one drive clock cycle)
@@ -660,7 +660,7 @@ public final class Drive1541 {
             C64Trace.log(.gcr, "[GCR-BYTE] @\(debugCycleCount) count=\(byteReadyCount) PA=$\(String(format:"%02X", via2.portAInput)) track=\(track) bit=\(headBitPosition)")
         }
         cpu.pulseSO()
-        via2.ca1 = true  // held high until VIA2 PA is read
+        via2.ca1 = false  // active-low byte-ready pulse, released when VIA2 PA is read
     }
 
     /// Simulate disk head at 16 MHz granularity (16 sub-ticks per 1 MHz drive cycle).

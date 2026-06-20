@@ -65,6 +65,11 @@ public final class KernalTraps {
 
     /// Whether traps are enabled
     public var enabled: Bool = true
+    public private(set) var handledLoadTrapCount: Int = 0
+    public private(set) var lastLoadTrapFilename: String?
+    public private(set) var lastLoadTrapAddress: UInt16?
+    public private(set) var lastLoadTrapEndAddress: UInt16?
+    public var autostartSystemAreaDiskLoads: Bool = true
 
     private var currentInputChannel: Int?
 
@@ -121,6 +126,24 @@ public final class KernalTraps {
         return (8...11).contains(deviceNum)
     }
 
+    func isDiskIORequest() -> Bool {
+        guard enabled, let cpu = cpu, let memory = memory else { return false }
+
+        switch cpu.pc {
+        case KernalTraps.loadRoutine:
+            return isDiskLoadRequest()
+        case KernalTraps.saveRoutine, KernalTraps.openRoutine:
+            let deviceNum = memory.ram[Int(KernalTraps.device)]
+            return (8...11).contains(deviceNum)
+        case KernalTraps.closeRoutine, KernalTraps.chkinRoutine:
+            return true
+        case KernalTraps.basinRoutine:
+            return currentInputChannel != nil
+        default:
+            return false
+        }
+    }
+
     func debugLog(_ msg: String) {
         C64Trace.log(.kernal, msg)
     }
@@ -132,6 +155,8 @@ public final class KernalTraps {
         let secondaryAddr = memory.ram[Int(KernalTraps.secondaryAddr)]
         let verifying = cpu.a != 0
         let filename = loadRequestFilename(memory: memory)
+        handledLoadTrapCount += 1
+        lastLoadTrapFilename = filename
 
         debugLog("[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)")
 
@@ -177,6 +202,8 @@ public final class KernalTraps {
 
         let payload = Array(data[2...])
         let endAddr = loadAddr &+ UInt16(payload.count)
+        lastLoadTrapAddress = loadAddr
+        lastLoadTrapEndAddress = endAddr
 
         if verifying {
             printToScreen(memory: memory, text: "VERIFYING\r")
@@ -242,7 +269,32 @@ public final class KernalTraps {
         cpu.x = UInt8(endAddr & 0xFF)
         cpu.y = UInt8(endAddr >> 8)
 
+        if shouldAutostartSystemAreaDiskLoad(
+            device: deviceNum,
+            secondary: secondaryAddr,
+            loadAddress: loadAddr,
+            payload: payload
+        ) {
+            cpu.pc = loadAddr
+            cpu.cycle = 0
+            cpu.servicingInterrupt = false
+            return true
+        }
+
         doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    private func shouldAutostartSystemAreaDiskLoad(
+        device: UInt8,
+        secondary: UInt8,
+        loadAddress: UInt16,
+        payload: [UInt8]
+    ) -> Bool {
+        guard autostartSystemAreaDiskLoads else { return false }
+        guard (8...11).contains(device), secondary != 0 else { return false }
+        guard (0x0200..<0x0400).contains(loadAddress) else { return false }
+        guard let firstOpcode = payload.first, firstOpcode != 0x00 else { return false }
         return true
     }
 

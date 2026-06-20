@@ -32,7 +32,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 
 - Many games and demos will not run correctly yet — VIC-II timing, sprite multiplexing, and advanced raster effects need further refinement
 - True-drive 1541 compatibility is read-focused and still being validated against protected G64/custom-loader disks
-- True-drive GCR writes, persistent disk-image write-back, and 1541 format support are deferred until read compatibility is stable
+- True-drive GCR writes, native G64 write-back, and low-level 1541 format support are deferred until read compatibility is stable
 - NIB/P64/flux-level media import and G64 write-back are not implemented; weak/random bit readback is available for low-level tracks that provide weak-bit ranges
 - SID filter is simplified and not yet calibrated to measured 6581/8580 curves
 - Freezer button CPU-state capture, Super Snapshot V5 32K RAM-expansion setting, COMAL-80 grey-revision mode selection, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
@@ -75,7 +75,8 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - 1541 motor control now models a bounded spindle spin-down window after the VIA motor command turns off, instead of stopping the GCR head instantly
 - 1541 media insert/eject now clears stale GCR head sync, byte-ready, shift-register, and delayed-SO state so a new disk cannot inherit read-pipeline state from the previous image
 - High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
-- High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, and status-channel readback
+- High-level 1541 command-channel `N:`/`NEW:` formatting now clears writable D64 images, rebuilds the BAM and empty directory, preserves D64 geometry/error-table shape, and reports status-channel results
+- High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, `C:NEW=OLD` PRG copies, `V:`/`VALIDATE` BAM rebuilds, `B-R`/`U1` block reads into data channels, and status-channel readback
 - The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes

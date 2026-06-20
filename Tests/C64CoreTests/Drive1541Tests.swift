@@ -11,12 +11,12 @@ final class Drive1541Tests: XCTestCase {
         drive.fireByteReady()
 
         XCTAssertTrue(drive.cpu.getFlag(Flags.overflow))
-        XCTAssertTrue(drive.via2.ca1)
+        XCTAssertFalse(drive.via2.ca1)
         XCTAssertTrue(drive.statusSnapshot.byteReady)
 
         _ = drive.via2.readRegister(0x01)
 
-        XCTAssertFalse(drive.via2.ca1)
+        XCTAssertTrue(drive.via2.ca1)
         XCTAssertFalse(drive.statusSnapshot.byteReady)
     }
 
@@ -112,7 +112,7 @@ final class Drive1541Tests: XCTestCase {
         drive.byteReadyEdge = true
         drive.byteReadyLevel = true
         drive.soDelay = 9
-        drive.via2.ca1 = true
+        drive.via2.ca1 = false
 
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
 
@@ -122,7 +122,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.shiftRegister, 0)
         XCTAssertEqual(drive.bitCounter, 0)
         XCTAssertEqual(drive.soDelay, 0)
-        XCTAssertFalse(drive.via2.ca1)
+        XCTAssertTrue(drive.via2.ca1)
         XCTAssertEqual(drive.via2.readRegister(0x00) & 0x80, 0x80)
     }
 
@@ -136,7 +136,7 @@ final class Drive1541Tests: XCTestCase {
         drive.byteReadyEdge = true
         drive.byteReadyLevel = true
         drive.soDelay = 9
-        drive.via2.ca1 = true
+        drive.via2.ca1 = false
 
         drive.ejectDisk()
 
@@ -147,7 +147,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.shiftRegister, 0)
         XCTAssertEqual(drive.bitCounter, 0)
         XCTAssertEqual(drive.soDelay, 0)
-        XCTAssertFalse(drive.via2.ca1)
+        XCTAssertTrue(drive.via2.ca1)
         XCTAssertEqual(drive.via2.readRegister(0x00) & 0x80, 0x80)
     }
 
@@ -230,7 +230,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.statusSnapshot.syncDetectionCount, 0)
         XCTAssertFalse(drive.statusSnapshot.syncDetected)
         XCTAssertEqual(drive.statusSnapshot.headBitPosition, 0)
-        XCTAssertEqual(drive.statusSnapshot.halfTrack, 36)
+        XCTAssertEqual(drive.statusSnapshot.halfTrack, 34)
         XCTAssertFalse(drive.statusSnapshot.motorOn)
         XCTAssertFalse(drive.motorCommandOn)
         XCTAssertEqual(drive.motorSpinDownCyclesRemaining, 0)
@@ -338,6 +338,18 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(c64.emulationStatus.lastFailureReason, "C64 PC stuck at $FFFF")
     }
 
+    func testC64FFFFHangCounterRequiresConsecutiveCycles() {
+        let c64 = C64()
+        for _ in 0..<20_050 {
+            c64.cpu.pc = 0xFFFF
+            c64.tickOneCycle()
+            c64.cpu.pc = 0x0004
+            c64.tickOneCycle()
+        }
+
+        XCTAssertNil(c64.emulationStatus.lastFailureReason)
+    }
+
     func testC64TypeTextQueuesCommandsLongerThanKeyboardBuffer() {
         let c64 = C64()
 
@@ -398,7 +410,7 @@ final class Drive1541Tests: XCTestCase {
         c64.reset()
 
         XCTAssertTrue(c64.drive1541.statusSnapshot.hasDisk)
-        XCTAssertEqual(c64.drive1541.statusSnapshot.halfTrack, 36)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.halfTrack, 34)
         XCTAssertEqual(c64.drive1541.statusSnapshot.headBitPosition, 0)
         XCTAssertFalse(c64.drive1541.statusSnapshot.motorOn)
         XCTAssertFalse(c64.drive1541.statusSnapshot.byteReady)
@@ -599,6 +611,31 @@ final class Drive1541Tests: XCTestCase {
             }
         }
 
+        print(
+            String(
+                format: "True-drive directory diagnostic pc=$%04X drivePC=$%04X commands=%@ data=%@ via2: PA=$%02X DDRA=$%02X PB=$%02X DDRB=$%02X IFR=$%02X IER=$%02X PCR=$%02X ACR=$%02X BR=%llu PAReads=%llu sync=%llu readBytes=%@ z00=%@ z6f=%@ buf0200=%@",
+                c64.cpu.pc,
+                c64.drive1541.cpu.pc,
+                c64.drive1541.statusSnapshot.lastIECCommandSummary,
+                c64.drive1541.decodedIECDataBytes.map { String(format: "%02X", $0) }.joined(separator: " "),
+                c64.drive1541.via2.portAInput,
+                c64.drive1541.via2.ddra,
+                c64.drive1541.via2.portB,
+                c64.drive1541.via2.ddrb,
+                c64.drive1541.via2.ifr,
+                c64.drive1541.via2.ier,
+                c64.drive1541.via2.pcr,
+                c64.drive1541.via2.acr,
+                c64.drive1541.byteReadyCount - baseline.byteReadyCount,
+                c64.drive1541.via2PortAReadCount - baseline.via2PortAReadCount,
+                c64.drive1541.syncDetectionCount - baseline.syncDetectionCount,
+                hexBytes(c64.drive1541.via2PortAReadBytes.prefix(64)),
+                hexBytes(c64.drive1541.memory.ram[0x00..<0x20]),
+                hexBytes(c64.drive1541.memory.ram[0x6F..<0x80]),
+                hexBytes(c64.drive1541.memory.ram[0x0200..<0x0280])
+            )
+        )
+
         XCTAssertTrue(sawListen, "1541 should receive IEC LISTEN for device 8")
         XCTAssertTrue(sawSecondary, "1541 should receive the LOAD secondary address after recognizing device 8")
         XCTAssertTrue(sawDirectoryName, "1541 should receive the directory filename byte over the listener data path")
@@ -703,6 +740,82 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(c64.memory.ram[0x90], 0)
     }
 
+    func testCompatTrueDriveDoesNotTrapNativeOnlyG64Load() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeNativeOnlyG64(), fileName: "native-only.g64"))
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
+
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+
+        XCTAssertFalse(c64.shouldUseKernalTrapAtCurrentInstruction())
+    }
+
+    func testCompatTrueDriveUsesTrapForDecodedNativeG64Load() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeMinimalG64(), fileName: "decoded-native.g64"))
+        XCTAssertTrue(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.diskDrive.mountedFormat, .g64)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
+
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+    }
+
+    func testStandardTrueDriveDoesNotTrapDecodedNativeG64Load() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .standard1541
+        XCTAssertTrue(c64.mountDisk(makeMinimalG64(), fileName: "decoded-native.g64"))
+        XCTAssertTrue(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.diskDrive.mountedFormat, .g64)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
+
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+
+        XCTAssertFalse(c64.shouldUseKernalTrapAtCurrentInstruction())
+    }
+
+    func testTypedFastLoadWildcardD64ReachesKernalTrap() throws {
+        let c64 = C64()
+        try loadBundledROMs(into: c64)
+        c64.trueDriveEmulationMode = .off
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        c64.powerOn()
+
+        for _ in 0..<20 {
+            XCTAssertTrue(c64.runFrame())
+        }
+
+        c64.typeText("LOAD\"*\",8,1\r")
+
+        XCTAssertTrue(runUntilPRGPayloadLoaded(c64), "Typed LOAD should reach the high-level disk trap in fast-load mode")
+        XCTAssertEqual(c64.memory.ram[0x0801], 0xA9)
+        XCTAssertEqual(c64.memory.ram[0x0802], 0x2A)
+        XCTAssertEqual(c64.memory.ram[0x90], 0)
+    }
+
+    func testTypedCompatTrueDriveWildcardD64ReachesCompatibilityTrap() throws {
+        let c64 = C64()
+        try loadBundledROMs(into: c64)
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        c64.powerOn()
+
+        for _ in 0..<20 {
+            XCTAssertTrue(c64.runFrame())
+        }
+
+        c64.typeText("LOAD\"*\",8,1\r")
+
+        XCTAssertTrue(runUntilPRGPayloadLoaded(c64), "Typed LOAD should use the compatibility trap in compat true-drive mode")
+        XCTAssertEqual(c64.memory.ram[0x0801], 0xA9)
+        XCTAssertEqual(c64.memory.ram[0x0802], 0x2A)
+        XCTAssertEqual(c64.memory.ram[0x90], 0)
+    }
+
     func testStandardTrueDriveDoesNotUseDirectoryTrap() {
         let c64 = C64()
         c64.trueDriveEmulationMode = .standard1541
@@ -712,10 +825,24 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(c64.shouldUseKernalTrapAtCurrentInstruction())
     }
 
+    private func runUntilPRGPayloadLoaded(_ c64: C64, maxCycles: Int = 2_000_000) -> Bool {
+        for _ in 0..<maxCycles {
+            c64.tickOneCycle()
+            let endAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
+            if c64.memory.ram[0x0801] == 0xA9,
+               c64.memory.ram[0x0802] == 0x2A,
+               endAddress == 0x0803,
+               c64.memory.ram[0x90] == 0 {
+                return true
+            }
+        }
+        return false
+    }
+
     private func makeBootedTrueDriveC64WithMinimalG64() throws -> C64 {
         let c64 = C64()
         try loadBundledROMs(into: c64)
-        c64.trueDriveEmulationMode = .compat1541
+        c64.trueDriveEmulationMode = .standard1541
 
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("swift64-load-\(UUID().uuidString).g64")
@@ -795,7 +922,7 @@ final class Drive1541Tests: XCTestCase {
     private func makeBootedTrueDriveC64WithMinimalD64() throws -> C64 {
         let c64 = C64()
         try loadBundledROMs(into: c64)
-        c64.trueDriveEmulationMode = .compat1541
+        c64.trueDriveEmulationMode = .standard1541
 
         XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
         c64.powerOn()
@@ -820,6 +947,10 @@ final class Drive1541Tests: XCTestCase {
             }
         }
         return false
+    }
+
+    private func hexBytes<C: Collection>(_ bytes: C) -> String where C.Element == UInt8 {
+        bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 
     private func prepareKernalLoadTrap(_ c64: C64, filename: String, device: UInt8, secondary: UInt8) {
@@ -912,6 +1043,38 @@ final class Drive1541Tests: XCTestCase {
 
         let speedPos = speedTableStart + halfTrack * 4
         g64[speedPos] = UInt8(GCRDisk.speedZone(for: 18))
+
+        return Data(g64)
+    }
+
+    private func makeNativeOnlyG64() -> Data {
+        var g64 = [UInt8]()
+        g64.append(contentsOf: Array("GCR-1541".utf8))
+        g64.append(0x00)
+        g64.append(84)
+        g64.append(0x00)
+        g64.append(0x1E)
+
+        let offsetTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        let speedTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+
+        let trackBytes = [UInt8](repeating: 0x55, count: 512)
+        let trackOffset = g64.count
+        g64.append(UInt8(trackBytes.count & 0xFF))
+        g64.append(UInt8(trackBytes.count >> 8))
+        g64.append(contentsOf: trackBytes)
+
+        let halfTrack = 0
+        let offsetPos = offsetTableStart + halfTrack * 4
+        g64[offsetPos] = UInt8(trackOffset & 0xFF)
+        g64[offsetPos + 1] = UInt8((trackOffset >> 8) & 0xFF)
+        g64[offsetPos + 2] = UInt8((trackOffset >> 16) & 0xFF)
+        g64[offsetPos + 3] = UInt8((trackOffset >> 24) & 0xFF)
+
+        let speedPos = speedTableStart + halfTrack * 4
+        g64[speedPos] = 0x02
 
         return Data(g64)
     }
