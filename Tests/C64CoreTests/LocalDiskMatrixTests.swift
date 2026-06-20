@@ -15,6 +15,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
     private let milestoneFailOnUnexpectedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED"
+    private let milestoneRequireAllMediaEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ALL_MEDIA"
     private let milestoneRunIDEnv = "SWIFT64_LOCAL_MILESTONE_RUN_ID"
 
     func testMediaStatusMismatchReportsProtectedMediaCounters() {
@@ -262,7 +263,8 @@ final class LocalDiskMatrixTests: XCTestCase {
     func testLocalDiskImagesNamedMilestonesWhenEnabled() throws {
         try requireEnvironment(milestoneEnv)
 
-        let milestones = try localMilestones()
+        let milestoneLoad = try localMilestoneLoadResult()
+        let milestones = milestoneLoad.milestones
         guard !milestones.isEmpty else {
             throw XCTSkip("No local milestone disks found under C64/DISKS")
         }
@@ -291,6 +293,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: shouldResumeOnlyMatchingManifest,
             screenshotFailuresEnabled: screenshotFailuresEnabled,
             milestoneLimit: localMilestoneLimit,
+            manifestMilestoneCount: milestoneLoad.manifestMilestoneCount,
+            selectedMilestoneCount: milestones.count,
+            missingMediaFiles: milestoneLoad.missingMediaFiles,
+            requireAllManifestMedia: shouldRequireAllMilestoneMedia,
             failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
             failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures
         )
@@ -956,6 +962,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: true,
             screenshotFailuresEnabled: true,
             milestoneLimit: 5,
+            manifestMilestoneCount: 7,
+            selectedMilestoneCount: 3,
+            missingMediaFiles: ["missing.g64"],
+            requireAllManifestMedia: true,
             failOnUnclassified: true,
             failOnUnexpected: true
         )
@@ -989,6 +999,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.strictManifestResumeEnabled, true)
         XCTAssertEqual(decoded.screenshotFailuresEnabled, true)
         XCTAssertEqual(decoded.milestoneLimit, 5)
+        XCTAssertEqual(decoded.manifestMilestoneCount, 7)
+        XCTAssertEqual(decoded.selectedMilestoneCount, 3)
+        XCTAssertEqual(decoded.missingMediaFiles, ["missing.g64"])
+        XCTAssertEqual(decoded.requireAllManifestMedia, true)
         XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.failOnUnexpected, true)
         XCTAssertEqual(decoded.outcome, "acceptanceFailed")
@@ -1051,6 +1065,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(decoded.unexpectedFailureSummary.contains("PC $0801 not in"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selected=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingMedia=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
@@ -1732,6 +1748,20 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(manifestMilestoneValidationErrors([fastLoad, trueDrive]).isEmpty)
     }
 
+    func testManifestMissingMediaFilesAreReported() {
+        let entries = [
+            CompatibilityMilestone(file: "present.g64", command: #"LOAD"*",8,1"#),
+            CompatibilityMilestone(file: "missing.d64", command: #"LOAD"$",8"#),
+            CompatibilityMilestone(file: "nested/also-present.tap", command: "LOAD\r"),
+        ]
+        let urls = [
+            URL(fileURLWithPath: "/tmp/present.g64"),
+            URL(fileURLWithPath: "/tmp/corpus/nested/also-present.tap"),
+        ]
+
+        XCTAssertEqual(missingManifestMediaFiles(entries, urls: urls), ["missing.d64"])
+    }
+
     func testLegacyMilestoneResultRecordsDecodeWithoutCategory() throws {
         let legacyLine = #"{"commandSummary":"RUN","driveMode":"fastLoad","elapsedCycles":5,"file":"demo.prg","machineProfile":"palC64","passed":false,"reason":"named milestone timeout"}"#
         let record = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
@@ -1876,6 +1906,10 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private var shouldFailOnUnexpectedMilestoneFailures: Bool {
         ProcessInfo.processInfo.environment[milestoneFailOnUnexpectedEnv] == "1"
+    }
+
+    private var shouldRequireAllMilestoneMedia: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireAllMediaEnv] == "1"
     }
 
     private var localMilestoneLimit: Int? {
@@ -2117,58 +2151,60 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
     }
 
-    private func localMilestones() throws -> [LocalMilestone] {
+    private func localMilestoneLoadResult() throws -> MilestoneLoadResult {
         let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_MILESTONE_LIMIT", extensions: Self.milestoneMediaExtensions)
-        let manifestMilestones = try loadManifestMilestones(urls: urls)
-        if !manifestMilestones.isEmpty {
-            return manifestMilestones
+        let manifestLoad = try loadManifestMilestones(urls: urls)
+        if !manifestLoad.milestones.isEmpty {
+            return manifestLoad
         }
 
         guard let giana = urls.first(where: {
             $0.lastPathComponent.lowercased().contains("great_giana_sisters")
             && $0.pathExtension.lowercased() == "g64"
         }) else {
-            return []
+            return MilestoneLoadResult()
         }
 
-        return [
-            LocalMilestone(
-                url: giana,
-                mediaType: .g64,
-                machineProfile: .palC64,
-                driveMode: .compat1541,
-                commands: [#"LOAD"*",8,1"#],
-                maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
-                pcRanges: [],
-                minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
-                minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
-                driveStatus: nil,
-                mediaStatus: nil,
-                ramSignatures: [],
-                colorRAMSignatures: [],
-                cpuRegisters: nil,
-                sidRegisters: [],
-                vicRegisters: [],
-                cia1Registers: [],
-                cia2Registers: [],
-                screenTextContains: [],
-                screenRAMHash: nil,
-                colorRAMHash: nil,
-                screenshotName: nil,
-                expectedFailure: nil
-            )
-        ]
+        return MilestoneLoadResult(
+            milestones: [
+                LocalMilestone(
+                    url: giana,
+                    mediaType: .g64,
+                    machineProfile: .palC64,
+                    driveMode: .compat1541,
+                    commands: [#"LOAD"*",8,1"#],
+                    maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
+                    pcRanges: [],
+                    minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
+                    minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
+                    driveStatus: nil,
+                    mediaStatus: nil,
+                    ramSignatures: [],
+                    colorRAMSignatures: [],
+                    cpuRegisters: nil,
+                    sidRegisters: [],
+                    vicRegisters: [],
+                    cia1Registers: [],
+                    cia2Registers: [],
+                    screenTextContains: [],
+                    screenRAMHash: nil,
+                    colorRAMHash: nil,
+                    screenshotName: nil,
+                    expectedFailure: nil
+                )
+            ]
+        )
     }
 
-    private func loadManifestMilestones(urls: [URL]) throws -> [LocalMilestone] {
+    private func loadManifestMilestones(urls: [URL]) throws -> MilestoneLoadResult {
         let manifestURL = localDiskRoot.appendingPathComponent("compatibility.json")
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            return []
+            return MilestoneLoadResult()
         }
 
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
         let milestones = manifest.milestones.compactMap { entry -> LocalMilestone? in
-            guard let url = urls.first(where: { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }) else {
+            guard let url = manifestMediaURL(for: entry, urls: urls) else {
                 return nil
             }
             let driveMode = entry.driveMode ?? .compat1541
@@ -2210,7 +2246,27 @@ final class LocalDiskMatrixTests: XCTestCase {
         guard validationErrors.isEmpty else {
             throw ManifestValidationError(errors: validationErrors)
         }
-        return milestones
+        let missingMediaFiles = missingManifestMediaFiles(manifest.milestones, urls: urls)
+        if shouldRequireAllMilestoneMedia && !missingMediaFiles.isEmpty {
+            throw ManifestValidationError(errors: [
+                "missing manifest media files: \(missingMediaFiles.joined(separator: ", "))"
+            ])
+        }
+        return MilestoneLoadResult(
+            milestones: milestones,
+            manifestMilestoneCount: manifest.milestones.count,
+            missingMediaFiles: missingMediaFiles
+        )
+    }
+
+    private func manifestMediaURL(for entry: CompatibilityMilestone, urls: [URL]) -> URL? {
+        urls.first { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }
+    }
+
+    private func missingManifestMediaFiles(_ entries: [CompatibilityMilestone], urls: [URL]) -> [String] {
+        entries.compactMap { entry in
+            manifestMediaURL(for: entry, urls: urls) == nil ? entry.file : nil
+        }
     }
 
     private func mountPrePowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
@@ -3457,6 +3513,12 @@ private struct LocalMilestone {
     }
 }
 
+private struct MilestoneLoadResult {
+    var milestones: [LocalMilestone] = []
+    var manifestMilestoneCount: Int? = nil
+    var missingMediaFiles: [String] = []
+}
+
 private struct ManifestValidationError: Error, CustomStringConvertible, LocalizedError {
     let errors: [String]
 
@@ -3788,6 +3850,10 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var strictManifestResumeEnabled: Bool = false
     var screenshotFailuresEnabled: Bool = false
     var milestoneLimit: Int?
+    var manifestMilestoneCount: Int?
+    var selectedMilestoneCount: Int?
+    var missingMediaFiles: [String] = []
+    var requireAllManifestMedia: Bool = false
     var failOnUnclassified: Bool = false
     var failOnUnexpected: Bool = false
     var outcome: String?
@@ -3821,6 +3887,10 @@ private struct MilestoneRunSummary: Codable, Equatable {
         strictManifestResumeEnabled: Bool,
         screenshotFailuresEnabled: Bool,
         milestoneLimit: Int?,
+        manifestMilestoneCount: Int?,
+        selectedMilestoneCount: Int?,
+        missingMediaFiles: [String],
+        requireAllManifestMedia: Bool,
         failOnUnclassified: Bool,
         failOnUnexpected: Bool
     ) {
@@ -3834,6 +3904,10 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.strictManifestResumeEnabled = strictManifestResumeEnabled
         self.screenshotFailuresEnabled = screenshotFailuresEnabled
         self.milestoneLimit = milestoneLimit
+        self.manifestMilestoneCount = manifestMilestoneCount
+        self.selectedMilestoneCount = selectedMilestoneCount
+        self.missingMediaFiles = missingMediaFiles
+        self.requireAllManifestMedia = requireAllManifestMedia
         self.failOnUnclassified = failOnUnclassified
         self.failOnUnexpected = failOnUnexpected
     }
@@ -3911,7 +3985,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
         let outcomeText = outcome ?? "unresolved"
-        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        let selectedText = selectedMilestoneCount.map(String.init) ?? "unknown"
+        return "Summary total=\(total) selected=\(selectedText) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 
     var hasUnclassifiedFailures: Bool {
