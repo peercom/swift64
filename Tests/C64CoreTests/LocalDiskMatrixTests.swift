@@ -687,6 +687,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(passed.contains(milestone.resultKey))
         XCTAssertTrue(log.contains("\"passed\":false"))
         XCTAssertTrue(log.contains("\"passed\":true"))
+        XCTAssertTrue(log.contains(#""formatVersion":2"#))
         XCTAssertTrue(log.contains(#""mediaType":"g64""#))
         XCTAssertTrue(log.contains(#""commandSummary":"LOAD\"*\",8,1 | RUN""#))
         XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
@@ -701,6 +702,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
+        XCTAssertEqual(records.last?.formatVersion, 2)
         XCTAssertEqual(records.last?.mediaType, "g64")
         XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
         XCTAssertEqual(records.last?.maxCycles, 1)
@@ -742,6 +744,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         try Data((legacyLine + "\n").utf8).write(to: legacyURL)
 
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
+        XCTAssertNil(legacyRecord.formatVersion)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.actionSummary)
         XCTAssertNil(legacyRecord.maxCycles)
@@ -2400,6 +2403,7 @@ private struct MatrixRunResult {
         let tapeDecode = tapeDecodeRecordFields(tapeStatus.tapeDecodeStatus)
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
+            formatVersion: 2,
             file: milestone.url.lastPathComponent,
             mediaType: milestone.mediaType.rawValue,
             commandSummary: milestone.commandSummary,
@@ -2776,6 +2780,7 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
+    let formatVersion: Int?
     let file: String
     let mediaType: String?
     let commandSummary: String
@@ -2838,6 +2843,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let screenshotPath: String?
 
     init(
+        formatVersion: Int? = nil,
         file: String,
         mediaType: String? = nil,
         commandSummary: String,
@@ -2899,6 +2905,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         colorRAMHash: String? = nil,
         screenshotPath: String? = nil
     ) {
+        self.formatVersion = formatVersion
         self.file = file
         self.mediaType = mediaType
         self.commandSummary = commandSummary
