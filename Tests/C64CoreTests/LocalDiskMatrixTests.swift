@@ -1643,6 +1643,39 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(summary.unexpectedFailureDetails.isEmpty)
     }
 
+    func testManifestMilestoneValidationRejectsDuplicateIDs() {
+        var first = validationMilestone(file: "first.g64", commands: [#"LOAD"*",8,1"#])
+        first.id = "giana-title"
+        var second = validationMilestone(file: "second.g64", commands: [#"LOAD"$",8"#])
+        second.id = "giana-title"
+
+        let errors = manifestMilestoneValidationErrors([first, second])
+
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(errors[0].contains("duplicate milestone id giana-title"), errors[0])
+        XCTAssertTrue(errors[0].contains("first.g64"), errors[0])
+        XCTAssertTrue(errors[0].contains("second.g64"), errors[0])
+    }
+
+    func testManifestMilestoneValidationRejectsDuplicateResultKeys() {
+        let first = validationMilestone(file: "demo.g64", commands: [#"LOAD"*",8,1"#])
+        let second = validationMilestone(file: "demo.g64", commands: [#"LOAD"*",8,1"#])
+
+        let errors = manifestMilestoneValidationErrors([first, second])
+
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(errors[0].contains("duplicate milestone key"), errors[0])
+        XCTAssertTrue(errors[0].contains("demo.g64"), errors[0])
+        XCTAssertTrue(errors[0].contains(#"LOAD"*",8,1"#), errors[0])
+    }
+
+    func testManifestMilestoneValidationAllowsDistinctModes() {
+        let fastLoad = validationMilestone(file: "demo.g64", driveMode: .fastLoad, commands: [#"LOAD"*",8,1"#])
+        let trueDrive = validationMilestone(file: "demo.g64", driveMode: .compat1541, commands: [#"LOAD"*",8,1"#])
+
+        XCTAssertTrue(manifestMilestoneValidationErrors([fastLoad, trueDrive]).isEmpty)
+    }
+
     func testLegacyMilestoneResultRecordsDecodeWithoutCategory() throws {
         let legacyLine = #"{"commandSummary":"RUN","driveMode":"fastLoad","elapsedCycles":5,"file":"demo.prg","machineProfile":"palC64","passed":false,"reason":"named milestone timeout"}"#
         let record = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
@@ -2002,6 +2035,32 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
     }
 
+    private func validationMilestone(
+        file: String,
+        machineProfile: CompatibilityMachineProfile = .palC64,
+        driveMode: CompatibilityDriveMode = .compat1541,
+        commands: [String]
+    ) -> LocalMilestone {
+        LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/\(file)"),
+            mediaType: .g64,
+            machineProfile: machineProfile,
+            driveMode: driveMode,
+            commands: commands,
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+    }
+
     private func localMilestones() throws -> [LocalMilestone] {
         let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_MILESTONE_LIMIT", extensions: Self.milestoneMediaExtensions)
         let manifestMilestones = try loadManifestMilestones(urls: urls)
@@ -2052,7 +2111,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
-        return manifest.milestones.compactMap { entry -> LocalMilestone? in
+        let milestones = manifest.milestones.compactMap { entry -> LocalMilestone? in
             guard let url = urls.first(where: { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }) else {
                 return nil
             }
@@ -2091,6 +2150,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             milestone.speedZoneRanges = entry.speedZoneRanges
             return milestone
         }
+        let validationErrors = manifestMilestoneValidationErrors(milestones)
+        guard validationErrors.isEmpty else {
+            throw ManifestValidationError(errors: validationErrors)
+        }
+        return milestones
     }
 
     private func mountPrePowerOnMedia(for milestone: LocalMilestone, into c64: C64) -> Bool {
@@ -3333,6 +3397,49 @@ private struct LocalMilestone {
             category: "skipped"
         )
     }
+}
+
+private struct ManifestValidationError: Error, CustomStringConvertible, LocalizedError {
+    let errors: [String]
+
+    var description: String {
+        "Invalid compatibility manifest: " + errors.joined(separator: "; ")
+    }
+
+    var errorDescription: String? {
+        description
+    }
+}
+
+private func manifestMilestoneValidationErrors(_ milestones: [LocalMilestone]) -> [String] {
+    var errors: [String] = []
+    var milestonesByID: [String: LocalMilestone] = [:]
+    var milestonesByKey: [MilestoneResultKey: LocalMilestone] = [:]
+
+    for milestone in milestones {
+        if let id = milestone.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !id.isEmpty {
+            if let previous = milestonesByID[id] {
+                errors.append("duplicate milestone id \(id) for \(previous.url.lastPathComponent) and \(milestone.url.lastPathComponent)")
+            } else {
+                milestonesByID[id] = milestone
+            }
+        }
+
+        let key = milestone.resultKey
+        if let previous = milestonesByKey[key] {
+            errors.append("duplicate milestone key \(milestoneResultKeySummary(key)) for \(previous.url.lastPathComponent) and \(milestone.url.lastPathComponent)")
+        } else {
+            milestonesByKey[key] = milestone
+        }
+    }
+
+    return errors
+}
+
+private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
+    let idText = key.id.map { "id=\($0) " } ?? ""
+    return "\(idText)file=\(key.file) profile=\(key.machineProfile) drive=\(key.driveMode) command=\(key.commandSummary)"
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
