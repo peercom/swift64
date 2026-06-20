@@ -968,8 +968,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.executed, 3)
         XCTAssertEqual(decoded.passed, 1)
         XCTAssertEqual(decoded.failed, 2)
-        XCTAssertEqual(decoded.skipped, 1)
         XCTAssertEqual(decoded.expectedFailures, 1)
+        XCTAssertEqual(decoded.unexpectedFailures, 1)
+        XCTAssertEqual(decoded.skipped, 1)
         XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
         XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
         XCTAssertEqual(decoded.runID, "summary-run")
@@ -1005,6 +1006,22 @@ final class LocalDiskMatrixTests: XCTestCase {
                 elapsedCycles: 30
             )
         ])
+        XCTAssertEqual(decoded.expectedFailureDetails, [
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "pc",
+                reason: "PC $0801 not in $C000-$C0FF",
+                elapsedCycles: 20
+            )
+        ])
+        XCTAssertEqual(decoded.unexpectedFailureDetails, [
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "emulator",
+                reason: "unexpected fallback path",
+                elapsedCycles: 30
+            )
+        ])
         XCTAssertEqual(decoded.unclassifiedFailureDetails, [
             MilestoneFailureSummary(
                 key: milestone.resultKey,
@@ -1021,6 +1038,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
@@ -1608,6 +1626,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         summary.record(record)
         XCTAssertEqual(summary.failed, 1)
         XCTAssertEqual(summary.expectedFailures, 1)
+        XCTAssertEqual(summary.unexpectedFailures, 0)
+        XCTAssertEqual(summary.expectedFailureDetails.map(\.key), [milestone.resultKey])
+        XCTAssertTrue(summary.unexpectedFailureDetails.isEmpty)
     }
 
     func testLegacyMilestoneResultRecordsDecodeWithoutCategory() throws {
@@ -3585,6 +3606,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var failed: Int = 0
     var skipped: Int = 0
     var expectedFailures: Int = 0
+    var unexpectedFailures: Int = 0
     var unclassifiedFailureCount: Int = 0
     var totalElapsedCycles: UInt64 = 0
     var maxElapsedCycles: UInt64 = 0
@@ -3592,6 +3614,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var categories: [String: Int] = [:]
     var failedMilestones: [MilestoneResultKey] = []
     var failedMilestoneDetails: [MilestoneFailureSummary] = []
+    var expectedFailureDetails: [MilestoneFailureSummary] = []
+    var unexpectedFailureDetails: [MilestoneFailureSummary] = []
     var unclassifiedFailureDetails: [MilestoneFailureSummary] = []
     var skippedMilestones: [MilestoneResultKey] = []
 
@@ -3633,24 +3657,25 @@ private struct MilestoneRunSummary: Codable, Equatable {
             passed += 1
         } else {
             failed += 1
-            if record.expectedFailureMatched == true {
-                expectedFailures += 1
-            }
-            failedMilestones.append(record.key)
-            failedMilestoneDetails.append(MilestoneFailureSummary(
+            let failureSummary = MilestoneFailureSummary(
                 key: record.key,
                 category: category,
                 reason: record.reason,
                 elapsedCycles: record.elapsedCycles
-            ))
-            if category == "unknown" || category == MilestoneResultCategory.emulator.rawValue {
+            )
+            if record.expectedFailureMatched == true {
+                expectedFailures += 1
+                expectedFailureDetails.append(failureSummary)
+            } else {
+                unexpectedFailures += 1
+                unexpectedFailureDetails.append(failureSummary)
+            }
+            failedMilestones.append(record.key)
+            failedMilestoneDetails.append(failureSummary)
+            if record.expectedFailureMatched != true
+                && (category == "unknown" || category == MilestoneResultCategory.emulator.rawValue) {
                 unclassifiedFailureCount += 1
-                unclassifiedFailureDetails.append(MilestoneFailureSummary(
-                    key: record.key,
-                    category: category,
-                    reason: record.reason,
-                    elapsedCycles: record.elapsedCycles
-                ))
+                unclassifiedFailureDetails.append(failureSummary)
             }
         }
         categories[category, default: 0] += 1
@@ -3668,7 +3693,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
-        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 
     var hasUnclassifiedFailures: Bool {
