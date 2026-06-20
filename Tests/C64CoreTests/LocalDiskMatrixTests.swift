@@ -679,6 +679,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let tapeC64 = C64()
         XCTAssertTrue(tapeC64.mountTape(makeTinyTAP(pulses: [0x01, 0x02]), fileName: "loader.tap"))
         XCTAssertTrue(tapeC64.mountDisk(makeResultLogD64WithErrorTable(), fileName: "result-log.d64"))
+        writeScreenText("READY.", into: tapeC64, row: 4, column: 2)
         try appendMilestoneResult(
             MatrixRunResult(passed: true, elapsedCycles: 20, reason: "named milestone reached").record(
                 for: milestone,
@@ -694,13 +695,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(passed.contains(milestone.resultKey))
         XCTAssertTrue(log.contains("\"passed\":false"))
         XCTAssertTrue(log.contains("\"passed\":true"))
-        XCTAssertTrue(log.contains(#""formatVersion":2"#))
+        XCTAssertTrue(log.contains(#""formatVersion":3"#))
         XCTAssertTrue(log.contains(#""mediaType":"g64""#))
         XCTAssertTrue(log.contains(#""commandSummary":"LOAD\"*\",8,1 | RUN""#))
         XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
         XCTAssertTrue(log.contains(#""maxCycles":1"#))
         XCTAssertTrue(log.contains(#""category":"#))
         XCTAssertTrue(log.contains(#""finalPC":"#))
+        XCTAssertTrue(log.contains(#""finalScreenText":"#))
         XCTAssertTrue(log.contains(#""screenRAMHash":"#))
         XCTAssertTrue(log.contains(#""finalTapeDecodeStatus":"rawPulsesOnly""#))
         XCTAssertTrue(log.contains(#""finalMountedTapeName":"loader.tap""#))
@@ -709,7 +711,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
-        XCTAssertEqual(records.last?.formatVersion, 2)
+        XCTAssertEqual(records.last?.formatVersion, 3)
         XCTAssertEqual(records.last?.mediaType, "g64")
         XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
         XCTAssertEqual(records.last?.maxCycles, 1)
@@ -747,6 +749,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalCanExportCapturedTAP, false)
         XCTAssertEqual(records.last?.finalTapeHasUnsavedChanges, false)
         XCTAssertEqual(records.last?.finalCanExportSavedT64, false)
+        XCTAssertTrue(records.last?.finalScreenText?.contains("READY.") == true)
+        XCTAssertLessThanOrEqual(records.last?.finalScreenText?.count ?? 0, 1024)
 
         let legacyURL = directory.appendingPathComponent("legacy.jsonl")
         let legacyLine = #"{"commandSummary":"LOAD\"*\",8,1 | RUN","driveMode":"compat1541","elapsedCycles":5,"file":"demo.g64","machineProfile":"palC64","passed":true,"reason":"old pass"}"#
@@ -765,6 +769,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalFailureReason)
         XCTAssertNil(legacyRecord.finalMediaFormat)
         XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
+        XCTAssertNil(legacyRecord.finalScreenText)
         XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(milestone.resultKey))
     }
 
@@ -2266,32 +2271,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private func screenText(_ ram: [UInt8]) -> String {
-        guard ram.count >= 0x0800 else { return "" }
-        return (0..<25)
-            .map { row in
-                let start = 0x0400 + row * 40
-                let end = start + 40
-                return ram[start..<end].map(screenCodeCharacter).joined()
-            }
-            .joined(separator: "\n")
-    }
-
-    private func screenCodeCharacter(_ byte: UInt8) -> String {
-        switch byte {
-        case 0x00: return "@"
-        case 0x01...0x1A:
-            return String(UnicodeScalar(UInt8(ascii: "A") + byte - 1))
-        case 0x1B: return "["
-        case 0x1C: return "\\"
-        case 0x1D: return "]"
-        case 0x1E: return "^"
-        case 0x20: return " "
-        case 0x21...0x3F:
-            return String(UnicodeScalar(byte))
-        case 0x40: return "-"
-        default:
-            return " "
-        }
+        milestoneScreenText(ram)
     }
 
     private func asciiToScreenCode(_ byte: UInt8) -> UInt8 {
@@ -2449,6 +2429,36 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 }
 
+private func milestoneScreenText(_ ram: [UInt8]) -> String {
+    guard ram.count >= 0x0800 else { return "" }
+    let text = (0..<25)
+        .map { row in
+            let start = 0x0400 + row * 40
+            let end = start + 40
+            return ram[start..<end].map(milestoneScreenCodeCharacter).joined()
+        }
+        .joined(separator: "\n")
+    return String(text.prefix(1024))
+}
+
+private func milestoneScreenCodeCharacter(_ byte: UInt8) -> String {
+    switch byte {
+    case 0x00: return "@"
+    case 0x01...0x1A:
+        return String(UnicodeScalar(UInt8(ascii: "A") + byte - 1))
+    case 0x1B: return "["
+    case 0x1C: return "\\"
+    case 0x1D: return "]"
+    case 0x1E: return "^"
+    case 0x20: return " "
+    case 0x21...0x3F:
+        return String(UnicodeScalar(byte))
+    case 0x40: return "-"
+    default:
+        return " "
+    }
+}
+
 private struct MatrixRunResult {
     let passed: Bool
     let elapsedCycles: UInt64
@@ -2483,7 +2493,7 @@ private struct MatrixRunResult {
         let tapeDecode = tapeDecodeRecordFields(tapeStatus.tapeDecodeStatus)
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
-            formatVersion: 2,
+            formatVersion: 3,
             file: milestone.url.lastPathComponent,
             mediaType: milestone.mediaType.rawValue,
             commandSummary: milestone.commandSummary,
@@ -2543,6 +2553,7 @@ private struct MatrixRunResult {
             finalCanExportCapturedTAP: tapeStatus.canExportCapturedTAP,
             finalTapeHasUnsavedChanges: tapeStatus.tapeHasUnsavedChanges,
             finalCanExportSavedT64: tapeStatus.canExportSavedT64,
+            finalScreenText: milestoneScreenText(c64.memory.ram),
             screenRAMHash: CompatibilityHash.screenRAM(c64.memory.ram),
             colorRAMHash: CompatibilityHash.colorRAM(c64.memory.colorRAM),
             screenshotPath: screenshotURL?.path
@@ -2943,6 +2954,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalCanExportCapturedTAP: Bool?
     let finalTapeHasUnsavedChanges: Bool?
     let finalCanExportSavedT64: Bool?
+    let finalScreenText: String?
     let screenRAMHash: String?
     let colorRAMHash: String?
     let screenshotPath: String?
@@ -3008,6 +3020,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalCanExportCapturedTAP: Bool? = nil,
         finalTapeHasUnsavedChanges: Bool? = nil,
         finalCanExportSavedT64: Bool? = nil,
+        finalScreenText: String? = nil,
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
         screenshotPath: String? = nil
@@ -3072,6 +3085,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalCanExportCapturedTAP = finalCanExportCapturedTAP
         self.finalTapeHasUnsavedChanges = finalTapeHasUnsavedChanges
         self.finalCanExportSavedT64 = finalCanExportSavedT64
+        self.finalScreenText = finalScreenText
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
         self.screenshotPath = screenshotPath
