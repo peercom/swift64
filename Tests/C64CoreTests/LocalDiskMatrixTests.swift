@@ -14,6 +14,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneScreenshotFailuresEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_FAILURES"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
+    private let milestoneFailOnUnexpectedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED"
     private let milestoneRunIDEnv = "SWIFT64_LOCAL_MILESTONE_RUN_ID"
 
     func testMediaStatusMismatchReportsProtectedMediaCounters() {
@@ -290,7 +291,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: shouldResumeOnlyMatchingManifest,
             screenshotFailuresEnabled: screenshotFailuresEnabled,
             milestoneLimit: localMilestoneLimit,
-            failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures
+            failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
+            failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures
         )
         for milestone in milestones {
             if passedMilestones.contains(milestone.resultKey) {
@@ -351,6 +353,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         try writeMilestoneRunSummary(runSummary, to: summaryURL)
         if shouldFailOnUnclassifiedMilestoneFailures {
             assertNoUnclassifiedMilestoneFailures(runSummary)
+        }
+        if shouldFailOnUnexpectedMilestoneFailures {
+            assertNoUnexpectedMilestoneFailures(runSummary)
         }
         print("Local named milestone matrix:\n" + summaries.joined(separator: "\n") + "\n" + runSummary.consoleSummary)
     }
@@ -950,7 +955,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: true,
             screenshotFailuresEnabled: true,
             milestoneLimit: 5,
-            failOnUnclassified: true
+            failOnUnclassified: true,
+            failOnUnexpected: true
         )
         summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(for: milestone, c64: C64()))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(
@@ -983,6 +989,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.screenshotFailuresEnabled, true)
         XCTAssertEqual(decoded.milestoneLimit, 5)
         XCTAssertEqual(decoded.failOnUnclassified, true)
+        XCTAssertEqual(decoded.failOnUnexpected, true)
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
         XCTAssertEqual(decoded.formatVersion, 1)
         XCTAssertEqual(decoded.totalElapsedCycles, 60)
@@ -1032,9 +1039,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         ])
         XCTAssertEqual(decoded.skippedMilestones, [milestone.resultKey])
         XCTAssertTrue(decoded.hasUnclassifiedFailures)
+        XCTAssertTrue(decoded.hasUnexpectedFailures)
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("demo.g64"))
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("LOAD\"*\",8,1"))
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("unexpected fallback path"))
+        XCTAssertTrue(decoded.unexpectedFailureSummary.contains("demo.g64"))
+        XCTAssertTrue(decoded.unexpectedFailureSummary.contains("unexpected fallback path"))
+        XCTAssertFalse(decoded.unexpectedFailureSummary.contains("PC $0801 not in"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
@@ -1070,6 +1081,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         XCTAssertFalse(summary.hasUnclassifiedFailures)
         XCTAssertEqual(summary.unclassifiedFailureSummary, "No unclassified milestone failures.")
+        XCTAssertTrue(summary.hasUnexpectedFailures)
     }
 
     func testMilestoneManifestHashUsesStableContentFingerprint() throws {
@@ -1773,6 +1785,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         ProcessInfo.processInfo.environment[milestoneFailOnUnclassifiedEnv] == "1"
     }
 
+    private var shouldFailOnUnexpectedMilestoneFailures: Bool {
+        ProcessInfo.processInfo.environment[milestoneFailOnUnexpectedEnv] == "1"
+    }
+
     private var localMilestoneLimit: Int? {
         Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_LIMIT"] ?? "")
     }
@@ -1808,6 +1824,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertFalse(summary.hasUnclassifiedFailures, summary.unclassifiedFailureSummary, file: file, line: line)
+    }
+
+    private func assertNoUnexpectedMilestoneFailures(
+        _ summary: MilestoneRunSummary,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertFalse(summary.hasUnexpectedFailures, summary.unexpectedFailureSummary, file: file, line: line)
     }
 
     private func milestoneResultLogURL() -> URL? {
@@ -3600,6 +3624,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var screenshotFailuresEnabled: Bool = false
     var milestoneLimit: Int?
     var failOnUnclassified: Bool = false
+    var failOnUnexpected: Bool = false
     var total: Int = 0
     var executed: Int = 0
     var passed: Int = 0
@@ -3629,7 +3654,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
         strictManifestResumeEnabled: Bool,
         screenshotFailuresEnabled: Bool,
         milestoneLimit: Int?,
-        failOnUnclassified: Bool
+        failOnUnclassified: Bool,
+        failOnUnexpected: Bool
     ) {
         resultRecordFormatVersion = MilestoneResultRecord.currentFormatVersion
         self.runID = runID
@@ -3642,6 +3668,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.screenshotFailuresEnabled = screenshotFailuresEnabled
         self.milestoneLimit = milestoneLimit
         self.failOnUnclassified = failOnUnclassified
+        self.failOnUnexpected = failOnUnexpected
     }
 
     mutating func record(_ record: MilestoneResultRecord) {
@@ -3700,6 +3727,10 @@ private struct MilestoneRunSummary: Codable, Equatable {
         unclassifiedFailureCount > 0
     }
 
+    var hasUnexpectedFailures: Bool {
+        unexpectedFailures > 0
+    }
+
     var unclassifiedFailureSummary: String {
         guard hasUnclassifiedFailures else {
             return "No unclassified milestone failures."
@@ -3709,6 +3740,17 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
         }
         return "Unclassified milestone failures (\(unclassifiedFailureCount)):\n" + details.joined(separator: "\n")
+    }
+
+    var unexpectedFailureSummary: String {
+        guard hasUnexpectedFailures else {
+            return "No unexpected milestone failures."
+        }
+        let details = unexpectedFailureDetails.map { detail in
+            let idText = detail.key.id.map { "\($0) " } ?? ""
+            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
+        }
+        return "Unexpected milestone failures (\(unexpectedFailures)):\n" + details.joined(separator: "\n")
     }
 }
 
