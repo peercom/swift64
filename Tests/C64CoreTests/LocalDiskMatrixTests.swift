@@ -661,7 +661,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let logURL = directory.appendingPathComponent("milestones.jsonl")
-        let milestone = LocalMilestone(
+        var milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/demo.g64"),
             mediaType: .g64,
             machineProfile: .palC64,
@@ -679,6 +679,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             colorRAMHash: nil,
             screenshotName: nil
         )
+        milestone.id = "demo-loader"
+        milestone.name = "Demo Loader"
 
         try appendMilestoneResult(
             MatrixRunResult(passed: false, elapsedCycles: 10, reason: "first failure").record(for: milestone, c64: C64()),
@@ -719,6 +721,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
         XCTAssertEqual(records.last?.formatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertEqual(records.last?.milestoneID, "demo-loader")
+        XCTAssertEqual(records.last?.milestoneName, "Demo Loader")
+        XCTAssertEqual(records.last?.key.id, "demo-loader")
         XCTAssertEqual(records.last?.mediaType, "g64")
         XCTAssertEqual(records.last?.actionSummary, [#"LOAD"*",8,1"#, "RUN"])
         XCTAssertEqual(records.last?.maxCycles, 1)
@@ -766,6 +771,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
         XCTAssertNil(legacyRecord.formatVersion)
         XCTAssertNil(legacyRecord.mediaType)
+        XCTAssertNil(legacyRecord.milestoneID)
+        XCTAssertNil(legacyRecord.milestoneName)
         XCTAssertNil(legacyRecord.actionSummary)
         XCTAssertNil(legacyRecord.maxCycles)
         XCTAssertNil(legacyRecord.finalReadHalfTrack)
@@ -777,7 +784,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalMediaFormat)
         XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
         XCTAssertNil(legacyRecord.finalScreenText)
-        XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(milestone.resultKey))
+        XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(legacyRecord.key))
     }
 
     func testMilestoneRunSummaryWritesAggregateJSON() throws {
@@ -1759,6 +1766,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 colorRAMHash: entry.colorRAMHash,
                 screenshotName: entry.screenshotName
             )
+            milestone.id = entry.id
+            milestone.name = entry.name
             milestone.tapeStatus = entry.tapeStatus
             milestone.weakBitRanges = entry.weakBitRanges
             milestone.speedZoneRanges = entry.speedZoneRanges
@@ -2526,6 +2535,8 @@ private struct MatrixRunResult {
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
             formatVersion: MilestoneResultRecord.currentFormatVersion,
+            milestoneID: milestone.id,
+            milestoneName: milestone.name,
             file: milestone.url.lastPathComponent,
             mediaType: milestone.mediaType.rawValue,
             commandSummary: milestone.commandSummary,
@@ -2877,6 +2888,8 @@ private extension CompatibilityKey {
 }
 
 private struct LocalMilestone {
+    var id: String?
+    var name: String?
     let url: URL
     let mediaType: CompatibilityMediaType
     let machineProfile: CompatibilityMachineProfile
@@ -2917,6 +2930,7 @@ private struct LocalMilestone {
 
     var resultKey: MilestoneResultKey {
         MilestoneResultKey(
+            id: id,
             file: url.lastPathComponent,
             commandSummary: commandSummary,
             machineProfile: machineProfile.rawValue,
@@ -2926,9 +2940,11 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 3
+    static let currentFormatVersion = 4
 
     let formatVersion: Int?
+    let milestoneID: String?
+    let milestoneName: String?
     let file: String
     let mediaType: String?
     let commandSummary: String
@@ -2995,6 +3011,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
 
     init(
         formatVersion: Int? = nil,
+        milestoneID: String? = nil,
+        milestoneName: String? = nil,
         file: String,
         mediaType: String? = nil,
         commandSummary: String,
@@ -3060,6 +3078,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         screenshotPath: String? = nil
     ) {
         self.formatVersion = formatVersion
+        self.milestoneID = milestoneID
+        self.milestoneName = milestoneName
         self.file = file
         self.mediaType = mediaType
         self.commandSummary = commandSummary
@@ -3127,6 +3147,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
 
     var key: MilestoneResultKey {
         MilestoneResultKey(
+            id: milestoneID,
             file: file,
             commandSummary: commandSummary,
             machineProfile: machineProfile,
@@ -3241,13 +3262,15 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "No unclassified milestone failures."
         }
         let details = unclassifiedFailureDetails.map { detail in
-            "\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
+            let idText = detail.key.id.map { "\($0) " } ?? ""
+            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
         }
         return "Unclassified milestone failures (\(unclassifiedFailureCount)):\n" + details.joined(separator: "\n")
     }
 }
 
 private struct MilestoneResultKey: Codable, Hashable {
+    let id: String?
     let file: String
     let commandSummary: String
     let machineProfile: String

@@ -7,6 +7,8 @@ final class CompatibilityManifestTests: XCTestCase {
         {
           "milestones": [
             {
+              "id": "giana-title-compat1541",
+              "name": "Great Giana Sisters title screen",
               "file": "demo.g64",
               "mediaType": "g64",
               "machineProfile": "ntscC64",
@@ -141,6 +143,8 @@ final class CompatibilityManifestTests: XCTestCase {
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
         let milestone = try XCTUnwrap(manifest.milestones.first)
 
+        XCTAssertEqual(milestone.id, "giana-title-compat1541")
+        XCTAssertEqual(milestone.name, "Great Giana Sisters title screen")
         XCTAssertEqual(milestone.file, "demo.g64")
         XCTAssertEqual(milestone.mediaType, .g64)
         XCTAssertEqual(milestone.machineProfile, .ntscC64)
@@ -276,6 +280,8 @@ final class CompatibilityManifestTests: XCTestCase {
         let milestone = try XCTUnwrap(manifest.milestones.first)
 
         XCTAssertEqual(milestone.file, "legacy.d64")
+        XCTAssertNil(milestone.id)
+        XCTAssertNil(milestone.name)
         XCTAssertNil(milestone.mediaType)
         XCTAssertNil(milestone.machineProfile)
         XCTAssertNil(milestone.driveMode)

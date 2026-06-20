@@ -177,6 +177,8 @@ public enum CompatibilityAction: Decodable, Equatable {
 }
 
 public struct CompatibilityMilestone: Decodable, Equatable {
+    public let id: String?
+    public let name: String?
     public let file: String
     public let mediaType: CompatibilityMediaType?
     public let machineProfile: CompatibilityMachineProfile?
@@ -207,6 +209,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let screenshotName: String?
 
     private enum CodingKeys: String, CodingKey {
+        case id
+        case name
         case file
         case mediaType
         case machineProfile
@@ -239,6 +243,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     }
 
     public init(
+        id: String? = nil,
+        name: String? = nil,
         file: String,
         mediaType: CompatibilityMediaType? = nil,
         machineProfile: CompatibilityMachineProfile? = nil,
@@ -267,6 +273,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         colorRAMHash: String? = nil,
         screenshotName: String? = nil
     ) {
+        self.id = id
+        self.name = name
         self.file = file
         self.mediaType = mediaType
         self.machineProfile = machineProfile
@@ -298,6 +306,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     }
 
     public init(
+        id: String? = nil,
+        name: String? = nil,
         file: String,
         mediaType: CompatibilityMediaType? = nil,
         machineProfile: CompatibilityMachineProfile? = nil,
@@ -327,6 +337,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         colorRAMHash: String? = nil,
         screenshotName: String? = nil
     ) {
+        self.id = id
+        self.name = name
         self.file = file
         self.mediaType = mediaType
         self.machineProfile = machineProfile
@@ -359,6 +371,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
         file = try container.decode(String.self, forKey: .file)
         mediaType = try container.decodeIfPresent(CompatibilityMediaType.self, forKey: .mediaType)
         machineProfile = try container.decodeIfPresent(CompatibilityMachineProfile.self, forKey: .machineProfile)
