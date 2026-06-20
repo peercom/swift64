@@ -273,6 +273,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         var runSummary = MilestoneRunSummary()
         runSummary.configureRun(
             manifestURL: activeMilestoneManifestURL(),
+            manifestHash: activeMilestoneManifestHash(),
             resultLogURL: resultLogURL,
             screenshotDirectoryURL: screenshotDirectoryURL,
             resumeEnabled: shouldResumeMilestoneResults,
@@ -815,6 +816,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         var summary = MilestoneRunSummary()
         summary.configureRun(
             manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: "0123456789abcdef",
             resultLogURL: URL(fileURLWithPath: "/tmp/results.jsonl"),
             screenshotDirectoryURL: URL(fileURLWithPath: "/tmp/screens", isDirectory: true),
             resumeEnabled: true,
@@ -837,6 +839,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
         XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
         XCTAssertEqual(decoded.manifestPath, "/tmp/compatibility.json")
+        XCTAssertEqual(decoded.manifestHash, "0123456789abcdef")
         XCTAssertEqual(decoded.resultLogPath, "/tmp/results.jsonl")
         XCTAssertEqual(decoded.screenshotDirectoryPath, "/tmp/screens")
         XCTAssertEqual(decoded.resumeEnabled, true)
@@ -911,6 +914,21 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         XCTAssertFalse(summary.hasUnclassifiedFailures)
         XCTAssertEqual(summary.unclassifiedFailureSummary, "No unclassified milestone failures.")
+    }
+
+    func testMilestoneManifestHashUsesStableContentFingerprint() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("compatibility.json")
+        let data = Data(#"{"milestones":[]}"#.utf8)
+        try data.write(to: manifestURL)
+
+        XCTAssertEqual(milestoneManifestHash(for: manifestURL), CompatibilityHash.fnv1a64(data))
+        XCTAssertNil(milestoneManifestHash(for: directory.appendingPathComponent("missing.json")))
+        XCTAssertNil(milestoneManifestHash(for: nil))
     }
 
     func testNamedMilestoneRequiresColorRAMHash() {
@@ -1508,6 +1526,18 @@ final class LocalDiskMatrixTests: XCTestCase {
     private func activeMilestoneManifestURL() -> URL? {
         let url = localDiskRoot.appendingPathComponent("compatibility.json")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func activeMilestoneManifestHash() -> String? {
+        milestoneManifestHash(for: activeMilestoneManifestURL())
+    }
+
+    private func milestoneManifestHash(for url: URL?) -> String? {
+        guard let url,
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return CompatibilityHash.fnv1a64(data)
     }
 
     private func assertNoUnclassifiedMilestoneFailures(
@@ -3168,6 +3198,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
     var manifestPath: String?
+    var manifestHash: String?
     var resultLogPath: String?
     var screenshotDirectoryPath: String?
     var resumeEnabled: Bool = false
@@ -3190,6 +3221,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
 
     mutating func configureRun(
         manifestURL: URL?,
+        manifestHash: String?,
         resultLogURL: URL?,
         screenshotDirectoryURL: URL?,
         resumeEnabled: Bool,
@@ -3198,6 +3230,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     ) {
         resultRecordFormatVersion = MilestoneResultRecord.currentFormatVersion
         manifestPath = manifestURL?.path
+        self.manifestHash = manifestHash
         resultLogPath = resultLogURL?.path
         screenshotDirectoryPath = screenshotDirectoryURL?.path
         self.resumeEnabled = resumeEnabled
