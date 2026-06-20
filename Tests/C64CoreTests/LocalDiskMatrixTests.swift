@@ -157,6 +157,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         milestone.weakBitRanges = [
             CompatibilityWeakBitRange(halfTrack: 34, startBit: 0, endBit: 15)
         ]
+        milestone.speedZoneRanges = [
+            CompatibilitySpeedZoneRange(halfTrack: 34, startByte: 0, endByte: 3, zone: 3)
+        ]
 
         let c64 = C64()
         XCTAssertTrue(mountPrePowerOnMedia(for: milestone, into: c64))
@@ -164,12 +167,20 @@ final class LocalDiskMatrixTests: XCTestCase {
         let capabilities = try XCTUnwrap(c64.emulationStatus.mediaCapabilities)
         XCTAssertEqual(capabilities.weakBitRangeCount, 1)
         XCTAssertEqual(capabilities.weakBitTotalBitCount, 16)
+        let speedMap = try XCTUnwrap(c64.drive1541.disk.trackInfo(halfTrack: 34)?.speedZoneMap)
+        XCTAssertEqual(capabilities.variableSpeedZoneByteCount, speedMap.count)
         XCTAssertEqual(c64.drive1541.disk.trackInfo(halfTrack: 34)?.weakBitRanges, [
             DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)
         ])
+        XCTAssertEqual(Array(speedMap.prefix(4)), [3, 3, 3, 3])
 
         milestone.weakBitRanges = [
             CompatibilityWeakBitRange(halfTrack: 35, startBit: 0, endBit: 15)
+        ]
+        XCTAssertFalse(mountPrePowerOnMedia(for: milestone, into: C64()))
+        milestone.weakBitRanges = []
+        milestone.speedZoneRanges = [
+            CompatibilitySpeedZoneRange(halfTrack: 35, startByte: 0, endByte: 3, zone: 3)
         ]
         XCTAssertFalse(mountPrePowerOnMedia(for: milestone, into: C64()))
     }
@@ -591,7 +602,13 @@ final class LocalDiskMatrixTests: XCTestCase {
             pcRanges: [0xC000...0xC0FF],
             minGCRReads: 1,
             minByteReady: 1,
-            driveStatus: CompatibilityDriveStatus(minWeakBitReads: 1, track: 17, hasDisk: true),
+            driveStatus: CompatibilityDriveStatus(
+                minWeakBitReads: 1,
+                minVariableSpeedZoneSamples: 1,
+                requiredVariableSpeedZones: [0, 4],
+                track: 17,
+                hasDisk: true
+            ),
             mediaStatus: CompatibilityMediaStatus(isNativeLowLevel: true),
             ramSignatures: [CompatibilityRAMSignature(address: 0x0801, bytes: [0x01, 0x08])],
             colorRAMSignatures: [CompatibilityRAMSignature(address: 0, bytes: [0x01, 0x02])],
@@ -610,6 +627,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("GCR reads 0 < 1"))
         XCTAssertTrue(reason.contains("byte-ready 0 < 1"))
         XCTAssertTrue(reason.contains("drive.minWeakBitReads 0 < 1"))
+        XCTAssertTrue(reason.contains("drive.minVariableSpeedZoneSamples 0 < 1"))
+        XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones missing 0"))
+        XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones invalid 4"))
         XCTAssertTrue(reason.contains("drive.track"))
         XCTAssertTrue(reason.contains("drive.hasDisk"))
         XCTAssertTrue(reason.contains("media capabilities unavailable"))
@@ -682,6 +702,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
         XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
         XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
+        XCTAssertEqual(records.last?.finalVariableSpeedZoneSampleCount, 0)
+        XCTAssertEqual(records.last?.finalVariableSpeedZoneMask, 0)
         XCTAssertEqual(records.last?.finalMediaFormat, "D64")
         XCTAssertEqual(records.last?.finalMediaPopulatedHalfTrackCount, 35)
         XCTAssertEqual(records.last?.finalMediaNativeLowLevelTrackCount, 0)
@@ -716,6 +738,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
         XCTAssertNil(legacyRecord.finalReadHalfTrack)
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
+        XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
+        XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
         XCTAssertNil(legacyRecord.finalMediaFormat)
         XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
         XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(milestone.resultKey))
@@ -1252,6 +1276,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "PC $0801 not in $C000-$C0FF").category, .pc)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "GCR reads 0 < 64").category, .drive)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media capabilities unavailable").category, .media)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minWeakBitReads 0 < 1").category, .protectedMedia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minVariableSpeedZoneSamples 0 < 1").category, .protectedMedia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media.variableSpeedZoneByteCount 0 != 256").category, .protectedMedia)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "tape.rawPlaybackActive false != true").category, .tape)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "RAM $0801 00 != 01").category, .ram)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "color RAM $0000 00 != 01").category, .screen)
@@ -1441,6 +1468,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
             let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
             let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
+            let variableSpeedZoneSamples = driveStatus.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
             let pcReached = milestone.pcRanges.isEmpty || milestone.pcRanges.contains { $0.contains(c64.cpu.pc) }
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
             let driveExpectationMatches = milestone.driveStatus.map { expectation in
@@ -1450,7 +1478,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                     gcrReads: gcrReads,
                     byteReady: byteReady,
                     syncDetections: syncDetections,
-                    weakBitReads: weakBitReads
+                    weakBitReads: weakBitReads,
+                    variableSpeedZoneSamples: variableSpeedZoneSamples
                 ).isEmpty
             } ?? true
             let mediaExpectationMatches = milestone.mediaStatus.map { expectation in
@@ -1608,6 +1637,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             )
             milestone.tapeStatus = entry.tapeStatus
             milestone.weakBitRanges = entry.weakBitRanges
+            milestone.speedZoneRanges = entry.speedZoneRanges
             return milestone
         }
     }
@@ -1617,6 +1647,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         case .d64, .g64:
             guard c64.mountDisk(milestone.url) else { return false }
             return applyWeakBitRanges(milestone.weakBitRanges, to: c64)
+                && applySpeedZoneRanges(milestone.speedZoneRanges, to: c64)
         case .t64, .tap:
             return c64.mountTape(milestone.url)
         case .crt:
@@ -1630,6 +1661,19 @@ final class LocalDiskMatrixTests: XCTestCase {
         let rangesByHalfTrack = Dictionary(grouping: ranges, by: \.halfTrack)
         for (halfTrack, halfTrackRanges) in rangesByHalfTrack {
             guard c64.drive1541.disk.setWeakBitRanges(
+                halfTrackRanges.map(\.diskRange),
+                forHalfTrack: halfTrack
+            ) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func applySpeedZoneRanges(_ ranges: [CompatibilitySpeedZoneRange], to c64: C64) -> Bool {
+        let rangesByHalfTrack = Dictionary(grouping: ranges, by: \.halfTrack)
+        for (halfTrack, halfTrackRanges) in rangesByHalfTrack {
+            guard c64.drive1541.disk.setSpeedZoneRanges(
                 halfTrackRanges.map(\.diskRange),
                 forHalfTrack: halfTrack
             ) else {
@@ -1667,6 +1711,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
         let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
         let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
+        let variableSpeedZoneSamples = driveStatus.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
         var unmet: [String] = []
 
         if !milestone.pcRanges.isEmpty && !milestone.pcRanges.contains(where: { $0.contains(c64.cpu.pc) }) {
@@ -1685,7 +1730,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 gcrReads: gcrReads,
                 byteReady: byteReady,
                 syncDetections: syncDetections,
-                weakBitReads: weakBitReads
+                weakBitReads: weakBitReads,
+                variableSpeedZoneSamples: variableSpeedZoneSamples
             ))
         }
         if let mediaStatusExpectation = milestone.mediaStatus {
@@ -1746,7 +1792,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         gcrReads: UInt64,
         byteReady: UInt64,
         syncDetections: UInt64,
-        weakBitReads: UInt64
+        weakBitReads: UInt64,
+        variableSpeedZoneSamples: UInt64
     ) -> [String] {
         var mismatches: [String] = []
         if let minGCRReads = expectation.minGCRReads, gcrReads < nonNegativeUInt64(minGCRReads) {
@@ -1762,6 +1809,19 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let minWeakBitReads = expectation.minWeakBitReads,
            weakBitReads < nonNegativeUInt64(minWeakBitReads) {
             mismatches.append("drive.minWeakBitReads \(weakBitReads) < \(minWeakBitReads)")
+        }
+        if let minVariableSpeedZoneSamples = expectation.minVariableSpeedZoneSamples,
+           variableSpeedZoneSamples < nonNegativeUInt64(minVariableSpeedZoneSamples) {
+            mismatches.append("drive.minVariableSpeedZoneSamples \(variableSpeedZoneSamples) < \(minVariableSpeedZoneSamples)")
+        }
+        for zone in expectation.requiredVariableSpeedZones {
+            guard (0...3).contains(zone) else {
+                mismatches.append("drive.requiredVariableSpeedZones invalid \(zone)")
+                continue
+            }
+            if snapshot.variableSpeedZoneMask & UInt8(1 << zone) == 0 {
+                mismatches.append("drive.requiredVariableSpeedZones missing \(zone)")
+            }
         }
         if let track = expectation.track, snapshot.track != track {
             mismatches.append("drive.track \(snapshot.track) != \(track)")
@@ -2310,7 +2370,7 @@ private struct MatrixRunResult {
         } ?? "none"
         let readText = drive.readHalfTrack.map { "readHalf=\($0)\(drive.usingHalfTrackFallback ? ",fallback" : "")" } ?? "readHalf=none"
         let verdict = passed ? "PASS" : "FAIL"
-        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) weakBits=\(drive.weakBitReadCount) reason=\(reason)"
+        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) weakBits=\(drive.weakBitReadCount) speedSamples=\(drive.variableSpeedZoneSampleCount) speedZones=$\(hex8(drive.variableSpeedZoneMask)) reason=\(reason)"
     }
 
     var category: MilestoneResultCategory {
@@ -2319,6 +2379,10 @@ private struct MatrixRunResult {
 
     private func hex16(_ value: UInt16) -> String {
         String(format: "%04X", value)
+    }
+
+    private func hex8(_ value: UInt8) -> String {
+        String(format: "%02X", value)
     }
 
     func record(for milestone: LocalMilestone, c64: C64, screenshotURL: URL? = nil) -> MilestoneResultRecord {
@@ -2345,6 +2409,8 @@ private struct MatrixRunResult {
             finalByteReadyCount: drive.byteReadyCount,
             finalVia2PortAReadCount: drive.via2PortAReadCount,
             finalWeakBitReadCount: drive.weakBitReadCount,
+            finalVariableSpeedZoneSampleCount: drive.variableSpeedZoneSampleCount,
+            finalVariableSpeedZoneMask: drive.variableSpeedZoneMask,
             finalLastIECCommandSummary: drive.lastIECCommandSummary,
             finalMediaFormat: media?.format.displayName,
             finalMediaPopulatedHalfTrackCount: media?.populatedHalfTrackCount,
@@ -2425,6 +2491,7 @@ private enum MilestoneResultCategory: String {
     case cpu
     case drive
     case media
+    case protectedMedia
     case pc
     case ram
     case screen
@@ -2443,6 +2510,18 @@ private enum MilestoneResultCategory: String {
         }
         if lower.contains("pc $") {
             return .pc
+        }
+        if lower.contains("weakbit")
+            || lower.contains("weak bit")
+            || lower.contains("weak-bit")
+            || lower.contains("variable speed")
+            || lower.contains("variable-speed")
+            || lower.contains("variablespeed")
+            || lower.contains("speedzone")
+            || lower.contains("speed zone")
+            || lower.contains("speed-zone")
+            || lower.contains("requiredvariablespeedzones") {
+            return .protectedMedia
         }
         if lower.contains("media") {
             return .media
@@ -2649,6 +2728,7 @@ private struct LocalMilestone {
     let driveStatus: CompatibilityDriveStatus?
     let mediaStatus: CompatibilityMediaStatus?
     var weakBitRanges: [CompatibilityWeakBitRange] = []
+    var speedZoneRanges: [CompatibilitySpeedZoneRange] = []
     var tapeStatus: CompatibilityTapeStatus? = nil
     let ramSignatures: [CompatibilityRAMSignature]
     let colorRAMSignatures: [CompatibilityRAMSignature]
@@ -2702,6 +2782,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalByteReadyCount: UInt64?
     let finalVia2PortAReadCount: UInt64?
     let finalWeakBitReadCount: UInt64?
+    let finalVariableSpeedZoneSampleCount: UInt64?
+    let finalVariableSpeedZoneMask: UInt8?
     let finalLastIECCommandSummary: String?
     let finalMediaFormat: String?
     let finalMediaPopulatedHalfTrackCount: Int?
@@ -2759,6 +2841,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalByteReadyCount: UInt64? = nil,
         finalVia2PortAReadCount: UInt64? = nil,
         finalWeakBitReadCount: UInt64? = nil,
+        finalVariableSpeedZoneSampleCount: UInt64? = nil,
+        finalVariableSpeedZoneMask: UInt8? = nil,
         finalLastIECCommandSummary: String? = nil,
         finalMediaFormat: String? = nil,
         finalMediaPopulatedHalfTrackCount: Int? = nil,
@@ -2815,6 +2899,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalByteReadyCount = finalByteReadyCount
         self.finalVia2PortAReadCount = finalVia2PortAReadCount
         self.finalWeakBitReadCount = finalWeakBitReadCount
+        self.finalVariableSpeedZoneSampleCount = finalVariableSpeedZoneSampleCount
+        self.finalVariableSpeedZoneMask = finalVariableSpeedZoneMask
         self.finalLastIECCommandSummary = finalLastIECCommandSummary
         self.finalMediaFormat = finalMediaFormat
         self.finalMediaPopulatedHalfTrackCount = finalMediaPopulatedHalfTrackCount

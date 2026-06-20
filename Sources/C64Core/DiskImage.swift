@@ -52,6 +52,18 @@ public struct DiskImage {
             }
         }
 
+        public struct SpeedZoneRange: Equatable {
+            public let startByte: Int
+            public let endByte: Int
+            public let zone: UInt8
+
+            public init(startByte: Int, endByte: Int, zone: UInt8) {
+                self.startByte = startByte
+                self.endByte = endByte
+                self.zone = zone
+            }
+        }
+
         /// Half-track index, where 0 is track 1.0 and 1 is track 1.5.
         public let halfTrack: Int
         /// Raw bytes as seen by the 1541 read shift logic.

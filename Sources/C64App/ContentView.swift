@@ -319,6 +319,7 @@ private struct C64SidebarView: View {
     private func hex16(_ value: UInt16) -> String {
         String(format: "%04X", value)
     }
+
 }
 
 private struct SidebarActionRow: View {
@@ -587,6 +588,7 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Sync", value: "\(onOff(status.drive.syncDetected))  count \(status.drive.syncDetectionCount)")
                 StatusRow(label: "Byte Ready", value: "\(onOff(status.drive.byteReady))  count \(status.drive.byteReadyCount)")
                 StatusRow(label: "Weak Bits", value: "\(status.drive.weakBitReadCount)")
+                StatusRow(label: "Speed Zones", value: "\(status.drive.variableSpeedZoneSampleCount)  mask $\(hex8(status.drive.variableSpeedZoneMask))")
                 StatusRow(label: "Port A Reads", value: "\(status.drive.via2PortAReadCount)")
                 StatusRow(label: "IEC Bytes", value: status.drive.lastIECCommandSummary)
                 StatusRow(label: "No Progress", value: "\(status.drive.noProgressCycleCount) cycles")
@@ -711,6 +713,10 @@ private struct DriveStatusPopover: View {
 
     private func hex16(_ value: UInt16) -> String {
         String(format: "%04X", value)
+    }
+
+    private func hex8(_ value: UInt8) -> String {
+        String(format: "%02X", value)
     }
 }
 

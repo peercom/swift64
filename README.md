@@ -263,7 +263,7 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swif
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESUME=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include final PC, 1541 drive state, media capability counts including weak-bit and variable-speed-zone counters, tape state, screen hashes, and optional screenshot paths. The aggregate summary records pass/fail/skip counts, category counts including tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
+To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include final PC, 1541 drive state, media capability counts including weak-bit and variable-speed-zone counters, tape state, screen hashes, and optional screenshot paths. The aggregate summary records pass/fail/skip counts, category counts including `protectedMedia` for weak-bit and variable-speed-zone failures, tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys:
 
 ```sh
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
@@ -324,6 +324,8 @@ Example milestone manifest:
         "minByteReady": 512,
         "minSyncDetections": 1,
         "minWeakBitReads": 1,
+        "minVariableSpeedZoneSamples": 1,
+        "requiredVariableSpeedZones": [0, 3],
         "hasNativeLowLevelImage": true,
         "readTrack": 18,
         "readHalfTrack": 34,
@@ -351,6 +353,10 @@ Example milestone manifest:
       },
       "weakBitRanges": [
         { "halfTrack": 34, "startBit": 128, "endBit": 255 }
+      ],
+      "speedZoneRanges": [
+        { "halfTrack": 34, "startByte": 0, "endByte": 127, "zone": 0 },
+        { "halfTrack": 34, "startByte": 128, "endByte": 255, "zone": 3 }
       ],
       "tapeStatus": {
         "mountedTapeNameContains": "loader.tap",

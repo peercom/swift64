@@ -258,6 +258,59 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.weakBitRanges, [])
     }
 
+    func testSetSpeedZoneRangesAnnotatesLoadedTrackAndUpdatesCapabilities() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [UInt8](repeating: 0x00, count: 8),
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        let image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 8)
+        disk.tracks = image.tracks.map { $0?.bytes }
+        disk.trackInfos = image.tracks
+        disk.image = image
+
+        XCTAssertTrue(disk.setSpeedZoneRanges([
+            DiskImage.Track.SpeedZoneRange(startByte: 0, endByte: 1, zone: 0),
+            DiskImage.Track.SpeedZoneRange(startByte: 6, endByte: 7, zone: 3),
+        ], forHalfTrack: 34))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZoneMap, [0, 0, 2, 2, 2, 2, 3, 3])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZone, 2)
+        XCTAssertEqual(disk.image?.capabilities.variableSpeedZoneByteCount, 8)
+        XCTAssertEqual(disk.image?.capabilities.preservesVariableSpeedZones, true)
+    }
+
+    func testSetSpeedZoneRangesRejectsMissingOrOutOfRangeTracks() {
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.setSpeedZoneRanges([
+            DiskImage.Track.SpeedZoneRange(startByte: 0, endByte: 1, zone: 1),
+        ], forHalfTrack: 34))
+
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x00],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 1)
+        disk.tracks = image.tracks.map { $0?.bytes }
+        disk.trackInfos = image.tracks
+        disk.image = image
+
+        XCTAssertFalse(disk.setSpeedZoneRanges([
+            DiskImage.Track.SpeedZoneRange(startByte: 0, endByte: 1, zone: 1),
+        ], forHalfTrack: 34))
+        XCTAssertFalse(disk.setSpeedZoneRanges([
+            DiskImage.Track.SpeedZoneRange(startByte: 0, endByte: 0, zone: 4),
+        ], forHalfTrack: 34))
+        XCTAssertNil(disk.trackInfo(halfTrack: 34)?.speedZoneMap)
+    }
+
     func testD64LoadCreatesSyntheticLowLevelTracks() {
         let d64 = makeBlankD64()
         let disk = GCRDisk()

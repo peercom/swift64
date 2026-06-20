@@ -192,6 +192,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let driveStatus: CompatibilityDriveStatus?
     public let mediaStatus: CompatibilityMediaStatus?
     public let weakBitRanges: [CompatibilityWeakBitRange]
+    public let speedZoneRanges: [CompatibilitySpeedZoneRange]
     public let tapeStatus: CompatibilityTapeStatus?
     public let ramSignatures: [CompatibilityRAMSignature]
     public let colorRAMSignatures: [CompatibilityRAMSignature]
@@ -222,6 +223,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case driveStatus
         case mediaStatus
         case weakBitRanges
+        case speedZoneRanges
         case tapeStatus
         case ramSignatures
         case colorRAMSignatures
@@ -251,6 +253,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
         weakBitRanges: [CompatibilityWeakBitRange] = [],
+        speedZoneRanges: [CompatibilitySpeedZoneRange] = [],
         tapeStatus: CompatibilityTapeStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
@@ -279,6 +282,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
         self.weakBitRanges = weakBitRanges
+        self.speedZoneRanges = speedZoneRanges
         self.tapeStatus = tapeStatus
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
@@ -309,6 +313,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
         weakBitRanges: [CompatibilityWeakBitRange] = [],
+        speedZoneRanges: [CompatibilitySpeedZoneRange] = [],
         tapeStatus: CompatibilityTapeStatus? = nil,
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
@@ -337,6 +342,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
         self.weakBitRanges = weakBitRanges
+        self.speedZoneRanges = speedZoneRanges
         self.tapeStatus = tapeStatus
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
@@ -395,6 +401,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
         mediaStatus = try container.decodeIfPresent(CompatibilityMediaStatus.self, forKey: .mediaStatus)
         weakBitRanges = try container.decodeIfPresent([CompatibilityWeakBitRange].self, forKey: .weakBitRanges) ?? []
+        speedZoneRanges = try container.decodeIfPresent([CompatibilitySpeedZoneRange].self, forKey: .speedZoneRanges) ?? []
         tapeStatus = try container.decodeIfPresent(CompatibilityTapeStatus.self, forKey: .tapeStatus)
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
         colorRAMSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .colorRAMSignatures) ?? []
@@ -514,6 +521,60 @@ public struct CompatibilityWeakBitRange: Decodable, Equatable {
     }
 }
 
+public struct CompatibilitySpeedZoneRange: Decodable, Equatable {
+    public let halfTrack: Int
+    public let startByte: Int
+    public let endByte: Int
+    public let zone: Int
+
+    public var diskRange: DiskImage.Track.SpeedZoneRange {
+        DiskImage.Track.SpeedZoneRange(startByte: startByte, endByte: endByte, zone: UInt8(clamping: zone))
+    }
+
+    public init(halfTrack: Int, startByte: Int, endByte: Int, zone: Int) {
+        self.halfTrack = halfTrack
+        self.startByte = startByte
+        self.endByte = endByte
+        self.zone = zone
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case halfTrack
+        case startByte
+        case endByte
+        case zone
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        halfTrack = try container.decode(Int.self, forKey: .halfTrack)
+        startByte = try container.decode(Int.self, forKey: .startByte)
+        endByte = try container.decode(Int.self, forKey: .endByte)
+        zone = try container.decode(Int.self, forKey: .zone)
+        guard halfTrack >= 0 && halfTrack < GCRDisk.maxHalfTracks else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .halfTrack,
+                in: container,
+                debugDescription: "Speed-zone halftrack must be in the GCR halftrack table"
+            )
+        }
+        guard startByte >= 0 && startByte <= endByte else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .startByte,
+                in: container,
+                debugDescription: "Speed-zone byte range must be ordered and non-negative"
+            )
+        }
+        guard (0...3).contains(zone) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .zone,
+                in: container,
+                debugDescription: "Speed-zone value must be 0...3"
+            )
+        }
+    }
+}
+
 public struct CompatibilityMediaStatus: Decodable, Equatable {
     public let populatedHalfTrackCount: Int?
     public let nativeLowLevelTrackCount: Int?
@@ -597,9 +658,9 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        populatedHalfTrackCount = try container.decodeIfPresent(Int.self, forKey: .populatedHalfTrackCount)
-        nativeLowLevelTrackCount = try container.decodeIfPresent(Int.self, forKey: .nativeLowLevelTrackCount)
-        syntheticGCRTrackCount = try container.decodeIfPresent(Int.self, forKey: .syntheticGCRTrackCount)
+        populatedHalfTrackCount = try Self.decodeNonNegativeIfPresent(container, forKey: .populatedHalfTrackCount)
+        nativeLowLevelTrackCount = try Self.decodeNonNegativeIfPresent(container, forKey: .nativeLowLevelTrackCount)
+        syntheticGCRTrackCount = try Self.decodeNonNegativeIfPresent(container, forKey: .syntheticGCRTrackCount)
         hasSyntheticGCR = try container.decodeIfPresent(Bool.self, forKey: .hasSyntheticGCR)
         isNativeLowLevel = try container.decodeIfPresent(Bool.self, forKey: .isNativeLowLevel)
         preservesHalfTracks = try container.decodeIfPresent(Bool.self, forKey: .preservesHalfTracks)
@@ -607,14 +668,31 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         preservesSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesSpeedZones)
         preservesVariableSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesVariableSpeedZones)
         preservesSectorErrorInfo = try container.decodeIfPresent(Bool.self, forKey: .preservesSectorErrorInfo)
-        sectorErrorCodeCount = try container.decodeIfPresent(Int.self, forKey: .sectorErrorCodeCount)
-        nonDefaultSectorErrorCodeCount = try container.decodeIfPresent(Int.self, forKey: .nonDefaultSectorErrorCodeCount)
-        weakBitRangeCount = try container.decodeIfPresent(Int.self, forKey: .weakBitRangeCount)
-        weakBitTotalBitCount = try container.decodeIfPresent(Int.self, forKey: .weakBitTotalBitCount)
-        variableSpeedZoneByteCount = try container.decodeIfPresent(Int.self, forKey: .variableSpeedZoneByteCount)
+        sectorErrorCodeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .sectorErrorCodeCount)
+        nonDefaultSectorErrorCodeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .nonDefaultSectorErrorCodeCount)
+        weakBitRangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitRangeCount)
+        weakBitTotalBitCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitTotalBitCount)
+        variableSpeedZoneByteCount = try Self.decodeNonNegativeIfPresent(container, forKey: .variableSpeedZoneByteCount)
         supportsWraparoundReads = try container.decodeIfPresent(Bool.self, forKey: .supportsWraparoundReads)
-        maxTrackSize = try container.decodeIfPresent(Int.self, forKey: .maxTrackSize)
+        maxTrackSize = try Self.decodeNonNegativeIfPresent(container, forKey: .maxTrackSize)
         unsupportedFeaturesContains = try container.decodeIfPresent([String].self, forKey: .unsupportedFeaturesContains) ?? []
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else {
+            return nil
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
     }
 }
 
@@ -686,6 +764,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let minByteReady: Int?
     public let minSyncDetections: Int?
     public let minWeakBitReads: Int?
+    public let minVariableSpeedZoneSamples: Int?
+    public let requiredVariableSpeedZones: [Int]
     public let track: Int?
     public let halfTrack: Int?
     public let readTrack: Int?
@@ -700,11 +780,35 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let hasNativeLowLevelImage: Bool?
     public let lastIECCommandContains: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case minGCRReads
+        case minByteReady
+        case minSyncDetections
+        case minWeakBitReads
+        case minVariableSpeedZoneSamples
+        case requiredVariableSpeedZones
+        case track
+        case halfTrack
+        case readTrack
+        case readHalfTrack
+        case usingHalfTrackFallback
+        case motorOn
+        case ledOn
+        case writeProtected
+        case hasDisk
+        case mediaChanged
+        case minMediaChangeCount
+        case hasNativeLowLevelImage
+        case lastIECCommandContains
+    }
+
     public init(
         minGCRReads: Int? = nil,
         minByteReady: Int? = nil,
         minSyncDetections: Int? = nil,
         minWeakBitReads: Int? = nil,
+        minVariableSpeedZoneSamples: Int? = nil,
+        requiredVariableSpeedZones: [Int] = [],
         track: Int? = nil,
         halfTrack: Int? = nil,
         readTrack: Int? = nil,
@@ -723,6 +827,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minByteReady = minByteReady
         self.minSyncDetections = minSyncDetections
         self.minWeakBitReads = minWeakBitReads
+        self.minVariableSpeedZoneSamples = minVariableSpeedZoneSamples
+        self.requiredVariableSpeedZones = requiredVariableSpeedZones
         self.track = track
         self.halfTrack = halfTrack
         self.readTrack = readTrack
@@ -736,6 +842,53 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minMediaChangeCount = minMediaChangeCount
         self.hasNativeLowLevelImage = hasNativeLowLevelImage
         self.lastIECCommandContains = lastIECCommandContains
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        minGCRReads = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRReads)
+        minByteReady = try Self.decodeNonNegativeIfPresent(container, forKey: .minByteReady)
+        minSyncDetections = try Self.decodeNonNegativeIfPresent(container, forKey: .minSyncDetections)
+        minWeakBitReads = try Self.decodeNonNegativeIfPresent(container, forKey: .minWeakBitReads)
+        minVariableSpeedZoneSamples = try Self.decodeNonNegativeIfPresent(container, forKey: .minVariableSpeedZoneSamples)
+        requiredVariableSpeedZones = try container.decodeIfPresent([Int].self, forKey: .requiredVariableSpeedZones) ?? []
+        for zone in requiredVariableSpeedZones where !(0...3).contains(zone) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .requiredVariableSpeedZones,
+                in: container,
+                debugDescription: "Required variable speed zones must be 0...3"
+            )
+        }
+        track = try Self.decodeNonNegativeIfPresent(container, forKey: .track)
+        halfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .halfTrack)
+        readTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .readTrack)
+        readHalfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .readHalfTrack)
+        usingHalfTrackFallback = try container.decodeIfPresent(Bool.self, forKey: .usingHalfTrackFallback)
+        motorOn = try container.decodeIfPresent(Bool.self, forKey: .motorOn)
+        ledOn = try container.decodeIfPresent(Bool.self, forKey: .ledOn)
+        writeProtected = try container.decodeIfPresent(Bool.self, forKey: .writeProtected)
+        hasDisk = try container.decodeIfPresent(Bool.self, forKey: .hasDisk)
+        mediaChanged = try container.decodeIfPresent(Bool.self, forKey: .mediaChanged)
+        minMediaChangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .minMediaChangeCount)
+        hasNativeLowLevelImage = try container.decodeIfPresent(Bool.self, forKey: .hasNativeLowLevelImage)
+        lastIECCommandContains = try container.decodeIfPresent(String.self, forKey: .lastIECCommandContains)
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else {
+            return nil
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
     }
 }
 

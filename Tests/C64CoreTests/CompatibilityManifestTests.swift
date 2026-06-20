@@ -38,6 +38,8 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minByteReady": 1024,
                 "minSyncDetections": 4,
                 "minWeakBitReads": 16,
+                "minVariableSpeedZoneSamples": 32,
+                "requiredVariableSpeedZones": [0, 3],
                 "track": 18,
                 "halfTrack": 34,
                 "readTrack": 18,
@@ -75,6 +77,10 @@ final class CompatibilityManifestTests: XCTestCase {
               "weakBitRanges": [
                 { "halfTrack": 34, "startBit": 128, "endBit": 255 },
                 { "halfTrack": 35, "startBit": 64, "endBit": 95 }
+              ],
+              "speedZoneRanges": [
+                { "halfTrack": 34, "startByte": 0, "endByte": 127, "zone": 0 },
+                { "halfTrack": 34, "startByte": 128, "endByte": 255, "zone": 3 }
               ],
               "tapeStatus": {
                 "mountedTapeNameContains": "demo.tap",
@@ -162,6 +168,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minByteReady, 1024)
         XCTAssertEqual(milestone.driveStatus?.minSyncDetections, 4)
         XCTAssertEqual(milestone.driveStatus?.minWeakBitReads, 16)
+        XCTAssertEqual(milestone.driveStatus?.minVariableSpeedZoneSamples, 32)
+        XCTAssertEqual(milestone.driveStatus?.requiredVariableSpeedZones, [0, 3])
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
         XCTAssertEqual(milestone.driveStatus?.readTrack, 18)
@@ -196,6 +204,10 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.weakBitRanges, [
             CompatibilityWeakBitRange(halfTrack: 34, startBit: 128, endBit: 255),
             CompatibilityWeakBitRange(halfTrack: 35, startBit: 64, endBit: 95)
+        ])
+        XCTAssertEqual(milestone.speedZoneRanges, [
+            CompatibilitySpeedZoneRange(halfTrack: 34, startByte: 0, endByte: 127, zone: 0),
+            CompatibilitySpeedZoneRange(halfTrack: 34, startByte: 128, endByte: 255, zone: 3)
         ])
         XCTAssertEqual(milestone.tapeStatus, CompatibilityTapeStatus(
             mountedTapeNameContains: "demo.tap",
@@ -269,6 +281,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertNil(milestone.driveMode)
         XCTAssertEqual(milestone.commands, ["LOAD\"$\",8"])
         XCTAssertEqual(milestone.weakBitRanges, [])
+        XCTAssertEqual(milestone.speedZoneRanges, [])
         XCTAssertEqual(milestone.actions, [.typeText("LOAD\"$\",8")])
         XCTAssertEqual(milestone.command, "LOAD\"$\",8")
         XCTAssertNil(milestone.pcRange)
@@ -482,6 +495,92 @@ final class CompatibilityManifestTests: XCTestCase {
         """
 
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidDriveSpeedZoneExpectations() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-drive-zone.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "driveStatus": {
+                "requiredVariableSpeedZones": [0, 4]
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsNegativeDriveCounters() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-drive-counter.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "driveStatus": {
+                "minVariableSpeedZoneSamples": -1
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsNegativeMediaCounters() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-media-counter.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "mediaStatus": {
+                "weakBitTotalBitCount": -1
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidSpeedZoneRanges() {
+        let invalidZoneJSON = """
+        {
+          "milestones": [
+            {
+              "file": "bad-speed-zone.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "speedZoneRanges": [
+                { "halfTrack": 34, "startByte": 0, "endByte": 127, "zone": 4 }
+              ]
+            }
+          ]
+        }
+        """
+        let reversedRangeJSON = """
+        {
+          "milestones": [
+            {
+              "file": "bad-speed-zone-range.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "speedZoneRanges": [
+                { "halfTrack": 34, "startByte": 128, "endByte": 127, "zone": 3 }
+              ]
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidZoneJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(reversedRangeJSON.utf8)))
     }
 
     func testInvalidLegacyPCRangeDoesNotProduceRange() throws {

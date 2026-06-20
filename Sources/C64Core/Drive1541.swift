@@ -30,6 +30,8 @@ public final class Drive1541 {
         public let via2PortAReadCount: UInt64
         public let syncDetectionCount: UInt64
         public let weakBitReadCount: UInt64
+        public let variableSpeedZoneSampleCount: UInt64
+        public let variableSpeedZoneMask: UInt8
         public let writeProtected: Bool
         public let hasDisk: Bool
         public let mediaChanged: Bool
@@ -133,6 +135,12 @@ public final class Drive1541 {
 
     /// Total unstable weak/random media bits consumed by the GCR head.
     public private(set) var weakBitReadCount: UInt64 = 0
+
+    /// Total UE7 speed samples that used a per-byte variable speed-zone map.
+    public private(set) var variableSpeedZoneSampleCount: UInt64 = 0
+
+    /// Bit mask of variable speed zones sampled from per-byte G64 speed maps.
+    public private(set) var variableSpeedZoneMask: UInt8 = 0
 
     /// Decoded IEC command bytes observed by the 1541 ROM ATN handler.
     /// This is a compact acceptance-test/debug aid; the ROM remains authoritative.
@@ -328,6 +336,8 @@ public final class Drive1541 {
             via2PortAReadCount: via2PortAReadCount,
             syncDetectionCount: syncDetectionCount,
             weakBitReadCount: weakBitReadCount,
+            variableSpeedZoneSampleCount: variableSpeedZoneSampleCount,
+            variableSpeedZoneMask: variableSpeedZoneMask,
             writeProtected: disk.writeProtected,
             hasDisk: disk.hasDisk,
             mediaChanged: mediaChanged,
@@ -467,6 +477,8 @@ public final class Drive1541 {
         via2PortAReadBytes.removeAll(keepingCapacity: true)
         syncDetectionCount = 0
         weakBitReadCount = 0
+        variableSpeedZoneSampleCount = 0
+        variableSpeedZoneMask = 0
         decodedIECCommandBytes.removeAll(keepingCapacity: true)
         decodedIECDataBytes.removeAll(keepingCapacity: true)
         noProgressCycleCount = 0
@@ -847,7 +859,10 @@ public final class Drive1541 {
         guard byteIndex < speedZoneMap.count else {
             return trackInfo.speedZone
         }
-        return Int(speedZoneMap[byteIndex])
+        variableSpeedZoneSampleCount += 1
+        let zone = Int(speedZoneMap[byteIndex])
+        variableSpeedZoneMask |= UInt8(1 << zone)
+        return zone
     }
 
     // MARK: - IRQ management

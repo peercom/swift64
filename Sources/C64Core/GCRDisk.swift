@@ -244,6 +244,63 @@ public final class GCRDisk {
         return true
     }
 
+    /// Annotate an already-loaded track with per-byte speed-zone ranges.
+    /// Ranges are expanded into a full speed map so the GCR head can vary UE7
+    /// timing while reading protected-media regions.
+    @discardableResult
+    public func setSpeedZoneRanges(
+        _ ranges: [DiskImage.Track.SpeedZoneRange],
+        forHalfTrack halfTrack: Int
+    ) -> Bool {
+        guard halfTrack >= 0 && halfTrack < trackInfos.count,
+              let existing = trackInfos[halfTrack] else {
+            return false
+        }
+        guard ranges.allSatisfy({
+            $0.startByte >= 0
+                && $0.startByte <= $0.endByte
+                && $0.endByte < existing.bytes.count
+                && $0.zone <= 3
+        }) else {
+            return false
+        }
+
+        var speedZoneMap = existing.speedZoneMap ?? [UInt8](repeating: UInt8(clamping: existing.speedZone), count: existing.bytes.count)
+        for range in ranges {
+            for byteIndex in range.startByte...range.endByte {
+                speedZoneMap[byteIndex] = range.zone
+            }
+        }
+        var counts = [Int](repeating: 0, count: 4)
+        for zone in speedZoneMap {
+            counts[Int(zone)] += 1
+        }
+        let dominantZone = counts.enumerated().max { lhs, rhs in
+            lhs.element == rhs.element ? lhs.offset > rhs.offset : lhs.element < rhs.element
+        }?.offset ?? existing.speedZone
+
+        let updated = DiskImage.Track(
+            halfTrack: existing.halfTrack,
+            bytes: existing.bytes,
+            bitLength: existing.bitLength,
+            speedZone: dominantZone,
+            speedZoneMap: speedZoneMap,
+            weakBitRanges: existing.weakBitRanges,
+            isNativeLowLevel: existing.isNativeLowLevel
+        )
+        trackInfos[halfTrack] = updated
+        tracks[halfTrack] = updated.bytes
+        if let image {
+            self.image = DiskImage(
+                format: image.format,
+                tracks: trackInfos,
+                maxTrackSize: image.maxTrackSize,
+                sectorErrorCodes: image.sectorErrorCodes
+            )
+        }
+        return true
+    }
+
     // MARK: - GCR encoding
 
     private static func g64SpeedInfo(

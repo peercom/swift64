@@ -77,10 +77,12 @@ final class Drive1541Tests: XCTestCase {
     func testGCRHeadUsesPerByteSpeedZoneMap() {
         let fastDrive = makeDriveWithSpeedMappedTrack(zone: 3)
         let slowDrive = makeDriveWithSpeedMappedTrack(zone: 0)
+        let fixedDrive = makeDriveWithTrack(bytes: [UInt8](repeating: 0x00, count: 256))
 
         for _ in 0..<2_000 {
             fastDrive.tickGCRHead()
             slowDrive.tickGCRHead()
+            fixedDrive.tickGCRHead()
         }
 
         XCTAssertGreaterThan(
@@ -88,6 +90,12 @@ final class Drive1541Tests: XCTestCase {
             slowDrive.headBitPosition,
             "A zone-3 speed map should advance the head farther than zone-0 over the same drive cycles"
         )
+        XCTAssertGreaterThan(fastDrive.statusSnapshot.variableSpeedZoneSampleCount, 0)
+        XCTAssertGreaterThan(slowDrive.statusSnapshot.variableSpeedZoneSampleCount, 0)
+        XCTAssertEqual(fixedDrive.statusSnapshot.variableSpeedZoneSampleCount, 0)
+        XCTAssertEqual(fastDrive.statusSnapshot.variableSpeedZoneMask, 1 << 3)
+        XCTAssertEqual(slowDrive.statusSnapshot.variableSpeedZoneMask, 1 << 0)
+        XCTAssertEqual(fixedDrive.statusSnapshot.variableSpeedZoneMask, 0)
     }
 
     func testGCRHeadReadsWeakBitRangesAsUnstableBits() {
