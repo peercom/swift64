@@ -792,36 +792,55 @@ final class LocalDiskMatrixTests: XCTestCase {
         var summary = MilestoneRunSummary()
         summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(for: milestone, c64: C64()))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(for: milestone, c64: C64()))
+        summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(for: milestone, c64: C64()))
         summary.recordSkipped(milestone)
 
         try writeMilestoneRunSummary(summary, to: url)
 
         let decoded = try JSONDecoder().decode(MilestoneRunSummary.self, from: Data(contentsOf: url))
-        XCTAssertEqual(decoded.total, 3)
-        XCTAssertEqual(decoded.executed, 2)
+        XCTAssertEqual(decoded.total, 4)
+        XCTAssertEqual(decoded.executed, 3)
         XCTAssertEqual(decoded.passed, 1)
-        XCTAssertEqual(decoded.failed, 1)
+        XCTAssertEqual(decoded.failed, 2)
         XCTAssertEqual(decoded.skipped, 1)
+        XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
         XCTAssertEqual(decoded.formatVersion, 1)
-        XCTAssertEqual(decoded.totalElapsedCycles, 30)
-        XCTAssertEqual(decoded.maxElapsedCycles, 20)
+        XCTAssertEqual(decoded.totalElapsedCycles, 60)
+        XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
         XCTAssertEqual(decoded.categories["pass"], 1)
         XCTAssertEqual(decoded.categories["pc"], 1)
-        XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey])
+        XCTAssertEqual(decoded.categories["emulator"], 1)
+        XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey, milestone.resultKey])
         XCTAssertEqual(decoded.failedMilestoneDetails, [
             MilestoneFailureSummary(
                 key: milestone.resultKey,
                 category: "pc",
                 reason: "PC $0801 not in $C000-$C0FF",
                 elapsedCycles: 20
+            ),
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "emulator",
+                reason: "unexpected fallback path",
+                elapsedCycles: 30
+            )
+        ])
+        XCTAssertEqual(decoded.unclassifiedFailureDetails, [
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "emulator",
+                reason: "unexpected fallback path",
+                elapsedCycles: 30
             )
         ])
         XCTAssertEqual(decoded.skippedMilestones, [milestone.resultKey])
-        XCTAssertTrue(decoded.consoleSummary.contains("total=3"))
-        XCTAssertTrue(decoded.consoleSummary.contains("executed=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
+        XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
-        XCTAssertTrue(decoded.consoleSummary.contains("cycles=30"))
+        XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("cycles=60"))
     }
 
     func testNamedMilestoneRequiresColorRAMHash() {
@@ -3035,12 +3054,14 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var passed: Int = 0
     var failed: Int = 0
     var skipped: Int = 0
+    var unclassifiedFailureCount: Int = 0
     var totalElapsedCycles: UInt64 = 0
     var maxElapsedCycles: UInt64 = 0
     var slowestMilestone: MilestoneResultKey?
     var categories: [String: Int] = [:]
     var failedMilestones: [MilestoneResultKey] = []
     var failedMilestoneDetails: [MilestoneFailureSummary] = []
+    var unclassifiedFailureDetails: [MilestoneFailureSummary] = []
     var skippedMilestones: [MilestoneResultKey] = []
 
     mutating func record(_ record: MilestoneResultRecord) {
@@ -3063,6 +3084,15 @@ private struct MilestoneRunSummary: Codable, Equatable {
                 reason: record.reason,
                 elapsedCycles: record.elapsedCycles
             ))
+            if category == "unknown" || category == MilestoneResultCategory.emulator.rawValue {
+                unclassifiedFailureCount += 1
+                unclassifiedFailureDetails.append(MilestoneFailureSummary(
+                    key: record.key,
+                    category: category,
+                    reason: record.reason,
+                    elapsedCycles: record.elapsedCycles
+                ))
+            }
         }
         categories[category, default: 0] += 1
     }
@@ -3079,7 +3109,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
-        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) skipped=\(skipped) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        return "Summary total=\(total) executed=\(executed) passed=\(passed) failed=\(failed) skipped=\(skipped) unclassified=\(unclassifiedFailureCount) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 }
 
