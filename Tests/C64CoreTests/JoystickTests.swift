@@ -22,4 +22,17 @@ final class JoystickTests: XCTestCase {
         XCTAssertEqual(joystick.port2 & 0x10, 0)
         XCTAssertEqual(joystick.port1 & 0x10, 0x10)
     }
+
+    func testNumpadFireCanRouteOnlyToPortOne() {
+        let joystick = Joystick()
+        joystick.routing = .port1
+
+        XCTAssertTrue(joystick.handleKeyDown(keyCode: 82))
+        XCTAssertEqual(joystick.port1 & 0x10, 0)
+        XCTAssertEqual(joystick.port2 & 0x10, 0x10)
+
+        XCTAssertTrue(joystick.handleKeyUp(keyCode: 82))
+        XCTAssertEqual(joystick.port1 & 0x10, 0x10)
+        XCTAssertEqual(joystick.port2 & 0x10, 0x10)
+    }
 }

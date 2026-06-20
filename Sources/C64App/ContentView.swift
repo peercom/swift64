@@ -916,12 +916,15 @@ final class EmulatorController: ObservableObject {
         let defaults = UserDefaults.standard
         let profileID = defaults.string(forKey: PreferenceKey.machineProfile) ?? MachineProfilePreference.palC64.rawValue
         let modeID = defaults.string(forKey: PreferenceKey.trueDriveMode) ?? TrueDriveModePreference.off.rawValue
+        let joystickID = defaults.string(forKey: PreferenceKey.joystickRouting) ?? JoystickRoutingPreference.both.rawValue
         let profile = MachineProfilePreference(rawValue: profileID) ?? .palC64
         let mode = TrueDriveModePreference(rawValue: modeID) ?? .off
+        let joystickRouting = JoystickRoutingPreference(rawValue: joystickID) ?? .both
 
         c64.machineProfile = profile.profile
         displayFramesPerSecond = profile.profile.displayFramesPerSecond
         c64.trueDriveEmulationMode = mode.mode
+        c64.joystick.routing = joystickRouting.routing
         if reset {
             c64.reset()
         }
@@ -929,7 +932,7 @@ final class EmulatorController: ObservableObject {
             powerDriveIfNeeded()
         }
         refreshStatus()
-        print("Applied emulation settings: \(profile.title), \(mode.title)")
+        print("Applied emulation settings: \(profile.title), \(mode.title), joystick \(joystickRouting.title)")
     }
 
     func applyDisplayPreferences() {
@@ -1102,6 +1105,7 @@ final class EmulatorController: ObservableObject {
         for key in [
             PreferenceKey.machineProfile,
             PreferenceKey.trueDriveMode,
+            PreferenceKey.joystickRouting,
             PreferenceKey.basicROMPath,
             PreferenceKey.kernalROMPath,
             PreferenceKey.characterROMPath,

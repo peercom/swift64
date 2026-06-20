@@ -4,6 +4,7 @@ import C64Core
 enum PreferenceKey {
     static let machineProfile = "c64.machineProfile"
     static let trueDriveMode = "c64.trueDriveMode"
+    static let joystickRouting = "c64.input.joystickRouting"
     static let basicROMPath = "c64.rom.basicPath"
     static let kernalROMPath = "c64.rom.kernalPath"
     static let characterROMPath = "c64.rom.characterPath"
@@ -119,6 +120,30 @@ enum TrueDriveModePreference: String, CaseIterable, Identifiable {
         case .off: return .off
         case .standard1541: return .standard1541
         case .compat1541: return .compat1541
+        }
+    }
+}
+
+enum JoystickRoutingPreference: String, CaseIterable, Identifiable {
+    case both
+    case port2
+    case port1
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .both: return "Both Ports"
+        case .port2: return "Port 2"
+        case .port1: return "Port 1"
+        }
+    }
+
+    var routing: JoystickRouting {
+        switch self {
+        case .both: return .both
+        case .port2: return .port2
+        case .port1: return .port1
         }
     }
 }

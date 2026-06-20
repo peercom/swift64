@@ -1,5 +1,11 @@
 import Foundation
 
+public enum JoystickRouting: String, CaseIterable, Sendable {
+    case port2
+    case port1
+    case both
+}
+
 /// Joystick port emulation. Maps keyboard keys to joystick directions.
 /// Port 2 is the primary gaming port on the C64 (directly read by CIA1 Port A).
 public final class Joystick {
@@ -8,7 +14,11 @@ public final class Joystick {
     /// Bit 0 = Up, 1 = Down, 2 = Left, 3 = Right, 4 = Fire
     public var port1: UInt8 = 0xFF
     public var port2: UInt8 = 0xFF
-    public var mirrorPort2ToPort1: Bool = true
+    public var routing: JoystickRouting = .both
+    public var mirrorPort2ToPort1: Bool {
+        get { routing == .both }
+        set { routing = newValue ? .both : .port2 }
+    }
 
     public init() {}
 
@@ -41,16 +51,26 @@ public final class Joystick {
     }
 
     private func press(bit: UInt8) {
-        port2 &= ~bit
-        if mirrorPort2ToPort1 {
+        switch routing {
+        case .port2:
+            port2 &= ~bit
+        case .port1:
             port1 &= ~bit
+        case .both:
+            port1 &= ~bit
+            port2 &= ~bit
         }
     }
 
     private func release(bit: UInt8) {
-        port2 |= bit
-        if mirrorPort2ToPort1 {
+        switch routing {
+        case .port2:
+            port2 |= bit
+        case .port1:
             port1 |= bit
+        case .both:
+            port1 |= bit
+            port2 |= bit
         }
     }
 }

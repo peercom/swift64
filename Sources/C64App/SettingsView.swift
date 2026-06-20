@@ -7,6 +7,7 @@ struct SettingsView: View {
 
     @AppStorage(PreferenceKey.machineProfile) private var machineProfile = MachineProfilePreference.palC64.rawValue
     @AppStorage(PreferenceKey.trueDriveMode) private var trueDriveMode = TrueDriveModePreference.off.rawValue
+    @AppStorage(PreferenceKey.joystickRouting) private var joystickRouting = JoystickRoutingPreference.both.rawValue
     @AppStorage(PreferenceKey.basicROMPath) private var basicROMPath = ""
     @AppStorage(PreferenceKey.kernalROMPath) private var kernalROMPath = ""
     @AppStorage(PreferenceKey.characterROMPath) private var characterROMPath = ""
@@ -27,6 +28,12 @@ struct SettingsView: View {
                     Picker("Drive", selection: $trueDriveMode) {
                         ForEach(TrueDriveModePreference.allCases) { mode in
                             Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+
+                    Picker("Joystick", selection: $joystickRouting) {
+                        ForEach(JoystickRoutingPreference.allCases) { routing in
+                            Text(routing.title).tag(routing.rawValue)
                         }
                     }
                 }
