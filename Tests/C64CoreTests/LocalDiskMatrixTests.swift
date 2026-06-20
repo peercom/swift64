@@ -14,6 +14,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneScreenshotFailuresEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_FAILURES"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
+    private let milestoneRunIDEnv = "SWIFT64_LOCAL_MILESTONE_RUN_ID"
 
     func testMediaStatusMismatchReportsProtectedMediaCounters() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
@@ -276,9 +277,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         let screenshotDirectoryURL = milestoneScreenshotDirectoryURL()
         let screenshotFailuresEnabled = shouldWriteFailedMilestoneScreenshots
         let summaryURL = milestoneSummaryURL()
+        let runID = milestoneRunID()
         var summaries: [String] = []
         var runSummary = MilestoneRunSummary()
         runSummary.configureRun(
+            runID: runID,
             manifestURL: activeMilestoneManifestURL(),
             manifestHash: manifestHash,
             resultLogURL: resultLogURL,
@@ -294,7 +297,11 @@ final class LocalDiskMatrixTests: XCTestCase {
                 summaries.append("SKIP \(milestone.url.lastPathComponent) command=\(milestone.commandSummary) reason=previous pass in result log")
                 runSummary.recordSkipped(milestone)
                 try appendMilestoneResult(
-                    milestone.skippedRecord(manifestHash: manifestHash, reason: "previous pass in result log"),
+                    milestone.skippedRecord(
+                        runID: runID,
+                        manifestHash: manifestHash,
+                        reason: "previous pass in result log"
+                    ),
                     to: resultLogURL
                 )
                 continue
@@ -325,7 +332,13 @@ final class LocalDiskMatrixTests: XCTestCase {
                     suffix: "failed"
                 )
             }
-            let record = result.record(for: milestone, c64: c64, manifestHash: manifestHash, screenshotURL: screenshotURL)
+            let record = result.record(
+                for: milestone,
+                c64: c64,
+                runID: runID,
+                manifestHash: manifestHash,
+                screenshotURL: screenshotURL
+            )
             runSummary.record(record)
             try appendMilestoneResult(record, to: resultLogURL)
             XCTAssertTrue(result.passed, summary)
@@ -702,12 +715,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
         milestone.id = "demo-loader"
         milestone.name = "Demo Loader"
+        let runID = "unit-run"
         let currentManifestHash = "current-manifest"
 
         try appendMilestoneResult(
             MatrixRunResult(passed: false, elapsedCycles: 10, reason: "first failure").record(
                 for: milestone,
                 c64: C64(),
+                runID: runID,
                 manifestHash: currentManifestHash
             ),
             to: logURL
@@ -720,6 +735,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             MatrixRunResult(passed: true, elapsedCycles: 20, reason: "named milestone reached").record(
                 for: milestone,
                 c64: tapeC64,
+                runID: runID,
                 manifestHash: currentManifestHash,
                 screenshotURL: URL(fileURLWithPath: "/tmp/swift64-screens/demo.ppm")
             ),
@@ -750,6 +766,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
         XCTAssertEqual(records.last?.formatVersion, MilestoneResultRecord.currentFormatVersion)
         XCTAssertNil(records.last?.skipped)
+        XCTAssertEqual(records.last?.runID, runID)
         XCTAssertEqual(records.last?.manifestHash, currentManifestHash)
         XCTAssertEqual(records.last?.milestoneID, "demo-loader")
         XCTAssertEqual(records.last?.milestoneName, "Demo Loader")
@@ -812,6 +829,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let legacyRecord = try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(legacyLine.utf8))
         XCTAssertNil(legacyRecord.formatVersion)
         XCTAssertNil(legacyRecord.skipped)
+        XCTAssertNil(legacyRecord.runID)
         XCTAssertNil(legacyRecord.manifestHash)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.milestoneID)
@@ -845,6 +863,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             MatrixRunResult(passed: true, elapsedCycles: 30, reason: "named milestone reached").record(
                 for: milestone,
                 c64: C64(),
+                runID: "old-run",
                 manifestHash: "old-manifest"
             ),
             to: staleLogURL
@@ -853,6 +872,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             MatrixRunResult(passed: true, elapsedCycles: 40, reason: "named milestone reached").record(
                 for: milestone,
                 c64: C64(),
+                runID: runID,
                 manifestHash: currentManifestHash
             ),
             to: staleLogURL
@@ -863,7 +883,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         let skippedLogURL = directory.appendingPathComponent("skipped.jsonl")
         try appendMilestoneResult(
-            milestone.skippedRecord(manifestHash: currentManifestHash, reason: "previous pass in result log"),
+            milestone.skippedRecord(runID: runID, manifestHash: currentManifestHash, reason: "previous pass in result log"),
             to: skippedLogURL
         )
         let skippedRecord = try XCTUnwrap(
@@ -876,6 +896,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(skippedRecord.skipped, true)
         XCTAssertEqual(skippedRecord.passed, false)
         XCTAssertEqual(skippedRecord.category, "skipped")
+        XCTAssertEqual(skippedRecord.runID, runID)
         XCTAssertEqual(skippedRecord.manifestHash, currentManifestHash)
         XCTAssertEqual(skippedRecord.key, milestone.resultKey)
         XCTAssertFalse(try passedMilestoneKeys(from: skippedLogURL).contains(milestone.resultKey))
@@ -908,6 +929,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
         var summary = MilestoneRunSummary()
         summary.configureRun(
+            runID: "summary-run",
             manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
             manifestHash: "0123456789abcdef",
             resultLogURL: URL(fileURLWithPath: "/tmp/results.jsonl"),
@@ -933,6 +955,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.skipped, 1)
         XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
         XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertEqual(decoded.runID, "summary-run")
         XCTAssertEqual(decoded.manifestPath, "/tmp/compatibility.json")
         XCTAssertEqual(decoded.manifestHash, "0123456789abcdef")
         XCTAssertEqual(decoded.resultLogPath, "/tmp/results.jsonl")
@@ -1659,6 +1682,14 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private var localMilestoneLimit: Int? {
         Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_LIMIT"] ?? "")
+    }
+
+    private func milestoneRunID() -> String {
+        if let configured = ProcessInfo.processInfo.environment[milestoneRunIDEnv],
+           !configured.isEmpty {
+            return configured
+        }
+        return UUID().uuidString
     }
 
     private func activeMilestoneManifestURL() -> URL? {
@@ -2713,6 +2744,7 @@ private struct MatrixRunResult {
     func record(
         for milestone: LocalMilestone,
         c64: C64,
+        runID: String? = nil,
         manifestHash: String? = nil,
         screenshotURL: URL? = nil
     ) -> MilestoneResultRecord {
@@ -2722,6 +2754,7 @@ private struct MatrixRunResult {
         let media = tapeStatus.mediaCapabilities
         return MilestoneResultRecord(
             formatVersion: MilestoneResultRecord.currentFormatVersion,
+            runID: runID,
             manifestHash: manifestHash,
             milestoneID: milestone.id,
             milestoneName: milestone.name,
@@ -3137,10 +3170,11 @@ private struct LocalMilestone {
         )
     }
 
-    func skippedRecord(manifestHash: String?, reason: String) -> MilestoneResultRecord {
+    func skippedRecord(runID: String?, manifestHash: String?, reason: String) -> MilestoneResultRecord {
         MilestoneResultRecord(
             formatVersion: MilestoneResultRecord.currentFormatVersion,
             skipped: true,
+            runID: runID,
             manifestHash: manifestHash,
             milestoneID: id,
             milestoneName: name,
@@ -3160,10 +3194,11 @@ private struct LocalMilestone {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 7
+    static let currentFormatVersion = 8
 
     let formatVersion: Int?
     let skipped: Bool?
+    let runID: String?
     let manifestHash: String?
     let milestoneID: String?
     let milestoneName: String?
@@ -3245,6 +3280,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     init(
         formatVersion: Int? = nil,
         skipped: Bool? = nil,
+        runID: String? = nil,
         manifestHash: String? = nil,
         milestoneID: String? = nil,
         milestoneName: String? = nil,
@@ -3325,6 +3361,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     ) {
         self.formatVersion = formatVersion
         self.skipped = skipped
+        self.runID = runID
         self.manifestHash = manifestHash
         self.milestoneID = milestoneID
         self.milestoneName = milestoneName
@@ -3426,6 +3463,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var formatVersion: Int = 1
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
+    var runID: String?
     var manifestPath: String?
     var manifestHash: String?
     var resultLogPath: String?
@@ -3451,6 +3489,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var skippedMilestones: [MilestoneResultKey] = []
 
     mutating func configureRun(
+        runID: String?,
         manifestURL: URL?,
         manifestHash: String?,
         resultLogURL: URL?,
@@ -3462,6 +3501,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         failOnUnclassified: Bool
     ) {
         resultRecordFormatVersion = MilestoneResultRecord.currentFormatVersion
+        self.runID = runID
         manifestPath = manifestURL?.path
         self.manifestHash = manifestHash
         resultLogPath = resultLogURL?.path
