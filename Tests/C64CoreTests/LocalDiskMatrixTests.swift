@@ -346,6 +346,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 c64: c64,
                 runID: runID,
                 expectedFailureMatched: !result.passed && milestone.expectedFailure != nil && expectedFailureMismatches.isEmpty,
+                expectedFailureMismatches: expectedFailureMismatches.isEmpty ? nil : expectedFailureMismatches,
                 manifestHash: manifestHash,
                 screenshotURL: screenshotURL
             )
@@ -788,6 +789,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(records.last?.expectedFailureCategory)
         XCTAssertNil(records.last?.expectedFailureReasonContains)
         XCTAssertNil(records.last?.expectedFailureMatched)
+        XCTAssertNil(records.last?.expectedFailureMismatches)
         XCTAssertEqual(records.last?.milestoneID, "demo-loader")
         XCTAssertEqual(records.last?.milestoneName, "Demo Loader")
         XCTAssertEqual(records.last?.key.id, "demo-loader")
@@ -854,6 +856,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.expectedFailureCategory)
         XCTAssertNil(legacyRecord.expectedFailureReasonContains)
         XCTAssertNil(legacyRecord.expectedFailureMatched)
+        XCTAssertNil(legacyRecord.expectedFailureMismatches)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.milestoneID)
         XCTAssertNil(legacyRecord.milestoneName)
@@ -1697,6 +1700,18 @@ final class LocalDiskMatrixTests: XCTestCase {
             ["reason missing GCR reads"]
         )
 
+        let mismatchedRecord = result.record(
+            for: milestone,
+            c64: c64,
+            expectedFailureMatched: false,
+            expectedFailureMismatches: ["category pc != drive", "reason missing GCR reads"]
+        )
+        XCTAssertEqual(mismatchedRecord.expectedFailureMatched, false)
+        XCTAssertEqual(mismatchedRecord.expectedFailureMismatches, [
+            "category pc != drive",
+            "reason missing GCR reads",
+        ])
+
         let record = result.record(
             for: milestone,
             c64: c64,
@@ -1705,6 +1720,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(record.expectedFailureCategory, "pc")
         XCTAssertEqual(record.expectedFailureReasonContains, ["PC $0000 not in"])
         XCTAssertEqual(record.expectedFailureMatched, true)
+        XCTAssertNil(record.expectedFailureMismatches)
 
         var summary = MilestoneRunSummary()
         summary.record(record)
@@ -3043,6 +3059,7 @@ private struct MatrixRunResult {
         c64: C64,
         runID: String? = nil,
         expectedFailureMatched: Bool? = nil,
+        expectedFailureMismatches: [String]? = nil,
         manifestHash: String? = nil,
         screenshotURL: URL? = nil
     ) -> MilestoneResultRecord {
@@ -3057,6 +3074,7 @@ private struct MatrixRunResult {
             expectedFailureCategory: milestone.expectedFailure?.category.rawValue,
             expectedFailureReasonContains: milestone.expectedFailure?.reasonContains,
             expectedFailureMatched: expectedFailureMatched,
+            expectedFailureMismatches: expectedFailureMismatches,
             milestoneID: milestone.id,
             milestoneName: milestone.name,
             file: milestone.url.lastPathComponent,
@@ -3563,7 +3581,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 9
+    static let currentFormatVersion = 10
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -3572,6 +3590,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let expectedFailureCategory: String?
     let expectedFailureReasonContains: [String]?
     let expectedFailureMatched: Bool?
+    let expectedFailureMismatches: [String]?
     let milestoneID: String?
     let milestoneName: String?
     let file: String
@@ -3657,6 +3676,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         expectedFailureCategory: String? = nil,
         expectedFailureReasonContains: [String]? = nil,
         expectedFailureMatched: Bool? = nil,
+        expectedFailureMismatches: [String]? = nil,
         milestoneID: String? = nil,
         milestoneName: String? = nil,
         file: String,
@@ -3741,6 +3761,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.expectedFailureCategory = expectedFailureCategory
         self.expectedFailureReasonContains = expectedFailureReasonContains
         self.expectedFailureMatched = expectedFailureMatched
+        self.expectedFailureMismatches = expectedFailureMismatches
         self.milestoneID = milestoneID
         self.milestoneName = milestoneName
         self.file = file
