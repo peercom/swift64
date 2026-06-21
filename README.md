@@ -247,13 +247,14 @@ SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDrive
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
 ```
 
-Local public CPU functional-test binaries are also opt-in and run as a single bounded emulator instance. Keep those binaries untracked and provide the success self-loop address for the specific fixture you are running:
+Local public CPU functional-test binaries are also opt-in and run as a single bounded emulator instance. Keep those binaries untracked and provide the success self-loop address for the specific fixture you are running. Set `SWIFT64_CPU_FUNCTIONAL_RESULT_JSON` when you want a machine-readable result artifact with binary metadata, final CPU registers, final PC, cycle counts, and pass/jam/timeout reason:
 
 ```sh
 SWIFT64_CPU_FUNCTIONAL_TEST_PATH=/path/to/6502_functional_test.bin \
 SWIFT64_CPU_FUNCTIONAL_SUCCESS_PC=0x3469 \
 SWIFT64_CPU_FUNCTIONAL_START_PC=0x0400 \
 SWIFT64_CPU_FUNCTIONAL_MAX_CYCLES=100000000 \
+SWIFT64_CPU_FUNCTIONAL_RESULT_JSON=/tmp/swift64-cpu-functional.json \
 swift test --filter CPU6502ConformanceTests
 ```
 
