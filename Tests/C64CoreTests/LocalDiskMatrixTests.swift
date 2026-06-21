@@ -978,18 +978,25 @@ final class LocalDiskMatrixTests: XCTestCase {
             c64: C64(),
             expectedFailureMatched: true
         ))
+        summary.record(MatrixRunResult(passed: false, elapsedCycles: 25, reason: "GCR reads 0 < 64").record(
+            for: milestone,
+            c64: C64(),
+            expectedFailureMatched: false,
+            expectedFailureMismatches: ["category drive != pc"]
+        ))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(for: milestone, c64: C64()))
         summary.recordSkipped(milestone)
 
         try writeMilestoneRunSummary(summary, to: url)
 
         let decoded = try JSONDecoder().decode(MilestoneRunSummary.self, from: Data(contentsOf: url))
-        XCTAssertEqual(decoded.total, 4)
-        XCTAssertEqual(decoded.executed, 3)
+        XCTAssertEqual(decoded.total, 5)
+        XCTAssertEqual(decoded.executed, 4)
         XCTAssertEqual(decoded.passed, 1)
-        XCTAssertEqual(decoded.failed, 2)
+        XCTAssertEqual(decoded.failed, 3)
         XCTAssertEqual(decoded.expectedFailures, 1)
-        XCTAssertEqual(decoded.unexpectedFailures, 1)
+        XCTAssertEqual(decoded.unexpectedFailures, 2)
+        XCTAssertEqual(decoded.expectedFailureDriftCount, 1)
         XCTAssertEqual(decoded.skipped, 1)
         XCTAssertEqual(decoded.runnerName, "LocalDiskMatrixTests")
         XCTAssertEqual(decoded.resultRecordFormatVersion, MilestoneResultRecord.currentFormatVersion)
@@ -1012,19 +1019,26 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.acceptanceFailures, ["unclassifiedFailures", "unexpectedFailures"])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
         XCTAssertEqual(decoded.formatVersion, 1)
-        XCTAssertEqual(decoded.totalElapsedCycles, 60)
+        XCTAssertEqual(decoded.totalElapsedCycles, 85)
         XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
         XCTAssertEqual(decoded.categories["pass"], 1)
         XCTAssertEqual(decoded.categories["pc"], 1)
+        XCTAssertEqual(decoded.categories["drive"], 1)
         XCTAssertEqual(decoded.categories["emulator"], 1)
-        XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey, milestone.resultKey])
+        XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey, milestone.resultKey, milestone.resultKey])
         XCTAssertEqual(decoded.failedMilestoneDetails, [
             MilestoneFailureSummary(
                 key: milestone.resultKey,
                 category: "pc",
                 reason: "PC $0801 not in $C000-$C0FF",
                 elapsedCycles: 20
+            ),
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "drive",
+                reason: "GCR reads 0 < 64",
+                elapsedCycles: 25
             ),
             MilestoneFailureSummary(
                 key: milestone.resultKey,
@@ -1044,9 +1058,24 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.unexpectedFailureDetails, [
             MilestoneFailureSummary(
                 key: milestone.resultKey,
+                category: "drive",
+                reason: "GCR reads 0 < 64",
+                elapsedCycles: 25
+            ),
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
                 category: "emulator",
                 reason: "unexpected fallback path",
                 elapsedCycles: 30
+            )
+        ])
+        XCTAssertEqual(decoded.expectedFailureDriftDetails, [
+            MilestoneExpectedFailureDriftSummary(
+                key: milestone.resultKey,
+                category: "drive",
+                reason: "GCR reads 0 < 64",
+                elapsedCycles: 25,
+                mismatches: ["category drive != pc"]
             )
         ])
         XCTAssertEqual(decoded.unclassifiedFailureDetails, [
@@ -1065,18 +1094,22 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("demo.g64"))
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("unexpected fallback path"))
-        XCTAssertFalse(decoded.unexpectedFailureSummary.contains("PC $0801 not in"))
-        XCTAssertTrue(decoded.consoleSummary.contains("total=4"))
-        XCTAssertTrue(decoded.consoleSummary.contains("executed=3"))
+        XCTAssertTrue(decoded.unexpectedFailureSummary.contains("GCR reads 0 < 64"))
+        XCTAssertTrue(decoded.expectedFailureDriftSummary.contains("category drive != pc"))
+        XCTAssertFalse(decoded.expectedFailureDriftSummary.contains("unexpected fallback path"))
+        XCTAssertTrue(decoded.consoleSummary.contains("total=5"))
+        XCTAssertTrue(decoded.consoleSummary.contains("executed=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("selected=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("missingMedia=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
-        XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("expectedFailureDrift=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("outcome=acceptanceFailed"))
+        XCTAssertTrue(decoded.consoleSummary.contains("drive=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
-        XCTAssertTrue(decoded.consoleSummary.contains("cycles=60"))
+        XCTAssertTrue(decoded.consoleSummary.contains("cycles=85"))
     }
 
     func testMilestoneRunSummaryDerivesOutcomeStates() {
@@ -3858,6 +3891,14 @@ private struct MilestoneFailureSummary: Codable, Equatable {
     let elapsedCycles: UInt64
 }
 
+private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
+    let key: MilestoneResultKey
+    let category: String
+    let reason: String
+    let elapsedCycles: UInt64
+    let mismatches: [String]
+}
+
 private struct MilestoneRunSummary: Codable, Equatable {
     var formatVersion: Int = 1
     var runnerName: String = "LocalDiskMatrixTests"
@@ -3886,6 +3927,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var skipped: Int = 0
     var expectedFailures: Int = 0
     var unexpectedFailures: Int = 0
+    var expectedFailureDriftCount: Int = 0
     var unclassifiedFailureCount: Int = 0
     var totalElapsedCycles: UInt64 = 0
     var maxElapsedCycles: UInt64 = 0
@@ -3895,6 +3937,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var failedMilestoneDetails: [MilestoneFailureSummary] = []
     var expectedFailureDetails: [MilestoneFailureSummary] = []
     var unexpectedFailureDetails: [MilestoneFailureSummary] = []
+    var expectedFailureDriftDetails: [MilestoneExpectedFailureDriftSummary] = []
     var unclassifiedFailureDetails: [MilestoneFailureSummary] = []
     var skippedMilestones: [MilestoneResultKey] = []
 
@@ -3959,6 +4002,17 @@ private struct MilestoneRunSummary: Codable, Equatable {
                 unexpectedFailures += 1
                 unexpectedFailureDetails.append(failureSummary)
             }
+            if let mismatches = record.expectedFailureMismatches,
+               !mismatches.isEmpty {
+                expectedFailureDriftCount += 1
+                expectedFailureDriftDetails.append(MilestoneExpectedFailureDriftSummary(
+                    key: record.key,
+                    category: category,
+                    reason: record.reason,
+                    elapsedCycles: record.elapsedCycles,
+                    mismatches: mismatches
+                ))
+            }
             failedMilestones.append(record.key)
             failedMilestoneDetails.append(failureSummary)
             if record.expectedFailureMatched != true
@@ -4007,7 +4061,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
         let outcomeText = outcome ?? "unresolved"
         let selectedText = selectedMilestoneCount.map(String.init) ?? "unknown"
-        return "Summary total=\(total) selected=\(selectedText) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        return "Summary total=\(total) selected=\(selectedText) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
     }
 
     var hasUnclassifiedFailures: Bool {
@@ -4038,6 +4092,17 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
         }
         return "Unexpected milestone failures (\(unexpectedFailures)):\n" + details.joined(separator: "\n")
+    }
+
+    var expectedFailureDriftSummary: String {
+        guard expectedFailureDriftCount > 0 else {
+            return "No expected-failure drift."
+        }
+        let details = expectedFailureDriftDetails.map { detail in
+            let idText = detail.key.id.map { "\($0) " } ?? ""
+            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason) mismatches=\(detail.mismatches.joined(separator: "; "))"
+        }
+        return "Expected-failure drift (\(expectedFailureDriftCount)):\n" + details.joined(separator: "\n")
     }
 }
 
