@@ -258,6 +258,30 @@ SWIFT64_CPU_FUNCTIONAL_RESULT_JSON=/tmp/swift64-cpu-functional.json \
 swift test --filter CPU6502ConformanceTests
 ```
 
+For multiple public CPU fixtures, use a local untracked manifest and optional aggregate summary. Fixtures run sequentially, with a fresh 64K RAM bus and one CPU instance per fixture:
+
+```json
+{
+  "fixtures": [
+    {
+      "id": "6502-functional",
+      "name": "6502 functional test",
+      "path": "6502_functional_test.bin",
+      "loadAddress": "0x0000",
+      "startPC": "0x0400",
+      "successPC": "0x3469",
+      "maxCycles": 100000000
+    }
+  ]
+}
+```
+
+```sh
+SWIFT64_CPU_FUNCTIONAL_MANIFEST_JSON=/path/to/cpu-functional-manifest.json \
+SWIFT64_CPU_FUNCTIONAL_SUMMARY_JSON=/tmp/swift64-cpu-functional-summary.json \
+swift test --filter CPU6502ConformanceTests/testOptInFunctionalManifestRunsSequentially
+```
+
 For resumable local milestone runs, add a JSONL result log path. Reuse the same path with `SWIFT64_LOCAL_MILESTONE_RESUME=1` to skip milestones that already recorded a passing result. Add `SWIFT64_LOCAL_MILESTONE_RESUME_STRICT_MANIFEST=1` when you only want to trust previous passes recorded with the current `compatibility.json` content hash. Each run gets a generated ID; set `SWIFT64_LOCAL_MILESTONE_RUN_ID` to supply one explicitly for dashboards or resumable batch scripts:
 
 ```sh
