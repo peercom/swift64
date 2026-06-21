@@ -26,6 +26,22 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.read(0x0001), 0x37)
     }
 
+    func testCPUInternalPortRegistersOverlayRAMAtZeroAndOne() {
+        let memory = MemoryMap()
+        memory.ram[0x0000] = 0xAA
+        memory.ram[0x0001] = 0xBB
+
+        memory.write(0x0000, value: 0x12)
+        memory.write(0x0001, value: 0x23)
+
+        XCTAssertEqual(memory.portDirection, 0x12)
+        XCTAssertEqual(memory.portData, 0x23)
+        XCTAssertEqual(memory.read(0x0000), 0x12)
+        XCTAssertEqual(memory.read(0x0001), 0x27)
+        XCTAssertEqual(memory.ram[0x0000], 0xAA)
+        XCTAssertEqual(memory.ram[0x0001], 0xBB)
+    }
+
     func testCPUDataPortReflectsCassetteSenseInputLine() {
         let memory = MemoryMap()
         memory.write(0x0000, value: 0x00)
@@ -232,5 +248,77 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.read(0xD000), 0x72)
         XCTAssertEqual(memory.read(0xDC00), 0x72)
         XCTAssertEqual(memory.read(0xDD00), 0x72)
+    }
+
+    func testIOMirrorsDispatchToUnderlyingChips() {
+        let memory = MemoryMap()
+        let vic = VIC()
+        let sid = SID()
+        let cia1 = CIA(isCIA1: true)
+        let cia2 = CIA(isCIA1: false)
+        memory.vic = vic
+        memory.sid = sid
+        memory.cia1 = cia1
+        memory.cia2 = cia2
+
+        memory.write(0xD040, value: 0x34)
+        XCTAssertEqual(vic.debugRegisterValue(0x00), 0x34)
+        XCTAssertEqual(memory.read(0xD040), 0x34)
+
+        memory.write(0xD420, value: 0x78)
+        XCTAssertEqual(sid.debugRegisterValue(0x00), 0x78)
+        XCTAssertEqual(memory.read(0xD420), 0x78)
+
+        memory.write(0xDC12, value: 0xFF)
+        memory.write(0xDC10, value: 0x56)
+        XCTAssertEqual(cia1.debugRegisterValue(0x02), 0xFF)
+        XCTAssertEqual(cia1.debugRegisterValue(0x00), 0x56)
+        XCTAssertEqual(memory.read(0xDC10), 0x56)
+
+        memory.write(0xDD10, value: 0x9A)
+        memory.write(0xDD12, value: 0xFF)
+        XCTAssertEqual(cia2.debugRegisterValue(0x00), 0x9A)
+        XCTAssertEqual(memory.read(0xDD10), 0x9A)
+    }
+
+    func testOpenBusDecaysToHighAfterIdleCycles() {
+        let memory = MemoryMap()
+        memory.cpuDataBusDecayDelay = 3
+        memory.ram[0xC000] = 0x42
+
+        XCTAssertEqual(memory.read(0xC000), 0x42)
+        XCTAssertEqual(memory.read(0xDE00), 0x42)
+
+        memory.tickBus(cycles: 2)
+        XCTAssertEqual(memory.read(0xDE00), 0x42)
+
+        memory.tickBus(cycles: 3)
+        XCTAssertEqual(memory.read(0xDE00), 0xFF)
+    }
+
+    func testWritesRefreshDecayingOpenBus() {
+        let memory = MemoryMap()
+        memory.cpuDataBusDecayDelay = 2
+
+        memory.write(0x2000, value: 0x5C)
+        memory.tickBus(cycles: 1)
+        memory.write(0x2001, value: 0xA6)
+        memory.tickBus(cycles: 1)
+
+        XCTAssertEqual(memory.read(0xDF00), 0xA6)
+    }
+
+    func testColorRAMOpenHighNibbleUsesDecayedCPUDataBus() {
+        let memory = MemoryMap()
+        memory.cpuDataBusDecayDelay = 1
+        memory.write(0xD800, value: 0x0E)
+        memory.ram[0xC000] = 0xA3
+
+        XCTAssertEqual(memory.read(0xC000), 0xA3)
+        XCTAssertEqual(memory.read(0xD800), 0xAE)
+
+        memory.tickBus(cycles: 1)
+
+        XCTAssertEqual(memory.read(0xD800), 0xFE)
     }
 }

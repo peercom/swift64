@@ -143,6 +143,27 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.cpu.cycle, 0)
     }
 
+    func testC64TicksDecayMemoryMapOpenBus() {
+        let c64 = C64()
+        c64.memory.cpuDataBusDecayDelay = 2
+        c64.cpu.pc = 0x0600
+        c64.memory.ram[0x0600] = 0x02  // KIL
+
+        for _ in 0..<11 {
+            c64.tickOneCycle()
+        }
+        XCTAssertTrue(c64.cpu.jammed)
+
+        c64.memory.ram[0xC000] = 0x61
+
+        XCTAssertEqual(c64.memory.read(0xC000), 0x61)
+        XCTAssertEqual(c64.memory.read(0xDE00), 0x61)
+
+        c64.tickOneCycle()
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.memory.read(0xDE00), 0xFF)
+    }
+
     func testSpriteBAWarningDoesNotStallCPUBeforeDMA() {
         let c64 = C64()
         c64.vic.rasterLine = 12

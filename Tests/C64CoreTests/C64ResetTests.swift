@@ -119,7 +119,7 @@ final class C64ResetTests: XCTestCase {
         c64.memory.write(0x0000, value: 0x2F)
         c64.memory.write(0x0001, value: 0x30)
         c64.cpu.powerOn()
-        for _ in 0..<4 where !c64.cpu.jammed {
+        for _ in 0..<12 where !c64.cpu.jammed {
             c64.tickOneCycle()
         }
 

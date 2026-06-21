@@ -897,6 +897,59 @@ final class CPU6502Tests: XCTestCase {
         XCTAssertTrue(cpu.getFlag(Flags.carry))
     }
 
+    func testARRImmediateBinaryModeUsesRotatedBitsForCarryAndOverflow() {
+        let (cpu, _) = makeCPU([0x6B, 0x9A])
+        cpu.a = 0xAE
+        cpu.p = Flags.unused
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(cpu.a, 0x45)
+        XCTAssertTrue(cpu.getFlag(Flags.carry))
+        XCTAssertTrue(cpu.getFlag(Flags.overflow))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
+    }
+
+    func testARRImmediateDecimalModeAppliesNMOSBCDAdjustmentWithHighCarry() {
+        let (cpu, _) = makeCPU([0x6B, 0xF8])
+        cpu.a = 0xDA
+        cpu.p = Flags.unused | Flags.decimal | Flags.negative | Flags.overflow
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(cpu.a, 0xC2)
+        XCTAssertTrue(cpu.getFlag(Flags.carry))
+        XCTAssertFalse(cpu.getFlag(Flags.overflow))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertFalse(cpu.getFlag(Flags.negative))
+    }
+
+    func testARRImmediateDecimalModeCanClearCarryAfterAdjustment() {
+        let (cpu, _) = makeCPU([0x6B, 0x39])
+        cpu.a = 0x30
+        cpu.p = Flags.unused | Flags.decimal | Flags.carry | Flags.zero
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(cpu.a, 0x98)
+        XCTAssertFalse(cpu.getFlag(Flags.carry))
+        XCTAssertFalse(cpu.getFlag(Flags.overflow))
+        XCTAssertFalse(cpu.getFlag(Flags.zero))
+        XCTAssertTrue(cpu.getFlag(Flags.negative))
+    }
+
+    func testARRImmediateDecimalModeHighCorrectionUsesWideComparison() {
+        let (cpu, _) = makeCPU([0x6B, 0xFD])
+        cpu.a = 0xF6
+        cpu.p = 0x2C
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(cpu.a, 0xDA)
+        XCTAssertEqual(cpu.p, 0x2D)
+    }
+
     func testAXSImmediateSubtractsFromAAndXAndSetsCarry() {
         let (cpu, _) = makeCPU([
             0xA9, 0xF0,  // LDA #$F0
@@ -951,8 +1004,8 @@ final class CPU6502Tests: XCTestCase {
 
         runInstructions(cpu, count: 4)
 
-        XCTAssertEqual(bus.memory[0x2100], 0x00)
-        XCTAssertEqual(bus.memory[0x2200], 0x22)
+        XCTAssertEqual(bus.memory[0x2100], 0x21)
+        XCTAssertEqual(bus.memory[0x2200], 0x00)
     }
 
     func testAHXIndirectYPageCrossUsesUnstableAddressHighByte() {
@@ -967,8 +1020,24 @@ final class CPU6502Tests: XCTestCase {
 
         runInstructions(cpu, count: 4)
 
-        XCTAssertEqual(bus.memory[0x2100], 0x00)
-        XCTAssertEqual(bus.memory[0x2200], 0x22)
+        XCTAssertEqual(bus.memory[0x2100], 0x21)
+        XCTAssertEqual(bus.memory[0x2200], 0x00)
+    }
+
+    func testAHXIndirectYPageCrossUsesOriginalPointerHighForUnstableMask() {
+        let (cpu, bus) = makeCPU([
+            0x93, 0x61   // AHX ($61),Y
+        ])
+        cpu.a = 0xA5
+        cpu.x = 0x77
+        cpu.y = 0xC7
+        bus.memory[0x61] = 0xD0
+        bus.memory[0x62] = 0x33
+
+        runInstructions(cpu, count: 1)
+
+        XCTAssertEqual(bus.memory[0x2497], 0x24)
+        XCTAssertEqual(bus.memory[0x2597], 0x00)
     }
 
     func testTASAbsoluteYUpdatesStackPointerAndStoresMaskedValue() {
@@ -1031,6 +1100,8 @@ final class CPU6502Tests: XCTestCase {
         let (cpu, _) = makeCPU([0x02])  // KIL
         runInstructions(cpu, count: 1)
         XCTAssertTrue(cpu.jammed)
+        XCTAssertEqual(cpu.pc, 0x0601)
+        XCTAssertEqual(cpu.totalCycles, 18)
         // Further ticks should return false
         XCTAssertFalse(cpu.tick())
     }

@@ -64,6 +64,12 @@ public final class MemoryMap: Bus {
     /// Last value driven on the CPU data bus, used for simple open-bus reads.
     var cpuDataBus: UInt8 = 0xFF
 
+    /// Number of C64 cycles that a recently driven CPU data-bus value remains
+    /// observable before floating lines return high in the simplified model.
+    public var cpuDataBusDecayDelay: Int = 64
+
+    private var cpuDataBusDecayCounter: Int = 0
+
     /// Effective port value considering direction bits
     var effectivePort: UInt8 {
         // For input bits (direction=0), exposed lines read pulled high unless
@@ -103,6 +109,8 @@ public final class MemoryMap: Bus {
         let previousMotorLine = cassetteMotorLineHigh
         portDirection = 0x2F
         portData = 0x37
+        cpuDataBus = 0xFF
+        cpuDataBusDecayCounter = 0
         notifyCassetteOutputChanges(
             previousWriteLine: previousWriteLine,
             previousMotorLine: previousMotorLine
@@ -182,7 +190,7 @@ public final class MemoryMap: Bus {
 
     public func write(_ address: UInt16, value: UInt8) {
         let addr = Int(address)
-        cpuDataBus = value
+        driveCPUDataBus(value)
 
         if let dbg = debugger, !dbg.watchpoints.isEmpty {
             dbg.notifyWrite(address, value: value)
@@ -230,11 +238,26 @@ public final class MemoryMap: Bus {
     }
 
     func finishRead(_ address: UInt16, value: UInt8) -> UInt8 {
-        cpuDataBus = value
+        driveCPUDataBus(value)
         if let dbg = debugger, !dbg.watchpoints.isEmpty {
             dbg.notifyRead(address, value: value)
         }
         return value
+    }
+
+    func driveCPUDataBus(_ value: UInt8) {
+        cpuDataBus = value
+        cpuDataBusDecayCounter = max(0, cpuDataBusDecayDelay)
+    }
+
+    public func tickBus(cycles: Int = 1) {
+        guard cycles > 0, cpuDataBusDecayCounter > 0 else { return }
+        if cycles >= cpuDataBusDecayCounter {
+            cpuDataBusDecayCounter = 0
+            cpuDataBus = 0xFF
+        } else {
+            cpuDataBusDecayCounter -= cycles
+        }
     }
 
     func notifyCassetteOutputChanges(previousWriteLine: Bool, previousMotorLine: Bool) {

@@ -406,12 +406,7 @@ extension CPU6502 {
             setZN(a)
         // ARR
         case 0x6B:
-            a &= value
-            let c: UInt8 = getFlag(Flags.carry) ? 0x80 : 0
-            a = (a >> 1) | c
-            setZN(a)
-            setFlag(Flags.carry, a & 0x40 != 0)
-            setFlag(Flags.overflow, ((a & 0x40) ^ ((a & 0x20) << 1)) != 0)
+            arr(value)
         // XAA (ANE)
         case 0x8B:
             a = (a | 0xEE) & x & value; setZN(a)
@@ -495,6 +490,30 @@ extension CPU6502 {
         default:
             return 0
         }
+    }
+
+    func unstableStoreValue(maskHighByte high: UInt8) -> UInt8 {
+        switch opcode {
+        // AHX/SHA
+        case 0x9F, 0x93:
+            return a & x & high
+        // TAS/SHS
+        case 0x9B:
+            sp = a & x
+            return sp & high
+        // SHX/SXA
+        case 0x9E:
+            return x & high
+        // SHY/SYA
+        case 0x9C:
+            return y & high
+        default:
+            return writeValue()
+        }
+    }
+
+    func unstableStorePageCrossValue() -> UInt8 {
+        unstableStoreValue(maskHighByte: UInt8((baseAddr >> 8) & 0xFF) &+ 1)
     }
 
     // MARK: - Implied operation dispatch
@@ -861,7 +880,7 @@ extension CPU6502 {
         case 4:
             // Handle SHY page-cross fixup
             if opcode == 0x9C && (baseAddr ^ addr) & 0xFF00 != 0 {
-                let value = writeValue()
+                let value = unstableStorePageCrossValue()
                 let finalAddr = (UInt16(value) << 8) | (addr & 0x00FF)
                 bus.write(finalAddr, value: value)
             } else {
@@ -953,7 +972,7 @@ extension CPU6502 {
         case 4:
             // Handle AHX/TAS/SHX page-cross fixup
             if (opcode == 0x9F || opcode == 0x9B || opcode == 0x9E) && (baseAddr ^ addr) & 0xFF00 != 0 {
-                let value = writeValue()
+                let value = unstableStorePageCrossValue()
                 let finalAddr = (UInt16(value) << 8) | (addr & 0x00FF)
                 bus.write(finalAddr, value: value)
             } else {
@@ -1128,7 +1147,7 @@ extension CPU6502 {
         case 5:
             // Handle AHX (SHA) indirect Y page-cross fixup
             if opcode == 0x93 && (baseAddr ^ addr) & 0xFF00 != 0 {
-                let value = writeValue()
+                let value = unstableStorePageCrossValue()
                 let finalAddr = (UInt16(value) << 8) | (addr & 0x00FF)
                 bus.write(finalAddr, value: value)
             } else {
@@ -1403,11 +1422,30 @@ extension CPU6502 {
         }
     }
 
-    // KIL/JAM: halts
+    // KIL/JAM: enters the NMOS halt state after the observed dummy-read
+    // sequence. Reset can still recover the CPU from this state.
     func cycleKill() {
-        jammed = true
-        pc &-= 1  // stay on the JAM opcode
-        cycle = 0
+        switch cycle {
+        case 1:
+            _ = bus.read(pc)
+            cycle = 2
+        case 2:
+            _ = bus.read(0xFFFF)
+            cycle = 3
+        case 3, 4:
+            _ = bus.read(0xFFFE)
+            cycle += 1
+        case 5...9:
+            _ = bus.read(0xFFFF)
+            cycle += 1
+        case 10:
+            _ = bus.read(0xFFFF)
+            jammed = true
+            cycle = 0
+        default:
+            jammed = true
+            cycle = 0
+        }
     }
 
     // MARK: - Interrupt per-cycle execution
@@ -1560,6 +1598,32 @@ extension CPU6502 {
         let result = UInt8(sum & 0xFF)
         let overflow = (~(UInt16(lhs) ^ UInt16(rhs)) & (UInt16(lhs) ^ UInt16(result)) & 0x80) != 0
         return (result, sum > 0xFF, overflow)
+    }
+
+    func arr(_ v: UInt8) {
+        let anded = a & v
+        let rotated = (anded >> 1) | (getFlag(Flags.carry) ? 0x80 : 0)
+
+        setFlag(Flags.zero, rotated == 0)
+        setFlag(Flags.negative, rotated & 0x80 != 0)
+        setFlag(Flags.overflow, ((rotated >> 6) ^ (rotated >> 5)) & 0x01 != 0)
+
+        if getFlag(Flags.decimal) {
+            var adjusted = rotated
+            if Int(anded & 0x0F) + Int(anded & 0x01) > 0x05 {
+                adjusted = (adjusted & 0xF0) | ((adjusted &+ 0x06) & 0x0F)
+            }
+            if Int(anded & 0xF0) + Int(anded & 0x10) > 0x50 {
+                adjusted = adjusted &+ 0x60
+                setFlag(Flags.carry, true)
+            } else {
+                setFlag(Flags.carry, false)
+            }
+            a = adjusted
+        } else {
+            a = rotated
+            setFlag(Flags.carry, rotated & 0x40 != 0)
+        }
     }
 
     func andOp(_ v: UInt8) { a &= v; setZN(a) }

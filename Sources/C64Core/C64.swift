@@ -694,6 +694,7 @@ public final class C64 {
         // SID tick
         sid.tick()
 
+        memory.tickBus()
         memory.tickCartridge()
 
         updateTapeSignal()
