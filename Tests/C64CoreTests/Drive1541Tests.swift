@@ -167,6 +167,50 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(drive.statusSnapshot.usingHalfTrackFallback)
     }
 
+    func testBlankTrackClearsStaleGCRReadPresentation() {
+        let drive = makeDriveWithTracks([
+            36: [UInt8](repeating: 0x00, count: 16),
+        ])
+        drive.halfTrack = 36
+
+        for _ in 0..<1_000 {
+            drive.tickGCRHead()
+            if drive.statusSnapshot.byteReady { break }
+        }
+
+        XCTAssertTrue(drive.statusSnapshot.byteReady)
+        XCTAssertFalse(drive.via2.ca1)
+
+        drive.halfTrack = 38
+        drive.tickGCRHead()
+
+        XCTAssertFalse(drive.statusSnapshot.byteReady)
+        XCTAssertFalse(drive.statusSnapshot.syncDetected)
+        XCTAssertEqual(drive.shiftRegister, 0)
+        XCTAssertEqual(drive.bitCounter, 0)
+        XCTAssertEqual(drive.soDelay, 0)
+        XCTAssertEqual(drive.via2.portAInput, 0x00)
+        XCTAssertTrue(drive.via2.ca1)
+        XCTAssertNil(drive.statusSnapshot.readHalfTrack)
+    }
+
+    func testBlankTrackCancelsPendingByteReadyDelay() {
+        let drive = makeDriveWithTracks([
+            36: [UInt8](repeating: 0x00, count: 16),
+        ])
+        drive.halfTrack = 38
+        drive.soDelay = 5
+        drive.via2.ca1 = true
+        let baseline = drive.statusSnapshot.byteReadyCount
+
+        drive.tickGCRHead()
+
+        XCTAssertEqual(drive.statusSnapshot.byteReadyCount, baseline)
+        XCTAssertFalse(drive.statusSnapshot.byteReady)
+        XCTAssertEqual(drive.soDelay, 0)
+        XCTAssertTrue(drive.via2.ca1)
+    }
+
     func testInsertDiskRefreshesVIA2WriteProtectAndSyncInputs() {
         let drive = Drive1541()
         drive.via2.portBInput = 0x00

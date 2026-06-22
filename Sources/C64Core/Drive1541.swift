@@ -501,6 +501,17 @@ public final class Drive1541 {
         via2.ca1 = true
     }
 
+    private func clearGCRReadPresentation() {
+        syncDetected = false
+        shiftRegister = 0
+        bitCounter = 0
+        byteReadyEdge = false
+        byteReadyLevel = false
+        soDelay = 0
+        via2.portAInput = 0x00
+        via2.ca1 = true
+    }
+
     // MARK: - Tick (one drive clock cycle)
 
     var debugLogCount = 0
@@ -720,8 +731,7 @@ public final class Drive1541 {
         let viaSpeedZone = Int((via2.portB >> 5) & 0x03)
 
         guard let resolvedTrack = resolvedReadTrack(forHalfTrack: halfTrack) else {
-            via2.portAInput = 0x00
-            syncDetected = false
+            clearGCRReadPresentation()
             return
         }
         let trackInfo = resolvedTrack.info

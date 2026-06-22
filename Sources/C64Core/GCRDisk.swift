@@ -35,6 +35,7 @@ public final class GCRDisk {
         case dataChecksum
         case byteDecode
         case headerChecksum
+        case longDataBlock
         case diskIDMismatch
 
         init(code: UInt8) {
@@ -45,6 +46,7 @@ public final class GCRDisk {
             case 23: self = .dataChecksum
             case 24: self = .byteDecode
             case 27: self = .headerChecksum
+            case 28: self = .longDataBlock
             case 29: self = .diskIDMismatch
             default: self = .ok
             }
@@ -441,6 +443,9 @@ public final class GCRDisk {
             for b in sectorData { dataChecksum ^= b }
             if errorEffect == .dataChecksum {
                 dataChecksum ^= 0xFF
+            }
+            if errorEffect == .longDataBlock {
+                dataBlock.append(dataChecksum ^ 0xFF)
             }
             dataBlock.append(dataChecksum)
             dataBlock.append(0x00)

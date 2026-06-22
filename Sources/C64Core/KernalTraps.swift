@@ -27,8 +27,14 @@ public final class KernalTraps {
     /// CHKIN (set input channel) routine. JMP target of $FFC6.
     static let chkinRoutine: UInt16 = 0xF20E
 
+    /// CHKOUT (set output channel) routine. JMP target of $FFC9.
+    static let chkoutRoutine: UInt16 = 0xF250
+
     /// BASIN/CHRIN routine. JMP target of $FFCF.
     static let basinRoutine: UInt16 = 0xF157
+
+    /// BSOUT/CHROUT routine. JMP target of $FFD2.
+    static let bsoutRoutine: UInt16 = 0xF1CA
 
     // MARK: - C64 zero page / Kernal work area locations
 
@@ -72,6 +78,8 @@ public final class KernalTraps {
     public var autostartSystemAreaDiskLoads: Bool = true
 
     private var currentInputChannel: Int?
+    private var currentOutputChannel: Int?
+    private var diskChannels = Set<Int>()
 
     // MARK: - Init
 
@@ -103,8 +111,12 @@ public final class KernalTraps {
             return handleClose(cpu: cpu, memory: memory)
         case KernalTraps.chkinRoutine:
             return handleCHKIN(cpu: cpu, memory: memory)
+        case KernalTraps.chkoutRoutine:
+            return handleCHKOUT(cpu: cpu, memory: memory)
         case KernalTraps.basinRoutine:
             return handleCHRIN(cpu: cpu, memory: memory)
+        case KernalTraps.bsoutRoutine:
+            return handleCHROUT(cpu: cpu, memory: memory)
         default:
             return false
         }
@@ -135,10 +147,16 @@ public final class KernalTraps {
         case KernalTraps.saveRoutine, KernalTraps.openRoutine:
             let deviceNum = memory.ram[Int(KernalTraps.device)]
             return (8...11).contains(deviceNum)
-        case KernalTraps.closeRoutine, KernalTraps.chkinRoutine:
+        case KernalTraps.closeRoutine:
             return true
+        case KernalTraps.chkinRoutine:
+            return true
+        case KernalTraps.chkoutRoutine:
+            return diskChannels.contains(Int(cpu.x))
         case KernalTraps.basinRoutine:
             return currentInputChannel != nil
+        case KernalTraps.bsoutRoutine:
+            return currentOutputChannel != nil
         default:
             return false
         }
@@ -413,6 +431,7 @@ public final class KernalTraps {
         }
 
         setStatus(memory: memory, value: 0)
+        diskChannels.insert(diskChannel)
         cpu.a = 0
         cpu.setFlag(Flags.carry, false)
         doRTS(cpu: cpu, memory: memory)
@@ -427,6 +446,10 @@ public final class KernalTraps {
         if currentInputChannel == channel {
             currentInputChannel = nil
         }
+        if currentOutputChannel == channel {
+            currentOutputChannel = nil
+        }
+        diskChannels.remove(channel)
 
         setStatus(memory: memory, value: 0)
         cpu.a = 0
@@ -439,6 +462,17 @@ public final class KernalTraps {
         let channel = Int(cpu.x)
         guard channel >= 0 && channel < 16, diskDrive != nil else { return false }
         currentInputChannel = channel
+        setStatus(memory: memory, value: 0)
+        cpu.a = 0
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
+    func handleCHKOUT(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        let channel = Int(cpu.x)
+        guard channel >= 0 && channel < 16, diskDrive != nil, diskChannels.contains(channel) else { return false }
+        currentOutputChannel = channel
         setStatus(memory: memory, value: 0)
         cpu.a = 0
         cpu.setFlag(Flags.carry, false)
@@ -460,6 +494,19 @@ public final class KernalTraps {
         return true
     }
 
+    func handleCHROUT(cpu: CPU6502, memory: MemoryMap) -> Bool {
+        guard let drive = diskDrive,
+              let channel = currentOutputChannel,
+              drive.writeByte(channel: channel, byte: cpu.a) else {
+            return false
+        }
+
+        setStatus(memory: memory, value: 0)
+        cpu.setFlag(Flags.carry, false)
+        doRTS(cpu: cpu, memory: memory)
+        return true
+    }
+
     // MARK: - Device handlers
 
     func loadFromDisk(filename: String) -> [UInt8]? {
@@ -475,7 +522,10 @@ public final class KernalTraps {
         debugLog("[DISK] loadFromDisk: filename=\"\(filename)\" directory has \(drive.directory.count) entries, diskName=\"\(drive.diskName)\"")
 
         if drive.isDirectoryListingRequest(filename) {
-            let listing = drive.generateDirectoryListing()
+            guard let listing = drive.loadDirectoryListing() else {
+                debugLog("[DISK] Directory read failed: \(drive.currentCommandStatus.trimmingCharacters(in: .whitespacesAndNewlines))")
+                return nil
+            }
             debugLog("[DISK] Directory listing: \(listing.count) bytes, first 20: \(listing.prefix(20).map { String(format: "%02X", $0) }.joined(separator: " "))")
             return listing
         }
@@ -487,7 +537,10 @@ public final class KernalTraps {
 
         debugLog("[DISK] Found file: \"\(entry.filename)\" type=\(entry.typeName) track=\(entry.firstTrack) sector=\(entry.firstSector) blocks=\(entry.fileSize)")
 
-        let rawData = drive.readFileData(entry)
+        guard let rawData = drive.loadFileData(entry) else {
+            debugLog("[DISK] Read failed: \(drive.currentCommandStatus.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return nil
+        }
         debugLog("[DISK] Read \(rawData.count) bytes. First 10: \(rawData.prefix(10).map { String(format: "%02X", $0) }.joined(separator: " "))")
 
         if rawData.count < 2 {

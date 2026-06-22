@@ -409,6 +409,22 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(decoded.contains { $0.0 == 1 })
     }
 
+    func testD64SectorLongDataBlockErrorExtendsSyntheticGCRDataBlock() throws {
+        let track1 = try syntheticTrack1(d64ErrorCode: 28)
+        let dataBlockOffset = 5 + 10 + 9 + 5
+        let decodedDataBlock = G64Parser.decodeGCRBlock(
+            Array(track1[dataBlockOffset..<(dataBlockOffset + 330)]),
+            count: 264
+        )
+        let decodedSectors = G64Parser.decodeSectors(from: track1, track: 1, expectedSectors: 21)
+
+        XCTAssertEqual(decodedDataBlock[0], 0x07)
+        XCTAssertEqual(decodedDataBlock[257], 0xFF)
+        XCTAssertEqual(decodedDataBlock[258], 0x00)
+        XCTAssertFalse(decodedSectors.contains { $0.0 == 0 })
+        XCTAssertTrue(decodedSectors.contains { $0.0 == 1 })
+    }
+
     func testD64SectorDiskIDMismatchErrorWritesMismatchedSyntheticGCRHeaderID() throws {
         let track1 = try syntheticTrack1(d64ErrorCode: 29)
         let header = G64Parser.decodeGCRBlock(Array(track1[5..<15]), count: 8)

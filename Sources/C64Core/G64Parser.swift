@@ -250,24 +250,17 @@ public enum G64Parser {
                 if trackNum == track && sectorNum < expectedSectors &&
                    !foundSectors.contains(sectorNum) {
 
-                    // Find next sync for data block
-                    let dataSyncBit = findSyncBit(in: bits, from: afterSync + 80)
-                    // Data block: 260 bytes = 2600 bits of GCR
-                    if dataSyncBit >= 0 && dataSyncBit + 2600 <= bits.count {
-                        let dataDecode = decodeGCRFromBitsWithValidity(bits, from: dataSyncBit, count: 260)
-                        let dataBytes = dataDecode.bytes
-
-                        if dataDecode.isValid && dataBytes.count >= 258 && dataBytes[0] == 0x07 && dataChecksumIsValid(dataBytes) {
-                            let sectorData = Array(dataBytes[1...256])
-                            sectors.append((sectorNum, sectorData))
-                            foundSectors.insert(sectorNum)
-                        } else {
-                            dataFails += 1
-                            if track == 18 && dataFails <= 3 {
-                                let marker = dataBytes.isEmpty ? "empty" : String(format: "%02X", dataBytes[0])
-                                g64log("G64: T\(track) S\(sectorNum) data fail: marker=\(marker) count=\(dataBytes.count)")
-                            }
-                        }
+                    if let dataBytes = decodeDataBlockAfterHeader(
+                        bits: bits,
+                        startBit: afterSync + 80,
+                        maxBit: min(bits.count, afterSync + 80 + 7000),
+                        dataFails: &dataFails,
+                        track: track,
+                        sectorNum: sectorNum
+                    ) {
+                        let sectorData = Array(dataBytes[1...256])
+                        sectors.append((sectorNum, sectorData))
+                        foundSectors.insert(sectorNum)
                     }
                 }
 
@@ -286,6 +279,53 @@ public enum G64Parser {
         }
 
         return sectors
+    }
+
+    private static func decodeDataBlockAfterHeader(
+        bits: [UInt8],
+        startBit: Int,
+        maxBit: Int,
+        dataFails: inout Int,
+        track: Int,
+        sectorNum: Int
+    ) -> [UInt8]? {
+        var searchBit = startBit
+        var attempts = 0
+        let boundedMaxBit = min(maxBit, bits.count)
+
+        while attempts < 4 && searchBit < boundedMaxBit {
+            let dataSyncBit = findSyncBit(in: bits, from: searchBit)
+            guard dataSyncBit >= 0,
+                  dataSyncBit < boundedMaxBit,
+                  dataSyncBit + 2600 <= bits.count else {
+                return nil
+            }
+
+            let headerCandidate = decodeGCRFromBitsWithValidity(bits, from: dataSyncBit, count: 8)
+            if headerCandidate.isValid && headerCandidate.bytes.count >= 8 &&
+                headerCandidate.bytes[0] == 0x08 && headerChecksumIsValid(headerCandidate.bytes) {
+                return nil
+            }
+
+            let dataDecode = decodeGCRFromBitsWithValidity(bits, from: dataSyncBit, count: 260)
+            let dataBytes = dataDecode.bytes
+
+            if dataDecode.isValid && dataBytes.count >= 258 &&
+                dataBytes[0] == 0x07 && dataChecksumIsValid(dataBytes) {
+                return dataBytes
+            }
+
+            dataFails += 1
+            if track == 18 && dataFails <= 3 {
+                let marker = dataBytes.isEmpty ? "empty" : String(format: "%02X", dataBytes[0])
+                g64log("G64: T\(track) S\(sectorNum) data fail: marker=\(marker) count=\(dataBytes.count)")
+            }
+
+            searchBit = dataSyncBit + 10
+            attempts += 1
+        }
+
+        return nil
     }
 
     private static func headerChecksumIsValid(_ header: [UInt8]) -> Bool {

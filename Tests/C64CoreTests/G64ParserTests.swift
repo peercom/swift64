@@ -164,6 +164,23 @@ final class G64ParserTests: XCTestCase {
         XCTAssertEqual(sectors.count, 0)
     }
 
+    func testDecodeSectorsSkipsInvalidDataSyncBeforeValidDataBlock() throws {
+        var trackData = buildGCRTrack(track: 18, sectors: [(0, buildBAMSector())])
+        let dataBlockOffset = try XCTUnwrap(tryDataBlockOffset(in: trackData))
+        let dataSyncOffset = dataBlockOffset - 5
+
+        var invalidDataBlock = [UInt8](repeating: 0, count: 260)
+        invalidDataBlock[0] = 0x00
+        let syncLikeNoise = [UInt8](repeating: 0xFF, count: 5) + Self.encodeGCRBytes(invalidDataBlock)
+        trackData.insert(contentsOf: syncLikeNoise, at: dataSyncOffset)
+
+        let sectors = G64Parser.decodeSectors(from: trackData, track: 18, expectedSectors: 19)
+
+        XCTAssertEqual(sectors.count, 1)
+        XCTAssertEqual(sectors.first?.0, 0)
+        XCTAssertEqual(sectors.first?.1, buildBAMSector())
+    }
+
     // MARK: - Test: Mount G64 via DiskDrive
 
     func testMountG64() {
