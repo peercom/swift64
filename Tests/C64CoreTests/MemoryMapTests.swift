@@ -269,6 +269,15 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(sid.debugRegisterValue(0x00), 0x78)
         XCTAssertEqual(memory.read(0xD420), 0x78)
 
+        sid.setPaddle(x: 0x12, y: 0x34)
+        sid.voices[2].control = 0x20
+        sid.voices[2].accumulator = 0xAB0000
+        sid.voices[2].envelopeLevel = 0x56
+        XCTAssertEqual(memory.read(0xD439), 0x12)
+        XCTAssertEqual(memory.read(0xD43A), 0x34)
+        XCTAssertEqual(memory.read(0xD43B), 0xAB)
+        XCTAssertEqual(memory.read(0xD43C), 0x56)
+
         memory.write(0xDC12, value: 0xFF)
         memory.write(0xDC10, value: 0x56)
         XCTAssertEqual(cia1.debugRegisterValue(0x02), 0xFF)

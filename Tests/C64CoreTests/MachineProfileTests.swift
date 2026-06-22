@@ -86,6 +86,30 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(ntscC64CWith1541II.driveClockRatio, 1.0)
     }
 
+    func testSIDModelOverrideSurvivesProfileApplicationPowerOnAndReset() {
+        let c64 = C64(machineProfile: .palC64)
+        XCTAssertEqual(c64.sid.model, .mos6581)
+
+        c64.sidModelOverride = .mos8580
+        XCTAssertEqual(c64.sid.model, .mos8580)
+
+        c64.machineProfile = .ntscC64
+        XCTAssertEqual(c64.sid.model, .mos8580)
+        XCTAssertEqual(c64.sid.clockRate, 1_022_727)
+
+        c64.powerOn()
+        XCTAssertEqual(c64.sid.model, .mos8580)
+
+        c64.reset()
+        XCTAssertEqual(c64.sid.model, .mos8580)
+
+        c64.sidModelOverride = nil
+        XCTAssertEqual(c64.sid.model, .mos6581)
+
+        c64.machineProfile = .palC64C
+        XCTAssertEqual(c64.sid.model, .mos8580)
+    }
+
     func testStandardTrueDriveUsesProfileClockRatio() {
         let c64 = C64(machineProfile: .ntscC64)
 

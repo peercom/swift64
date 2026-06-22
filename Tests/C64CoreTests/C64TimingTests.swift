@@ -114,6 +114,104 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
     }
 
+    func testSpriteTwoDMAStallsCPUAcrossRasterlineWrap() {
+        let c64 = C64()
+        c64.vic.rasterLine = 12
+        c64.vic.rasterCycle = 62
+        c64.vic.spriteEnabled = 0x04
+        c64.vic.spriteY[2] = 12
+
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        XCTAssertTrue(c64.vic.aecLineLow)
+        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterLine, 13)
+        XCTAssertEqual(c64.vic.rasterCycle, 0)
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 1)
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 2)
+        XCTAssertTrue(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+    }
+
+    func testSpriteTwoDMAStallsCPUAcrossRasterlineWrapAfterFinalSpriteRow() {
+        let c64 = C64()
+        c64.vic.rasterLine = 32
+        c64.vic.rasterCycle = 62
+        c64.vic.spriteEnabled = 0x04
+        c64.vic.spriteY[2] = 12
+
+        XCTAssertEqual(c64.vic.spriteLineRow(for: 2), 20)
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterLine, 33)
+        XCTAssertEqual(c64.vic.rasterCycle, 0)
+        XCTAssertNil(c64.vic.spriteLineRow(for: 2))
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 1)
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 2)
+        XCTAssertTrue(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+    }
+
+    func testNTSCSpriteThreeDMAStallsCPUAcrossRasterlineWrap() {
+        let c64 = C64()
+        c64.machineProfile = .ntscC64
+        c64.vic.rasterLine = 12
+        c64.vic.rasterCycle = 64
+        c64.vic.spriteEnabled = 0x08
+        c64.vic.spriteY[3] = 12
+
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 3))
+        XCTAssertTrue(c64.vic.aecLineLow)
+        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterLine, 13)
+        XCTAssertEqual(c64.vic.rasterCycle, 0)
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 3))
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 1)
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
+
+        c64.tickOneCycle()
+
+        XCTAssertEqual(c64.vic.rasterCycle, 2)
+        XCTAssertTrue(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+    }
+
     func testVICStealAllowsCPUWriteCycleToCompleteThroughRDY() {
         let c64 = C64()
         c64.cpu.pc = 0x0600
@@ -306,6 +404,78 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBefore + 1)
     }
 
+    func testYScrollWriteStartingBadLineFetchesCurrentColumnIntoPartialMatrixBuffer() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 20
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+        c64.memory.ram[0x0405] = 0x41
+
+        c64.vic.writeRegister(0x11, value: 0x13)
+        c64.tickOneCycle()
+
+        XCTAssertTrue(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.badLineFetchMask, UInt64(1) << 5)
+        XCTAssertFalse(c64.vic.displayLineBufferValid)
+        XCTAssertEqual(c64.vic.displayLineBufferBase, 0)
+        XCTAssertEqual(c64.vic.lineBuffer[5], 0x41)
+    }
+
+    func testYScrollWriteCanStartBadLineAtLastFetchCycle() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 54
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+        c64.memory.ram[0x0427] = 0x5A
+
+        c64.vic.writeRegister(0x11, value: 0x13)
+        c64.tickOneCycle()
+
+        XCTAssertTrue(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rasterCycle, 55)
+        XCTAssertEqual(c64.vic.badLineFetchMask, UInt64(1) << 39)
+        XCTAssertEqual(c64.vic.lineBuffer[39], 0x5A)
+    }
+
+    func testYScrollWriteCannotStartBadLineAfterLastFetchCycle() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 55
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+
+        c64.vic.writeRegister(0x11, value: 0x13)
+        c64.tickOneCycle()
+
+        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rasterCycle, 56)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0)
+    }
+
+    func testYScrollWriteDuringActiveBadLineDoesNotRestartRowOrFetchState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 20
+        c64.vic.badLineDENLatched = true
+        c64.vic.badLine = true
+        c64.vic.rowCounter = 5
+        c64.vic.displayLineBufferBase = 80
+        c64.vic.badLineFetchMask = 0x03
+        c64.vic.lineBuffer[0] = 0x41
+        c64.vic.lineBuffer[1] = 0x42
+
+        c64.vic.writeRegister(0x11, value: 0x13)
+
+        XCTAssertTrue(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rowCounter, 5)
+        XCTAssertEqual(c64.vic.displayLineBufferBase, 80)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0x03)
+        XCTAssertEqual(c64.vic.lineBuffer[0], 0x41)
+        XCTAssertEqual(c64.vic.lineBuffer[1], 0x42)
+    }
+
     func testYScrollWriteCanSuppressBadLineBusStealDuringFetchWindow() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
@@ -322,6 +492,48 @@ final class C64TimingTests: XCTestCase {
         XCTAssertFalse(c64.vic.badLine)
         XCTAssertEqual(c64.vic.rasterCycle, 21)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBefore + 1)
+    }
+
+    func testYScrollWriteAfterFetchWindowCannotStartBadLine() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 56
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+
+        XCTAssertFalse(c64.vic.badLine)
+
+        let cyclesBefore = c64.cpu.totalCycles
+        c64.vic.writeRegister(0x11, value: 0x13)
+        c64.tickOneCycle()
+
+        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
+        XCTAssertTrue(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBefore + 1)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0)
+    }
+
+    func testLateYScrollWriteDoesNotResetExistingDisplayRowState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 56
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+        c64.vic.rowCounter = 5
+        c64.vic.displayLineBufferBase = 80
+        c64.vic.badLineFetchMask = 0x03
+        c64.vic.lineBuffer[0] = 0x41
+        c64.vic.lineBuffer[1] = 0x42
+
+        c64.vic.writeRegister(0x11, value: 0x13)
+
+        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rowCounter, 5)
+        XCTAssertEqual(c64.vic.displayLineBufferBase, 80)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0x03)
+        XCTAssertEqual(c64.vic.lineBuffer[0], 0x41)
+        XCTAssertEqual(c64.vic.lineBuffer[1], 0x42)
     }
 
     func testRasterOutsideDisplayAreaDoesNotStallCPU() {

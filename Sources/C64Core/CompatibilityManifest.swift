@@ -255,7 +255,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let ramSignatures: [CompatibilityRAMSignature]
     public let colorRAMSignatures: [CompatibilityRAMSignature]
     public let cpuRegisters: CompatibilityCPURegisters?
+    public let sidModel: SID.Model?
+    public let sidAccuracyMode: SID.AccuracyMode?
     public let sidRegisters: [CompatibilitySIDRegisterExpectation]
+    public let sidAudioSignature: CompatibilitySIDAudioSignature?
+    public let sidAudioState: CompatibilitySIDAudioState?
+    public let sidVoiceStates: [CompatibilitySIDVoiceState]
     public let vicRegisters: [CompatibilityVICRegisterExpectation]
     public let cia1Registers: [CompatibilityCIARegisterExpectation]
     public let cia2Registers: [CompatibilityCIARegisterExpectation]
@@ -289,7 +294,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case ramSignatures
         case colorRAMSignatures
         case cpuRegisters
+        case sidModel
+        case sidAccuracyMode
         case sidRegisters
+        case sidAudioSignature
+        case sidAudioState
+        case sidVoiceStates
         case vicRegisters
         case cia1Registers
         case cia2Registers
@@ -322,7 +332,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
         cpuRegisters: CompatibilityCPURegisters? = nil,
+        sidModel: SID.Model? = nil,
+        sidAccuracyMode: SID.AccuracyMode? = nil,
         sidRegisters: [CompatibilitySIDRegisterExpectation] = [],
+        sidAudioSignature: CompatibilitySIDAudioSignature? = nil,
+        sidAudioState: CompatibilitySIDAudioState? = nil,
+        sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
@@ -354,7 +369,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
         self.cpuRegisters = cpuRegisters
+        self.sidModel = sidModel
+        self.sidAccuracyMode = sidAccuracyMode
         self.sidRegisters = sidRegisters
+        self.sidAudioSignature = sidAudioSignature
+        self.sidAudioState = sidAudioState
+        self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
@@ -388,7 +408,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         ramSignatures: [CompatibilityRAMSignature] = [],
         colorRAMSignatures: [CompatibilityRAMSignature] = [],
         cpuRegisters: CompatibilityCPURegisters? = nil,
+        sidModel: SID.Model? = nil,
+        sidAccuracyMode: SID.AccuracyMode? = nil,
         sidRegisters: [CompatibilitySIDRegisterExpectation] = [],
+        sidAudioSignature: CompatibilitySIDAudioSignature? = nil,
+        sidAudioState: CompatibilitySIDAudioState? = nil,
+        sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
@@ -420,7 +445,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.ramSignatures = ramSignatures
         self.colorRAMSignatures = colorRAMSignatures
         self.cpuRegisters = cpuRegisters
+        self.sidModel = sidModel
+        self.sidAccuracyMode = sidAccuracyMode
         self.sidRegisters = sidRegisters
+        self.sidAudioSignature = sidAudioSignature
+        self.sidAudioState = sidAudioState
+        self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
@@ -482,7 +512,12 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         ramSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .ramSignatures) ?? []
         colorRAMSignatures = try container.decodeIfPresent([CompatibilityRAMSignature].self, forKey: .colorRAMSignatures) ?? []
         cpuRegisters = try container.decodeIfPresent(CompatibilityCPURegisters.self, forKey: .cpuRegisters)
+        sidModel = try container.decodeIfPresent(SID.Model.self, forKey: .sidModel)
+        sidAccuracyMode = try container.decodeIfPresent(SID.AccuracyMode.self, forKey: .sidAccuracyMode)
         sidRegisters = try container.decodeIfPresent([CompatibilitySIDRegisterExpectation].self, forKey: .sidRegisters) ?? []
+        sidAudioSignature = try container.decodeIfPresent(CompatibilitySIDAudioSignature.self, forKey: .sidAudioSignature)
+        sidAudioState = try container.decodeIfPresent(CompatibilitySIDAudioState.self, forKey: .sidAudioState)
+        sidVoiceStates = try container.decodeIfPresent([CompatibilitySIDVoiceState].self, forKey: .sidVoiceStates) ?? []
         vicRegisters = try container.decodeIfPresent([CompatibilityVICRegisterExpectation].self, forKey: .vicRegisters) ?? []
         cia1Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia1Registers) ?? []
         cia2Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia2Registers) ?? []
@@ -1203,6 +1238,352 @@ public struct CompatibilitySIDRegisterExpectation: Decodable, Equatable {
             )
         }
         return value
+    }
+}
+
+public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
+    public let sampleCount: Int
+    public let minimum: Float?
+    public let maximum: Float?
+    public let sum: Double?
+    public let absoluteSum: Double?
+    public let mean: Double?
+    public let rootMeanSquare: Double?
+    public let zeroCrossings: Int?
+    public let tolerance: Double
+
+    public init(
+        sampleCount: Int,
+        minimum: Float? = nil,
+        maximum: Float? = nil,
+        sum: Double? = nil,
+        absoluteSum: Double? = nil,
+        mean: Double? = nil,
+        rootMeanSquare: Double? = nil,
+        zeroCrossings: Int? = nil,
+        tolerance: Double = 0.000_001
+    ) {
+        self.sampleCount = sampleCount
+        self.minimum = minimum
+        self.maximum = maximum
+        self.sum = sum
+        self.absoluteSum = absoluteSum
+        self.mean = mean
+        self.rootMeanSquare = rootMeanSquare
+        self.zeroCrossings = zeroCrossings
+        self.tolerance = tolerance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sampleCount
+        case minimum
+        case maximum
+        case sum
+        case absoluteSum
+        case mean
+        case rootMeanSquare
+        case zeroCrossings
+        case tolerance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sampleCount = try container.decode(Int.self, forKey: .sampleCount)
+        minimum = try container.decodeIfPresent(Float.self, forKey: .minimum)
+        maximum = try container.decodeIfPresent(Float.self, forKey: .maximum)
+        sum = try container.decodeIfPresent(Double.self, forKey: .sum)
+        absoluteSum = try container.decodeIfPresent(Double.self, forKey: .absoluteSum)
+        mean = try container.decodeIfPresent(Double.self, forKey: .mean)
+        rootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .rootMeanSquare)
+        zeroCrossings = try container.decodeIfPresent(Int.self, forKey: .zeroCrossings)
+        tolerance = try container.decodeIfPresent(Double.self, forKey: .tolerance) ?? 0.000_001
+
+        guard sampleCount >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sampleCount,
+                in: container,
+                debugDescription: "SID audio sampleCount must be non-negative"
+            )
+        }
+        guard tolerance >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .tolerance,
+                in: container,
+                debugDescription: "SID audio tolerance must be non-negative"
+            )
+        }
+        if let absoluteSum, absoluteSum < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .absoluteSum,
+                in: container,
+                debugDescription: "SID audio absoluteSum must be non-negative"
+            )
+        }
+        if let rootMeanSquare, rootMeanSquare < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rootMeanSquare,
+                in: container,
+                debugDescription: "SID audio rootMeanSquare must be non-negative"
+            )
+        }
+        if let zeroCrossings, zeroCrossings < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .zeroCrossings,
+                in: container,
+                debugDescription: "SID audio zeroCrossings must be non-negative"
+            )
+        }
+        if let minimum, let maximum, minimum > maximum {
+            throw DecodingError.dataCorruptedError(
+                forKey: .minimum,
+                in: container,
+                debugDescription: "SID audio minimum must not exceed maximum"
+            )
+        }
+    }
+}
+
+public struct CompatibilitySIDAudioState: Decodable, Equatable {
+    public let accuracyMode: SID.AccuracyMode?
+    public let audioAccumulator: Double?
+    public let audioAccumulatorCount: Int?
+    public let audioOutputState: Double?
+    public let filterLow: Double?
+    public let filterBand: Double?
+    public let filterHigh: Double?
+    public let sampleWritePosition: Int?
+    public let tolerance: Double
+
+    public init(
+        accuracyMode: SID.AccuracyMode? = nil,
+        audioAccumulator: Double? = nil,
+        audioAccumulatorCount: Int? = nil,
+        audioOutputState: Double? = nil,
+        filterLow: Double? = nil,
+        filterBand: Double? = nil,
+        filterHigh: Double? = nil,
+        sampleWritePosition: Int? = nil,
+        tolerance: Double = 0.000_001
+    ) {
+        self.accuracyMode = accuracyMode
+        self.audioAccumulator = audioAccumulator
+        self.audioAccumulatorCount = audioAccumulatorCount
+        self.audioOutputState = audioOutputState
+        self.filterLow = filterLow
+        self.filterBand = filterBand
+        self.filterHigh = filterHigh
+        self.sampleWritePosition = sampleWritePosition
+        self.tolerance = tolerance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accuracyMode
+        case audioAccumulator
+        case audioAccumulatorCount
+        case audioOutputState
+        case filterLow
+        case filterBand
+        case filterHigh
+        case sampleWritePosition
+        case tolerance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accuracyMode = try container.decodeIfPresent(SID.AccuracyMode.self, forKey: .accuracyMode)
+        audioAccumulator = try container.decodeIfPresent(Double.self, forKey: .audioAccumulator)
+        audioAccumulatorCount = try container.decodeIfPresent(Int.self, forKey: .audioAccumulatorCount)
+        audioOutputState = try container.decodeIfPresent(Double.self, forKey: .audioOutputState)
+        filterLow = try container.decodeIfPresent(Double.self, forKey: .filterLow)
+        filterBand = try container.decodeIfPresent(Double.self, forKey: .filterBand)
+        filterHigh = try container.decodeIfPresent(Double.self, forKey: .filterHigh)
+        sampleWritePosition = try container.decodeIfPresent(Int.self, forKey: .sampleWritePosition)
+        tolerance = try container.decodeIfPresent(Double.self, forKey: .tolerance) ?? 0.000_001
+
+        if let audioAccumulatorCount, audioAccumulatorCount < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .audioAccumulatorCount,
+                in: container,
+                debugDescription: "SID audio state accumulator count must be non-negative"
+            )
+        }
+        if let sampleWritePosition, sampleWritePosition < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sampleWritePosition,
+                in: container,
+                debugDescription: "SID audio state sample write position must be non-negative"
+            )
+        }
+        guard tolerance >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .tolerance,
+                in: container,
+                debugDescription: "SID audio state tolerance must be non-negative"
+            )
+        }
+    }
+}
+
+public struct CompatibilitySIDVoiceState: Decodable, Equatable {
+    public let voice: Int
+    public let frequency: Int?
+    public let pulseWidth: Int?
+    public let control: Int?
+    public let attackDecay: Int?
+    public let sustainRelease: Int?
+    public let accumulator: Int?
+    public let shiftRegister: Int?
+    public let envelopeLevel: Int?
+    public let envelopeState: String?
+    public let exponentialCounter: Int?
+    public let exponentialPeriod: Int?
+    public let holdZero: Bool?
+    public let gate: Bool?
+    public let rateCounter: Int?
+    public let waveformDACOutput: Int?
+    public let waveformDACHoldCyclesRemaining: Int?
+
+    public init(
+        voice: Int,
+        frequency: Int? = nil,
+        pulseWidth: Int? = nil,
+        control: Int? = nil,
+        attackDecay: Int? = nil,
+        sustainRelease: Int? = nil,
+        accumulator: Int? = nil,
+        shiftRegister: Int? = nil,
+        envelopeLevel: Int? = nil,
+        envelopeState: String? = nil,
+        exponentialCounter: Int? = nil,
+        exponentialPeriod: Int? = nil,
+        holdZero: Bool? = nil,
+        gate: Bool? = nil,
+        rateCounter: Int? = nil,
+        waveformDACOutput: Int? = nil,
+        waveformDACHoldCyclesRemaining: Int? = nil
+    ) {
+        self.voice = voice
+        self.frequency = frequency
+        self.pulseWidth = pulseWidth
+        self.control = control
+        self.attackDecay = attackDecay
+        self.sustainRelease = sustainRelease
+        self.accumulator = accumulator
+        self.shiftRegister = shiftRegister
+        self.envelopeLevel = envelopeLevel
+        self.envelopeState = envelopeState
+        self.exponentialCounter = exponentialCounter
+        self.exponentialPeriod = exponentialPeriod
+        self.holdZero = holdZero
+        self.gate = gate
+        self.rateCounter = rateCounter
+        self.waveformDACOutput = waveformDACOutput
+        self.waveformDACHoldCyclesRemaining = waveformDACHoldCyclesRemaining
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case voice
+        case frequency
+        case pulseWidth
+        case control
+        case attackDecay
+        case sustainRelease
+        case accumulator
+        case shiftRegister
+        case envelopeLevel
+        case envelopeState
+        case exponentialCounter
+        case exponentialPeriod
+        case holdZero
+        case gate
+        case rateCounter
+        case waveformDACOutput
+        case waveformDACHoldCyclesRemaining
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        voice = try container.decode(Int.self, forKey: .voice)
+        frequency = try Self.decodeOptionalInteger(forKey: .frequency, in: container)
+        pulseWidth = try Self.decodeOptionalInteger(forKey: .pulseWidth, in: container)
+        control = try Self.decodeOptionalInteger(forKey: .control, in: container)
+        attackDecay = try Self.decodeOptionalInteger(forKey: .attackDecay, in: container)
+        sustainRelease = try Self.decodeOptionalInteger(forKey: .sustainRelease, in: container)
+        accumulator = try Self.decodeOptionalInteger(forKey: .accumulator, in: container)
+        shiftRegister = try Self.decodeOptionalInteger(forKey: .shiftRegister, in: container)
+        envelopeLevel = try Self.decodeOptionalInteger(forKey: .envelopeLevel, in: container)
+        envelopeState = try container.decodeIfPresent(String.self, forKey: .envelopeState)
+        exponentialCounter = try Self.decodeOptionalInteger(forKey: .exponentialCounter, in: container)
+        exponentialPeriod = try Self.decodeOptionalInteger(forKey: .exponentialPeriod, in: container)
+        holdZero = try container.decodeIfPresent(Bool.self, forKey: .holdZero)
+        gate = try container.decodeIfPresent(Bool.self, forKey: .gate)
+        rateCounter = try Self.decodeOptionalInteger(forKey: .rateCounter, in: container)
+        waveformDACOutput = try Self.decodeOptionalInteger(forKey: .waveformDACOutput, in: container)
+        waveformDACHoldCyclesRemaining = try Self.decodeOptionalInteger(forKey: .waveformDACHoldCyclesRemaining, in: container)
+
+        try Self.validate(voice, forKey: .voice, in: container, range: 0...2, description: "SID voice index must be 0, 1, or 2")
+        try Self.validateOptional(frequency, forKey: .frequency, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(pulseWidth, forKey: .pulseWidth, in: container, range: 0...0x0FFF)
+        try Self.validateOptional(control, forKey: .control, in: container, range: 0...0xFF)
+        try Self.validateOptional(attackDecay, forKey: .attackDecay, in: container, range: 0...0xFF)
+        try Self.validateOptional(sustainRelease, forKey: .sustainRelease, in: container, range: 0...0xFF)
+        try Self.validateOptional(accumulator, forKey: .accumulator, in: container, range: 0...0xFFFFFF)
+        try Self.validateOptional(shiftRegister, forKey: .shiftRegister, in: container, range: 0...0x7FFFFF)
+        try Self.validateOptional(envelopeLevel, forKey: .envelopeLevel, in: container, range: 0...0xFF)
+        try Self.validateOptional(exponentialCounter, forKey: .exponentialCounter, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(exponentialPeriod, forKey: .exponentialPeriod, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(rateCounter, forKey: .rateCounter, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(waveformDACOutput, forKey: .waveformDACOutput, in: container, range: 0...0x0FFF)
+        try Self.validateOptional(waveformDACHoldCyclesRemaining, forKey: .waveformDACHoldCyclesRemaining, in: container, range: 0...Int.max)
+    }
+
+    private static func decodeOptionalInteger<K: CodingKey>(
+        forKey key: K,
+        in container: KeyedDecodingContainer<K>
+    ) throws -> Int? {
+        guard container.contains(key) else { return nil }
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        let rawValue = try container.decode(String.self, forKey: key)
+        let compact = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: "0x", with: "", options: .caseInsensitive)
+        guard let value = Int(compact, radix: 16) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "Expected decimal integer or hexadecimal string"
+            )
+        }
+        return value
+    }
+
+    private static func validate<K: CodingKey>(
+        _ value: Int,
+        forKey key: K,
+        in container: KeyedDecodingContainer<K>,
+        range: ClosedRange<Int>,
+        description: String? = nil
+    ) throws {
+        guard range.contains(value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: description ?? "\(key.stringValue) is out of range"
+            )
+        }
+    }
+
+    private static func validateOptional<K: CodingKey>(
+        _ value: Int?,
+        forKey key: K,
+        in container: KeyedDecodingContainer<K>,
+        range: ClosedRange<Int>
+    ) throws {
+        guard let value else { return }
+        try validate(value, forKey: key, in: container, range: range)
     }
 }
 

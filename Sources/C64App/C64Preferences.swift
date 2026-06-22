@@ -4,6 +4,8 @@ import C64Core
 enum PreferenceKey {
     static let machineProfile = "c64.machineProfile"
     static let trueDriveMode = "c64.trueDriveMode"
+    static let sidModel = "c64.sid.model"
+    static let sidAccuracyMode = "c64.sid.accuracyMode"
     static let joystickRouting = "c64.input.joystickRouting"
     static let basicROMPath = "c64.rom.basicPath"
     static let kernalROMPath = "c64.rom.kernalPath"
@@ -120,6 +122,51 @@ enum TrueDriveModePreference: String, CaseIterable, Identifiable {
         case .off: return .off
         case .standard1541: return .standard1541
         case .compat1541: return .compat1541
+        }
+    }
+}
+
+enum SIDAccuracyModePreference: String, CaseIterable, Identifiable {
+    case fast
+    case compatibility
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fast: return "Fast"
+        case .compatibility: return "Compatibility"
+        }
+    }
+
+    var mode: SID.AccuracyMode {
+        switch self {
+        case .fast: return .fast
+        case .compatibility: return .compatibility
+        }
+    }
+}
+
+enum SIDModelPreference: String, CaseIterable, Identifiable {
+    case profileDefault
+    case mos6581
+    case mos8580
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .profileDefault: return "Profile Default"
+        case .mos6581: return "MOS 6581"
+        case .mos8580: return "MOS 8580"
+        }
+    }
+
+    var model: SID.Model? {
+        switch self {
+        case .profileDefault: return nil
+        case .mos6581: return .mos6581
+        case .mos8580: return .mos8580
         }
     }
 }

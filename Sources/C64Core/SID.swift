@@ -10,14 +10,70 @@ private extension Double {
 /// Simplified but functional: 3 voices with waveforms, ADSR, and filter.
 public final class SID {
 
-    public enum Model: String, Equatable {
+    public enum Model: String, Codable, Equatable {
         case mos6581
         case mos8580
+    }
+
+    public enum AccuracyMode: String, Codable, Equatable {
+        case fast
+        case compatibility
+    }
+
+    public struct AudioSignature: Equatable {
+        public let sampleCount: Int
+        public let minimum: Float
+        public let maximum: Float
+        public let sum: Double
+        public let absoluteSum: Double
+        public let mean: Double
+        public let rootMeanSquare: Double
+        public let zeroCrossings: Int
+    }
+
+    public struct AudioDebugState: Equatable {
+        public let accuracyMode: AccuracyMode
+        public let audioAccumulator: Double
+        public let audioAccumulatorCount: Int
+        public let audioOutputState: Double
+        public let filterLow: Double
+        public let filterBand: Double
+        public let filterHigh: Double
+        public let sampleWritePosition: Int
+    }
+
+    public struct VoiceDebugState: Equatable {
+        public let frequency: UInt16
+        public let pulseWidth: UInt16
+        public let control: UInt8
+        public let attackDecay: UInt8
+        public let sustainRelease: UInt8
+        public let accumulator: UInt32
+        public let shiftRegister: UInt32
+        public let envelopeLevel: UInt8
+        public let envelopeState: String
+        public let exponentialCounter: UInt16
+        public let exponentialPeriod: UInt16
+        public let holdZero: Bool
+        public let gate: Bool
+        public let rateCounter: UInt16
+        public let waveformDACOutput: UInt16
+        public let waveformDACHoldCyclesRemaining: Int
+    }
+
+    struct AnalogProfile: Equatable {
+        let outputPositiveDrive: Double
+        let outputNegativeDrive: Double
+        let outputPostDrive: Double
+        let filterInputDrive: Double
+        let filterInputDCBleed: Double
+        let outputSmoothingCoefficient: Double
     }
 
     // MARK: - Constants
 
     public var model: Model = .mos6581
+    public var accuracyMode: AccuracyMode = .fast
     public var clockRate: Double = 985_248.0  // PAL
     public static let sampleRate: Double = 44100.0
     var cyclesPerSample: Double { clockRate / Self.sampleRate }
@@ -92,6 +148,28 @@ public final class SID {
             return Self.volumeDAC8580[Int(volume)]
         }
     }
+    var analogProfile: AnalogProfile {
+        switch model {
+        case .mos6581:
+            return AnalogProfile(
+                outputPositiveDrive: 1.18,
+                outputNegativeDrive: 0.94,
+                outputPostDrive: 1.20,
+                filterInputDrive: 1.35,
+                filterInputDCBleed: 0.10,
+                outputSmoothingCoefficient: 0.90
+            )
+        case .mos8580:
+            return AnalogProfile(
+                outputPositiveDrive: 1.0,
+                outputNegativeDrive: 1.0,
+                outputPostDrive: 1.03,
+                filterInputDrive: 1.05,
+                filterInputDCBleed: 0,
+                outputSmoothingCoefficient: 0.96
+            )
+        }
+    }
     var normalizedFilterCutoff: Double {
         let normalized = Double(filterCutoff) / 2047.0
         switch model {
@@ -117,6 +195,9 @@ public final class SID {
     /// Latched analog paddle values read through POTX/POTY ($D419/$D41A).
     var paddleX: UInt8 = 0xFF
     var paddleY: UInt8 = 0xFF
+    var paddleTargetX: UInt8 = 0xFF
+    var paddleTargetY: UInt8 = 0xFF
+    var paddleScanCounter: Int?
     /// Last value observed on the SID-local data bus for direct chip reads.
     var dataBusLatch: UInt8 = 0
     /// Remaining cycles before the floating SID-local data bus decays.
@@ -129,6 +210,9 @@ public final class SID {
 
     /// Audio sample accumulator
     var sampleCycleCounter: Double = 0
+    var audioAccumulator: Double = 0
+    var audioAccumulatorCount: Int = 0
+    var audioOutputState: Double = 0
 
     /// Per-cycle oscillator MSB rising-edge flags used for hard sync.
     var oscillatorMSBRose = [Bool](repeating: false, count: 3)
@@ -153,8 +237,11 @@ public final class SID {
     ]
 
     static let dataBusLatchHoldCycles = 0x2000
+    static let dataBusLatchLeakStepCycles = 0x0200
     static let envelopeRateCounterMask: UInt16 = 0x7FFF
     static let waveformDACHoldCycles = 128
+    static let waveformDACLeakStepCycles = 32
+    static let paddleScanCycles = 512
 
     static let volumeDAC6581: [Int32] = [
         0, 80, 170, 285, 425, 590, 780, 1_000,
@@ -198,12 +285,18 @@ public final class SID {
         externalAudioInput = 0
         paddleX = 0xFF
         paddleY = 0xFF
+        paddleTargetX = 0xFF
+        paddleTargetY = 0xFF
+        paddleScanCounter = nil
         dataBusLatch = 0
         dataBusLatchCyclesRemaining = 0
         filterLow = 0
         filterBand = 0
         filterHigh = 0
         sampleCycleCounter = 0
+        audioAccumulator = 0
+        audioAccumulatorCount = 0
+        audioOutputState = 0
         oscillatorMSBRose = [Bool](repeating: false, count: 3)
         noiseClockRose = [Bool](repeating: false, count: 3)
         sampleWritePos = 0
@@ -216,6 +309,7 @@ public final class SID {
     /// Advance one system clock cycle.
     public func tick() {
         ageDataBusLatch()
+        tickPaddleScan()
 
         // Update all oscillators before applying sync so source edges are
         // independent of voice iteration order.
@@ -228,11 +322,112 @@ public final class SID {
             clockEnvelope(i)
         }
 
+        if accuracyMode == .compatibility {
+            accumulateAudioOutput()
+        }
+
         // Generate audio sample at the right rate
         sampleCycleCounter += 1
         if sampleCycleCounter >= cyclesPerSample {
             sampleCycleCounter -= cyclesPerSample
-            generateSample()
+            if accuracyMode == .compatibility {
+                generateAccumulatedSample()
+            } else {
+                generateSample()
+            }
+        }
+    }
+
+    public func recentAudioSignature(sampleCount requestedCount: Int) -> AudioSignature {
+        let sampleCount = min(max(requestedCount, 0), sampleBuffer.count)
+        guard sampleCount > 0 else {
+            return AudioSignature(
+                sampleCount: 0,
+                minimum: 0,
+                maximum: 0,
+                sum: 0,
+                absoluteSum: 0,
+                mean: 0,
+                rootMeanSquare: 0,
+                zeroCrossings: 0
+            )
+        }
+
+        var minimum = Float.infinity
+        var maximum = -Float.infinity
+        var sum = 0.0
+        var absoluteSum = 0.0
+        var sumOfSquares = 0.0
+        var zeroCrossings = 0
+        var previousNonZeroSign: Int?
+        let start = (sampleWritePos - sampleCount + sampleBuffer.count) % sampleBuffer.count
+
+        for offset in 0..<sampleCount {
+            let sample = sampleBuffer[(start + offset) % sampleBuffer.count]
+            minimum = min(minimum, sample)
+            maximum = max(maximum, sample)
+            sum += Double(sample)
+            absoluteSum += Double(abs(sample))
+            sumOfSquares += Double(sample) * Double(sample)
+
+            let sign = sample < 0 ? -1 : (sample > 0 ? 1 : 0)
+            if sign != 0 {
+                if let previousNonZeroSign, previousNonZeroSign != sign {
+                    zeroCrossings += 1
+                }
+                previousNonZeroSign = sign
+            }
+        }
+
+        return AudioSignature(
+            sampleCount: sampleCount,
+            minimum: minimum,
+            maximum: maximum,
+            sum: sum,
+            absoluteSum: absoluteSum,
+            mean: sum / Double(sampleCount),
+            rootMeanSquare: sqrt(sumOfSquares / Double(sampleCount)),
+            zeroCrossings: zeroCrossings
+        )
+    }
+
+    public func debugRegisterSnapshot() -> [UInt8] {
+        (0..<0x20).map { debugRegisterValue(UInt16($0)) }
+    }
+
+    public func debugAudioState() -> AudioDebugState {
+        AudioDebugState(
+            accuracyMode: accuracyMode,
+            audioAccumulator: audioAccumulator,
+            audioAccumulatorCount: audioAccumulatorCount,
+            audioOutputState: audioOutputState,
+            filterLow: filterLow,
+            filterBand: filterBand,
+            filterHigh: filterHigh,
+            sampleWritePosition: sampleWritePos
+        )
+    }
+
+    public func debugVoiceStates() -> [VoiceDebugState] {
+        voices.map { voice in
+            VoiceDebugState(
+                frequency: voice.frequency,
+                pulseWidth: voice.pulseWidth,
+                control: voice.control,
+                attackDecay: voice.attackDecay,
+                sustainRelease: voice.sustainRelease,
+                accumulator: voice.accumulator,
+                shiftRegister: voice.shiftRegister,
+                envelopeLevel: voice.envelopeLevel,
+                envelopeState: String(describing: voice.envelopeState),
+                exponentialCounter: voice.exponentialCounter,
+                exponentialPeriod: voice.exponentialPeriod,
+                holdZero: voice.holdZero,
+                gate: voice.gate,
+                rateCounter: voice.rateCounter,
+                waveformDACOutput: voice.waveformDACOutput,
+                waveformDACHoldCyclesRemaining: voice.waveformDACHoldCyclesRemaining
+            )
         }
     }
 
@@ -281,14 +476,26 @@ public final class SID {
 
     func updateWaveformDACLatch(_ v: Int) {
         if voices[v].hasWaveform && !voices[v].testBit {
-            voices[v].waveformDACOutput = oscillatorOutput(v)
-            voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACHoldCycles
+            refreshWaveformDACLatch(v)
         } else if voices[v].waveformDACHoldCyclesRemaining > 0 {
             voices[v].waveformDACHoldCyclesRemaining -= 1
-            if voices[v].waveformDACHoldCyclesRemaining == 0 {
-                voices[v].waveformDACOutput = 0
+        } else if voices[v].waveformDACOutput > 0 {
+            voices[v].waveformDACOutput = leakedWaveformDACOutput(voices[v].waveformDACOutput)
+            if voices[v].waveformDACOutput > 0 {
+                voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACLeakStepCycles
             }
         }
+    }
+
+    func refreshWaveformDACLatch(_ v: Int) {
+        voices[v].waveformDACOutput = oscillatorOutput(v)
+        voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACHoldCycles
+    }
+
+    func leakedWaveformDACOutput(_ output: UInt16) -> UInt16 {
+        let divisor = model == .mos6581 ? 32 : 16
+        let decrement = max(1, Int(output) / divisor)
+        return UInt16(max(0, Int(output) - decrement))
     }
 
     func applyOscillatorSync() {
@@ -296,6 +503,9 @@ public final class SID {
             let syncSource = (v + 2) % 3
             if oscillatorMSBRose[syncSource] {
                 voices[v].accumulator = 0
+                if voices[v].hasWaveform && !voices[v].testBit {
+                    refreshWaveformDACLatch(v)
+                }
             }
         }
     }
@@ -484,7 +694,7 @@ public final class SID {
         let rawOutput: UInt16
         if voices[v].hasWaveform {
             rawOutput = oscillatorOutput(v)
-        } else if voices[v].waveformDACHoldCyclesRemaining > 0 {
+        } else if voices[v].waveformDACOutput > 0 {
             rawOutput = voices[v].waveformDACOutput
         } else {
             return 0
@@ -500,7 +710,7 @@ public final class SID {
         return Int16(clamping: mixed)
     }
 
-    func generateSample() {
+    func mixedAudioOutput() -> Int32 {
         var directOutput: Int32 = 0
         var filterInput: Int32 = 0
 
@@ -523,10 +733,39 @@ public final class SID {
 
         var output = directOutput + applyFilter(input: filterInput)
         output = Int32(Double(output) * voiceOutputScale)
-        output += volumeDACOffset
 
-        // Apply master volume (0-15)
+        // Apply master volume to the audio path, then add the model-specific
+        // volume DAC bias. On the 6581 this DC step is observable and is used
+        // by volume-register sample playback tricks.
         output = (output * Int32(volume)) / 15
+        output += volumeDACOffset
+        output = applyOutputStage(input: output)
+        return output
+    }
+
+    func generateSample() {
+        writeSample(mixedAudioOutput())
+    }
+
+    func accumulateAudioOutput() {
+        audioAccumulator += Double(mixedAudioOutput())
+        audioAccumulatorCount += 1
+    }
+
+    func generateAccumulatedSample() {
+        guard audioAccumulatorCount > 0 else {
+            writeSample(mixedAudioOutput())
+            return
+        }
+
+        let averagedOutput = Int32((audioAccumulator / Double(audioAccumulatorCount)).rounded())
+        audioAccumulator = 0
+        audioAccumulatorCount = 0
+        writeSample(averagedOutput)
+    }
+
+    func writeSample(_ rawOutput: Int32) {
+        let output = sampleOutput(rawOutput)
 
         // Clamp and convert to float
         let clamped = max(-32768, min(32767, output))
@@ -537,10 +776,41 @@ public final class SID {
         sampleWritePos = (sampleWritePos + 1) % sampleBuffer.count
     }
 
+    func sampleOutput(_ input: Int32) -> Int32 {
+        guard accuracyMode == .compatibility else { return input }
+
+        let target = Double(input).clamped(to: -32768...32767)
+        audioOutputState += (target - audioOutputState) * analogProfile.outputSmoothingCoefficient
+        return Int32(audioOutputState.rounded().clamped(to: -32768...32767))
+    }
+
+    func applyOutputStage(input: Int32) -> Int32 {
+        guard accuracyMode == .compatibility else { return input }
+
+        let normalized = Double(input).clamped(to: -32768...32767) / 32768.0
+        let shaped: Double
+        let profile = analogProfile
+        switch model {
+        case .mos6581:
+            // A bounded approximation of the 6581's less-linear output stage.
+            // It intentionally gives positive and negative excursions slightly
+            // different gain so audio signatures can distinguish the model.
+            let asymmetricDrive = normalized >= 0
+                ? normalized * profile.outputPositiveDrive
+                : normalized * profile.outputNegativeDrive
+            shaped = tanh(asymmetricDrive * profile.outputPostDrive)
+        case .mos8580:
+            // The 8580 output stage is cleaner; retain a mild soft limit so
+            // compatibility signatures are deterministic near the rails.
+            shaped = tanh(normalized * profile.outputPostDrive)
+        }
+        return Int32((shaped * 32768.0).clamped(to: -32768...32767))
+    }
+
     func applyFilter(input: Int32) -> Int32 {
         guard filterInputEnabled || filterModeSelected else { return input }
 
-        let inputDouble = Double(input)
+        let inputDouble = filterInputDrive(input)
         let cutoff = normalizedFilterCutoff
         let damping = filterDamping
 
@@ -559,6 +829,26 @@ public final class SID {
         return Int32(output.clamped(to: -32768...32767))
     }
 
+    func filterInputDrive(_ input: Int32) -> Double {
+        let clamped = Double(input).clamped(to: -32768...32767)
+        guard accuracyMode == .compatibility else { return clamped }
+
+        let normalized = clamped / 32768.0
+        let profile = analogProfile
+        switch model {
+        case .mos6581:
+            // The 6581 filter input is intentionally rougher than the 8580.
+            // Keep this bounded and deterministic until we can calibrate it
+            // against measured chip captures.
+            let driven = tanh(normalized * profile.filterInputDrive) * 32768.0
+            let dcBleed = Double(volumeDACOffset) * profile.filterInputDCBleed
+            return (driven + dcBleed).clamped(to: -32768...32767)
+        case .mos8580:
+            let driven = tanh(normalized * profile.filterInputDrive) * 32768.0
+            return driven.clamped(to: -32768...32767)
+        }
+    }
+
     var filterInputEnabled: Bool {
         filterControl & 0x0F != 0
     }
@@ -572,6 +862,30 @@ public final class SID {
     public func setPaddle(x: UInt8, y: UInt8) {
         paddleX = x
         paddleY = y
+        paddleTargetX = x
+        paddleTargetY = y
+        paddleScanCounter = nil
+    }
+
+    public func startPaddleScan(x: UInt8, y: UInt8) {
+        paddleTargetX = x
+        paddleTargetY = y
+        paddleX = 0
+        paddleY = 0
+        paddleScanCounter = 0
+    }
+
+    func tickPaddleScan() {
+        guard let counter = paddleScanCounter else { return }
+        let nextCounter = min(counter + 1, Self.paddleScanCycles)
+        paddleScanCounter = nextCounter >= Self.paddleScanCycles ? nil : nextCounter
+        paddleX = paddleScanValue(target: paddleTargetX, counter: nextCounter)
+        paddleY = paddleScanValue(target: paddleTargetY, counter: nextCounter)
+    }
+
+    func paddleScanValue(target: UInt8, counter: Int) -> UInt8 {
+        let rampValue = min(255, max(0, counter * 256 / Self.paddleScanCycles))
+        return UInt8(min(Int(target), rampValue))
     }
 
     func latchDataBus(_ value: UInt8) {
@@ -580,16 +894,24 @@ public final class SID {
     }
 
     func ageDataBusLatch() {
-        guard dataBusLatchCyclesRemaining > 0 else { return }
-        dataBusLatchCyclesRemaining -= 1
-        if dataBusLatchCyclesRemaining == 0 {
-            dataBusLatch = 0
+        if dataBusLatchCyclesRemaining > 0 {
+            dataBusLatchCyclesRemaining -= 1
+            if dataBusLatchCyclesRemaining > 0 {
+                return
+            }
+        }
+
+        guard dataBusLatch != 0 else { return }
+        dataBusLatch &= dataBusLatch &- 1
+        if dataBusLatch != 0 {
+            dataBusLatchCyclesRemaining = Self.dataBusLatchLeakStepCycles
         }
     }
 
     public func readRegister(_ reg: UInt16) -> UInt8 {
+        let normalizedReg = reg & 0x1F
         let value: UInt8
-        switch reg {
+        switch normalizedReg {
         case 0x19:
             value = paddleX
         case 0x1A:
@@ -646,12 +968,13 @@ public final class SID {
     }
 
     public func writeRegister(_ reg: UInt16, value: UInt8) {
+        let normalizedReg = reg & 0x1F
         latchDataBus(value)
 
-        let voice = Int(reg / 7)
-        let voiceReg = Int(reg % 7)
+        let voice = Int(normalizedReg / 7)
+        let voiceReg = Int(normalizedReg % 7)
 
-        if reg < 21 && voice < 3 {
+        if normalizedReg < 21 && voice < 3 {
             switch voiceReg {
             case 0: voices[voice].frequency = (voices[voice].frequency & 0xFF00) | UInt16(value)
             case 1: voices[voice].frequency = (voices[voice].frequency & 0x00FF) | (UInt16(value) << 8)
@@ -663,7 +986,7 @@ public final class SID {
             default: break
             }
         } else {
-            switch reg {
+            switch normalizedReg {
             case 0x15: filterCutoff = (filterCutoff & 0x7F8) | UInt16(value & 0x07)
             case 0x16: filterCutoff = (filterCutoff & 0x007) | (UInt16(value) << 3)
             case 0x17:

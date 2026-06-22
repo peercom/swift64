@@ -117,9 +117,54 @@ final class CompatibilityManifestTests: XCTestCase {
                 "status": "$24",
                 "statusMask": "$ef"
               },
+              "sidModel": "mos8580",
+              "sidAccuracyMode": "compatibility",
               "sidRegisters": [
                 { "register": "$D418", "value": "$0f" },
                 { "register": 54276, "value": 33, "mask": "$f1" }
+              ],
+              "sidAudioSignature": {
+                "sampleCount": 128,
+                "minimum": -0.125,
+                "maximum": 0.5,
+                "sum": 1.25,
+                "absoluteSum": 3.5,
+                "mean": 0.009765625,
+                "rootMeanSquare": 0.25,
+                "zeroCrossings": 4,
+                "tolerance": 0.0001
+              },
+              "sidAudioState": {
+                "accuracyMode": "compatibility",
+                "audioAccumulator": 12.5,
+                "audioAccumulatorCount": 2,
+                "audioOutputState": 34.5,
+                "filterLow": 1.25,
+                "filterBand": -2.5,
+                "filterHigh": 3.75,
+                "sampleWritePosition": 4,
+                "tolerance": 0.001
+              },
+              "sidVoiceStates": [
+                {
+                  "voice": 0,
+                  "frequency": "$1234",
+                  "pulseWidth": "$0abc",
+                  "control": "$21",
+                  "attackDecay": "$ad",
+                  "sustainRelease": "$f6",
+                  "accumulator": "$abcdef",
+                  "shiftRegister": "$123456",
+                  "envelopeLevel": "$7f",
+                  "envelopeState": "decay",
+                  "exponentialCounter": 12,
+                  "exponentialPeriod": 30,
+                  "holdZero": true,
+                  "gate": true,
+                  "rateCounter": 456,
+                  "waveformDACOutput": "$0fed",
+                  "waveformDACHoldCyclesRemaining": 64
+                }
               ],
               "vicRegisters": [
                 { "register": "$D020", "value": "$06", "mask": "$0f" },
@@ -249,9 +294,54 @@ final class CompatibilityManifestTests: XCTestCase {
             p: 0x24,
             pMask: 0xEF
         ))
+        XCTAssertEqual(milestone.sidModel, .mos8580)
+        XCTAssertEqual(milestone.sidAccuracyMode, .compatibility)
         XCTAssertEqual(milestone.sidRegisters, [
             CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x0F),
             CompatibilitySIDRegisterExpectation(register: 0xD404, value: 0x21, mask: 0xF1)
+        ])
+        XCTAssertEqual(milestone.sidAudioSignature, CompatibilitySIDAudioSignature(
+            sampleCount: 128,
+            minimum: -0.125,
+            maximum: 0.5,
+            sum: 1.25,
+            absoluteSum: 3.5,
+            mean: 0.009765625,
+            rootMeanSquare: 0.25,
+            zeroCrossings: 4,
+            tolerance: 0.0001
+        ))
+        XCTAssertEqual(milestone.sidAudioState, CompatibilitySIDAudioState(
+            accuracyMode: .compatibility,
+            audioAccumulator: 12.5,
+            audioAccumulatorCount: 2,
+            audioOutputState: 34.5,
+            filterLow: 1.25,
+            filterBand: -2.5,
+            filterHigh: 3.75,
+            sampleWritePosition: 4,
+            tolerance: 0.001
+        ))
+        XCTAssertEqual(milestone.sidVoiceStates, [
+            CompatibilitySIDVoiceState(
+                voice: 0,
+                frequency: 0x1234,
+                pulseWidth: 0x0ABC,
+                control: 0x21,
+                attackDecay: 0xAD,
+                sustainRelease: 0xF6,
+                accumulator: 0xABCDEF,
+                shiftRegister: 0x123456,
+                envelopeLevel: 0x7F,
+                envelopeState: "decay",
+                exponentialCounter: 12,
+                exponentialPeriod: 30,
+                holdZero: true,
+                gate: true,
+                rateCounter: 456,
+                waveformDACOutput: 0x0FED,
+                waveformDACHoldCyclesRemaining: 64
+            )
         ])
         XCTAssertEqual(milestone.vicRegisters, [
             CompatibilityVICRegisterExpectation(register: 0xD020, value: 0x06, mask: 0x0F),
@@ -306,7 +396,9 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.ramSignatures, [])
         XCTAssertEqual(milestone.colorRAMSignatures, [])
         XCTAssertNil(milestone.cpuRegisters)
+        XCTAssertNil(milestone.sidModel)
         XCTAssertEqual(milestone.sidRegisters, [])
+        XCTAssertEqual(milestone.sidVoiceStates, [])
         XCTAssertEqual(milestone.vicRegisters, [])
         XCTAssertEqual(milestone.cia1Registers, [])
         XCTAssertEqual(milestone.cia2Registers, [])
@@ -566,6 +658,66 @@ final class CompatibilityManifestTests: XCTestCase {
         """
 
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidSIDAudioSignature() {
+        let invalidSignatures = [
+            #""sampleCount": -1"#,
+            #""sampleCount": 1, "absoluteSum": -0.1"#,
+            #""sampleCount": 1, "rootMeanSquare": -0.1"#,
+            #""sampleCount": 1, "zeroCrossings": -1"#,
+            #""sampleCount": 1, "minimum": 0.5, "maximum": -0.5"#,
+            #""sampleCount": 1, "tolerance": -0.1"#
+        ]
+
+        for signature in invalidSignatures {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "demo.prg",
+                  "sidAudioSignature": { \(signature) }
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected invalid SID audio signature to be rejected: \(signature)"
+            )
+        }
+    }
+
+    func testManifestRejectsInvalidSIDVoiceState() {
+        let invalidVoiceStates = [
+            #""voice": -1"#,
+            #""voice": 3"#,
+            #""voice": 0, "frequency": "$10000""#,
+            #""voice": 0, "pulseWidth": "$1000""#,
+            #""voice": 0, "control": "$100""#,
+            #""voice": 0, "accumulator": "$1000000""#,
+            #""voice": 0, "shiftRegister": "$800000""#,
+            #""voice": 0, "waveformDACHoldCyclesRemaining": -1"#
+        ]
+
+        for voiceState in invalidVoiceStates {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "demo.prg",
+                  "sidVoiceStates": [{ \(voiceState) }]
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected invalid SID voice state to be rejected: \(voiceState)"
+            )
+        }
     }
 
     func testManifestRejectsInvalidSpeedZoneRanges() {

@@ -85,6 +85,14 @@ public final class C64 {
         }
     }
 
+    /// Optional SID chip override for compatibility runs and app preferences.
+    /// When nil, the active machine profile selects the SID model.
+    public var sidModelOverride: SID.Model? {
+        didSet {
+            applyMachineProfile()
+        }
+    }
+
     /// Selects between Kernal traps and hardware-level 1541 emulation.
     public var trueDriveEmulationMode: TrueDriveEmulationMode = .off {
         didSet {
@@ -245,7 +253,7 @@ public final class C64 {
 
     func applyMachineProfile() {
         vic.videoStandard = machineProfile.videoStandard
-        sid.model = machineProfile.sidModel
+        sid.model = sidModelOverride ?? machineProfile.sidModel
         sid.clockRate = machineProfile.sidClockHz
         cia1.configureTOD(
             fiftyHzCyclesPerTenth: machineProfile.ciaTod50HzCyclesPerTenth,
