@@ -178,6 +178,8 @@ public final class DiskDrive {
     var mountedGeometry: D64Geometry?
     public private(set) var mountedFormat: DiskImage.Format?
     public private(set) var hasUnsavedChanges = false
+    public private(set) var isWriteProtected = true
+    public var onD64ImageChanged: ((Data) -> Void)?
 
     public var hasSectorErrorInfo: Bool {
         mountedGeometry?.errorInfoOffset != nil
@@ -191,6 +193,23 @@ public final class DiskDrive {
     public func markChangesSaved() {
         guard mountedFormat == .d64 else { return }
         hasUnsavedChanges = false
+    }
+
+    public func setWriteProtected(_ protected: Bool) {
+        isWriteProtected = protected
+    }
+
+    private func rejectWriteProtected() -> Bool {
+        guard isWriteProtected else { return false }
+        commandStatus = "26, WRITE PROTECT ON,00,00\r"
+        return true
+    }
+
+    private func markD64Modified() {
+        hasUnsavedChanges = true
+        if let exportedD64Image {
+            onD64ImageChanged?(exportedD64Image)
+        }
     }
 
     // MARK: - Init
@@ -208,6 +227,7 @@ public final class DiskDrive {
         mountedGeometry = geometry
         mountedFormat = .d64
         hasUnsavedChanges = false
+        isWriteProtected = false
         parseDirectory()
         return true
     }
@@ -219,6 +239,7 @@ public final class DiskDrive {
         mountedGeometry = Self.d64Geometry(forByteCount: decoded.count)
         mountedFormat = .g64
         hasUnsavedChanges = false
+        isWriteProtected = true
         parseDirectory()
         return true
     }
@@ -242,6 +263,7 @@ public final class DiskDrive {
         mountedGeometry = nil
         mountedFormat = nil
         hasUnsavedChanges = false
+        isWriteProtected = true
         directory = []
         diskName = ""
         diskID = ""
@@ -455,6 +477,18 @@ public final class DiskDrive {
         return data
     }
 
+    public func loadFileData(named filename: String) -> [UInt8]? {
+        guard isMounted else {
+            commandStatus = "74, DRIVE NOT READY,00,00\r"
+            return nil
+        }
+        guard let entry = findFile(filename) else {
+            commandStatus = "62, FILE NOT FOUND,00,00\r"
+            return nil
+        }
+        return loadFileData(entry)
+    }
+
     private func isReadSideSectorError(_ code: UInt8) -> Bool {
         switch code {
         case 20...24, 27...29:
@@ -476,8 +510,12 @@ public final class DiskDrive {
         guard isMounted,
               mountedGeometry != nil,
               mountedFormat == .d64,
+              !isWriteProtected,
               !request.name.isEmpty,
               request.name != "$" else {
+            if isMounted, mountedFormat == .d64, isWriteProtected {
+                commandStatus = "26, WRITE PROTECT ON,00,00\r"
+            }
             return false
         }
         guard validateDirectorySectorsReadable() else { return false }
@@ -516,7 +554,7 @@ public final class DiskDrive {
         writePRGChain(data: data, sectors: allocated)
         writeDirectoryEntry(slot: directorySlot, filename: request.name, firstSector: allocated[0], sectorCount: sectorCount)
         parseDirectory()
-        hasUnsavedChanges = true
+        markD64Modified()
         return true
     }
 
@@ -578,6 +616,8 @@ public final class DiskDrive {
                 commandStatus = "62, FILE NOT FOUND,00,00\r"
             case .destinationExists:
                 commandStatus = "63, FILE EXISTS,00,00\r"
+            case .writeProtected:
+                commandStatus = "26, WRITE PROTECT ON,00,00\r"
             case .readError:
                 break
             case .syntaxError:
@@ -607,6 +647,8 @@ public final class DiskDrive {
                 commandStatus = "62, FILE NOT FOUND,00,00\r"
             case .destinationExists:
                 commandStatus = "63, FILE EXISTS,00,00\r"
+            case .writeProtected:
+                commandStatus = "26, WRITE PROTECT ON,00,00\r"
             case .readError:
                 break
             case .syntaxError:
@@ -630,16 +672,13 @@ public final class DiskDrive {
                 return false
             }
 
-            guard formatD64(diskName: request.name, diskID: request.id) else {
-                commandStatus = "74, DRIVE NOT READY,00,00\r"
-                return false
-            }
+            guard formatD64(diskName: request.name, diskID: request.id) else { return false }
 
             commandStatus = "00, OK,00,00\r"
             return true
         }
 
-        if upper.hasPrefix("B-R") || upper.hasPrefix("U1") || upper.hasPrefix("UA") {
+        if upper.hasPrefix("B-R") || upper.hasPrefix("BLOCK-READ") || upper.hasPrefix("U1") || upper.hasPrefix("UA") {
             guard let result = blockRead(command: trimmed) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -658,7 +697,26 @@ public final class DiskDrive {
             return result == .read
         }
 
-        if upper.hasPrefix("B-W") || upper.hasPrefix("U2") || upper.hasPrefix("UB") {
+        if upper.hasPrefix("B-E") || upper.hasPrefix("BLOCK-EXECUTE") {
+            guard let result = blockRead(command: trimmed, acceptedPrefixes: ["B-E", "BLOCK-EXECUTE"]) else {
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+                return false
+            }
+
+            switch result {
+            case .read:
+                commandStatus = "00, OK,00,00\r"
+            case .invalidBlock:
+                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .readError:
+                break
+            case .syntaxError:
+                commandStatus = "30, SYNTAX ERROR,00,00\r"
+            }
+            return result == .read
+        }
+
+        if upper.hasPrefix("B-W") || upper.hasPrefix("BLOCK-WRITE") || upper.hasPrefix("U2") || upper.hasPrefix("UB") {
             guard let result = blockWrite(command: trimmed) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -671,13 +729,15 @@ public final class DiskDrive {
                 commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
             case .driveNotReady:
                 commandStatus = "74, DRIVE NOT READY,00,00\r"
+            case .writeProtected:
+                commandStatus = "26, WRITE PROTECT ON,00,00\r"
             case .syntaxError:
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
             }
             return result == .written
         }
 
-        if upper.hasPrefix("B-P") {
+        if upper.hasPrefix("B-P") || upper.hasPrefix("BLOCK-POINTER") {
             guard let result = blockPointer(command: trimmed) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -692,7 +752,7 @@ public final class DiskDrive {
             return result == .set
         }
 
-        if upper.hasPrefix("B-A") || upper.hasPrefix("B-F") {
+        if upper.hasPrefix("B-A") || upper.hasPrefix("BLOCK-ALLOCATE") || upper.hasPrefix("B-F") || upper.hasPrefix("BLOCK-FREE") {
             guard let result = blockAllocation(command: trimmed) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -707,6 +767,8 @@ public final class DiskDrive {
                 commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
             case .driveNotReady:
                 commandStatus = "74, DRIVE NOT READY,00,00\r"
+            case .writeProtected:
+                commandStatus = "26, WRITE PROTECT ON,00,00\r"
             case .readError:
                 break
             case .syntaxError:
@@ -715,19 +777,19 @@ public final class DiskDrive {
             return result == .changed
         }
 
-        if upper == "I" || upper == "I:" || upper == "I0:" || upper == "INITIALIZE" || upper == "INITIALIZE:" {
+        if upper == "I" || upper == "I:" || upper == "I0" || upper == "I0:" || upper == "INITIALIZE" || upper == "INITIALIZE:" {
             guard initializeDisk() else { return false }
             commandStatus = "00, OK,00,00\r"
             return true
         }
 
-        if upper == "UJ" || upper == "UJ:" || upper == "UI" || upper == "UI:" {
+        if upper == "UJ" || upper == "UJ:" || upper == "UI" || upper == "UI:" || upper == "UI+" || upper == "UI-" {
             guard resetDriveCommand() else { return false }
             commandStatus = "00, OK,00,00\r"
             return true
         }
 
-        if upper == "V" || upper == "V:" || upper == "V0:" || upper == "VALIDATE" || upper == "VALIDATE:" {
+        if upper == "V" || upper == "V:" || upper == "V0" || upper == "V0:" || upper == "VALIDATE" || upper == "VALIDATE:" {
             guard validateD64() else {
                 return false
             }
@@ -764,6 +826,7 @@ public final class DiskDrive {
         case renamed
         case missingSource
         case destinationExists
+        case writeProtected
         case readError
         case syntaxError
     }
@@ -772,6 +835,7 @@ public final class DiskDrive {
         case copied
         case missingSource
         case destinationExists
+        case writeProtected
         case readError
         case syntaxError
     }
@@ -787,6 +851,7 @@ public final class DiskDrive {
         case written
         case invalidBlock
         case driveNotReady
+        case writeProtected
         case syntaxError
     }
 
@@ -800,6 +865,7 @@ public final class DiskDrive {
         case alreadyAllocated
         case invalidBlock
         case driveNotReady
+        case writeProtected
         case readError
         case syntaxError
     }
@@ -820,17 +886,13 @@ public final class DiskDrive {
         return NewDiskCommand(name: String(name.prefix(16)), id: String(id.prefix(2)))
     }
 
-    private func blockRead(command: String) -> BlockReadResult? {
+    private func blockRead(
+        command: String,
+        acceptedPrefixes: [String] = ["B-R", "BLOCK-READ", "U1", "UA"]
+    ) -> BlockReadResult? {
         guard isMounted else { return .invalidBlock }
         let upper = command.uppercased()
-        let prefix: String
-        if upper.hasPrefix("B-R") {
-            prefix = "B-R"
-        } else if upper.hasPrefix("U1") {
-            prefix = "U1"
-        } else if upper.hasPrefix("UA") {
-            prefix = "UA"
-        } else {
+        guard let prefix = acceptedPrefixes.first(where: { upper.hasPrefix($0) }) else {
             return nil
         }
 
@@ -867,9 +929,12 @@ public final class DiskDrive {
 
     private func blockWrite(command: String) -> BlockWriteResult? {
         guard isMounted, mountedFormat == .d64 else { return .driveNotReady }
+        guard !isWriteProtected else { return .writeProtected }
         let upper = command.uppercased()
         let prefix: String
-        if upper.hasPrefix("B-W") {
+        if upper.hasPrefix("BLOCK-WRITE") {
+            prefix = "BLOCK-WRITE"
+        } else if upper.hasPrefix("B-W") {
             prefix = "B-W"
         } else if upper.hasPrefix("U2") {
             prefix = "U2"
@@ -909,15 +974,22 @@ public final class DiskDrive {
             sectorData.replaceSubrange(0..<min(buffered.count, 256), with: buffered.prefix(256))
         }
         writeSector(track: track, sector: sector, data: sectorData)
-        hasUnsavedChanges = true
+        markD64Modified()
         return .written
     }
 
     private func blockPointer(command: String) -> BlockPointerResult? {
         let upper = command.uppercased()
-        guard upper.hasPrefix("B-P") else { return nil }
+        let prefix: String
+        if upper.hasPrefix("BLOCK-POINTER") {
+            prefix = "BLOCK-POINTER"
+        } else if upper.hasPrefix("B-P") {
+            prefix = "B-P"
+        } else {
+            return nil
+        }
 
-        var expression = String(command.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+        var expression = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         if expression.hasPrefix(":") || expression.hasPrefix(",") {
             expression.removeFirst()
         }
@@ -939,12 +1011,19 @@ public final class DiskDrive {
 
     private func blockAllocation(command: String) -> BlockAllocationResult? {
         guard isMounted, mountedFormat == .d64 else { return .driveNotReady }
+        guard !isWriteProtected else { return .writeProtected }
         let upper = command.uppercased()
         let allocate: Bool
         let prefix: String
-        if upper.hasPrefix("B-A") {
+        if upper.hasPrefix("BLOCK-ALLOCATE") {
+            allocate = true
+            prefix = "BLOCK-ALLOCATE"
+        } else if upper.hasPrefix("B-A") {
             allocate = true
             prefix = "B-A"
+        } else if upper.hasPrefix("BLOCK-FREE") {
+            allocate = false
+            prefix = "BLOCK-FREE"
         } else if upper.hasPrefix("B-F") {
             allocate = false
             prefix = "B-F"
@@ -980,7 +1059,7 @@ public final class DiskDrive {
         }
 
         setBAMSector(track: track, sector: sector, free: !allocate)
-        hasUnsavedChanges = true
+        markD64Modified()
         return .changed
     }
 
@@ -1016,7 +1095,7 @@ public final class DiskDrive {
         guard commandBytes.count >= 3,
               commandBytes[0] == 0x4D || commandBytes[0] == 0x6D,
               commandBytes[1] == 0x2D else {
-            return nil
+            return executeLongMemoryCommand(commandBytes)
         }
 
         var payload = Array(commandBytes.dropFirst(3))
@@ -1026,6 +1105,42 @@ public final class DiskDrive {
 
         switch commandBytes[2] {
         case 0x52, 0x72: // M-R
+            return executeMemoryCommand(kind: .read, payload: payload)
+        case 0x57, 0x77: // M-W
+            return executeMemoryCommand(kind: .write, payload: payload)
+        case 0x45, 0x65: // M-E
+            return executeMemoryCommand(kind: .execute, payload: payload)
+        default:
+            return nil
+        }
+    }
+
+    private func executeLongMemoryCommand(_ commandBytes: [UInt8]) -> Bool? {
+        let command = String(decoding: commandBytes, as: UTF8.self)
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let upper = trimmed.uppercased()
+
+        if upper.hasPrefix("MEMORY-READ") {
+            return executeMemoryCommand(kind: .read, payload: Array(trimmed.dropFirst("MEMORY-READ".count).utf8))
+        }
+        if upper.hasPrefix("MEMORY-WRITE") {
+            return executeMemoryCommand(kind: .write, payload: Array(trimmed.dropFirst("MEMORY-WRITE".count).utf8))
+        }
+        if upper.hasPrefix("MEMORY-EXECUTE") {
+            return executeMemoryCommand(kind: .execute, payload: Array(trimmed.dropFirst("MEMORY-EXECUTE".count).utf8))
+        }
+        return nil
+    }
+
+    private enum MemoryCommandKind {
+        case read
+        case write
+        case execute
+    }
+
+    private func executeMemoryCommand(kind: MemoryCommandKind, payload: [UInt8]) -> Bool {
+        switch kind {
+        case .read:
             guard let request = parseMemoryReadPayload(payload) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -1034,7 +1149,7 @@ public final class DiskDrive {
             commandResponseData = (0..<count).map { dosMemory[(request.address + $0) & 0xFFFF] }
             commandStatus = "00, OK,00,00\r"
             return true
-        case 0x57, 0x77: // M-W
+        case .write:
             guard let request = parseMemoryWritePayload(payload) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
@@ -1044,15 +1159,13 @@ public final class DiskDrive {
             }
             commandStatus = "00, OK,00,00\r"
             return true
-        case 0x45, 0x65: // M-E
+        case .execute:
             guard parseMemoryExecutePayload(payload) != nil else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
             }
             commandStatus = "00, OK,00,00\r"
             return true
-        default:
-            return nil
         }
     }
 
@@ -1148,8 +1261,10 @@ public final class DiskDrive {
               mountedFormat == .d64,
               geometry.trackCount >= 35,
               geometry.dataSize <= image.count else {
+            commandStatus = "74, DRIVE NOT READY,00,00\r"
             return false
         }
+        if rejectWriteProtected() { return false }
 
         for offset in 0..<geometry.dataSize {
             image[offset] = 0
@@ -1163,7 +1278,7 @@ public final class DiskDrive {
         imageData = image
         initializeBAMAndDirectory(diskName: newDiskName, diskID: newDiskID)
         parseDirectory()
-        hasUnsavedChanges = true
+        markD64Modified()
         return true
     }
 
@@ -1227,6 +1342,7 @@ public final class DiskDrive {
             commandStatus = "74, DRIVE NOT READY,00,00\r"
             return false
         }
+        if rejectWriteProtected() { return false }
         guard validateDirectorySectorsReadable() else { return false }
         guard readSector(track: 18, sector: 0) != nil else {
             commandStatus = "66, ILLEGAL TRACK OR SECTOR,18,00\r"
@@ -1250,7 +1366,7 @@ public final class DiskDrive {
         }
 
         parseDirectory()
-        hasUnsavedChanges = true
+        markD64Modified()
         return true
     }
 
@@ -1347,6 +1463,7 @@ public final class DiskDrive {
             commandStatus = "74, DRIVE NOT READY,00,00\r"
             return nil
         }
+        if rejectWriteProtected() { return nil }
         guard validateDirectorySectorsReadable() else { return nil }
         let request = parseDiskFilename(filename)
         guard !request.name.isEmpty, request.name != "$" else { return 0 }
@@ -1363,7 +1480,7 @@ public final class DiskDrive {
         }
 
         parseDirectory()
-        hasUnsavedChanges = true
+        markD64Modified()
         return matches.count
     }
 
@@ -1372,6 +1489,7 @@ public final class DiskDrive {
             commandStatus = "74, DRIVE NOT READY,00,00\r"
             return nil
         }
+        guard !isWriteProtected else { return .writeProtected }
         guard validateDirectorySectorsReadable() else { return .readError }
         guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
 
@@ -1385,7 +1503,7 @@ public final class DiskDrive {
 
         renameDirectoryEntry(slot: existing.slot, filename: destination)
         parseDirectory()
-        hasUnsavedChanges = true
+        markD64Modified()
         return .renamed
     }
 
@@ -1394,6 +1512,7 @@ public final class DiskDrive {
             commandStatus = "74, DRIVE NOT READY,00,00\r"
             return nil
         }
+        guard !isWriteProtected else { return .writeProtected }
         guard validateDirectorySectorsReadable() else { return .readError }
         guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
 
@@ -1885,9 +2004,7 @@ public final class DiskDrive {
             return true
         }
 
-        guard let entry = findFile(filename) else { return false }
-
-        guard let data = loadFileData(entry) else { return false }
+        guard let data = loadFileData(named: filename) else { return false }
 
         // For PRG files, prepend the load address (first 2 bytes of file data)
         // The file data from the disk already includes the load address

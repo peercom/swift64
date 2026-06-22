@@ -181,6 +181,22 @@ final class G64ParserTests: XCTestCase {
         XCTAssertEqual(sectors.first?.1, buildBAMSector())
     }
 
+    func testSectorHeaderStatsCountsDuplicateHeaders() {
+        let trackData = buildGCRTrack(
+            track: 18,
+            sectors: [
+                (0, buildBAMSector()),
+                (0, buildBAMSector()),
+                (1, buildBAMSector()),
+            ]
+        )
+
+        let stats = G64Parser.sectorHeaderStats(from: trackData, track: 18)
+
+        XCTAssertEqual(stats.validHeaderCount, 3)
+        XCTAssertEqual(stats.duplicateSectorHeaderCount, 1)
+    }
+
     // MARK: - Test: Mount G64 via DiskDrive
 
     func testMountG64() {

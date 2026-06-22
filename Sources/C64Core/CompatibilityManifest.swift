@@ -702,6 +702,8 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
     public let nonDefaultSectorErrorCodeCount: Int?
     public let weakBitRangeCount: Int?
     public let weakBitTotalBitCount: Int?
+    public let hasDuplicateSectorHeaders: Bool?
+    public let duplicateSectorHeaderCount: Int?
     public let variableSpeedZoneByteCount: Int?
     public let supportsWraparoundReads: Bool?
     public let maxTrackSize: Int?
@@ -722,6 +724,8 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         case nonDefaultSectorErrorCodeCount
         case weakBitRangeCount
         case weakBitTotalBitCount
+        case hasDuplicateSectorHeaders
+        case duplicateSectorHeaderCount
         case variableSpeedZoneByteCount
         case supportsWraparoundReads
         case maxTrackSize
@@ -743,6 +747,8 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         nonDefaultSectorErrorCodeCount: Int? = nil,
         weakBitRangeCount: Int? = nil,
         weakBitTotalBitCount: Int? = nil,
+        hasDuplicateSectorHeaders: Bool? = nil,
+        duplicateSectorHeaderCount: Int? = nil,
         variableSpeedZoneByteCount: Int? = nil,
         supportsWraparoundReads: Bool? = nil,
         maxTrackSize: Int? = nil,
@@ -762,6 +768,8 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         self.nonDefaultSectorErrorCodeCount = nonDefaultSectorErrorCodeCount
         self.weakBitRangeCount = weakBitRangeCount
         self.weakBitTotalBitCount = weakBitTotalBitCount
+        self.hasDuplicateSectorHeaders = hasDuplicateSectorHeaders
+        self.duplicateSectorHeaderCount = duplicateSectorHeaderCount
         self.variableSpeedZoneByteCount = variableSpeedZoneByteCount
         self.supportsWraparoundReads = supportsWraparoundReads
         self.maxTrackSize = maxTrackSize
@@ -784,6 +792,8 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         nonDefaultSectorErrorCodeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .nonDefaultSectorErrorCodeCount)
         weakBitRangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitRangeCount)
         weakBitTotalBitCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitTotalBitCount)
+        hasDuplicateSectorHeaders = try container.decodeIfPresent(Bool.self, forKey: .hasDuplicateSectorHeaders)
+        duplicateSectorHeaderCount = try Self.decodeNonNegativeIfPresent(container, forKey: .duplicateSectorHeaderCount)
         variableSpeedZoneByteCount = try Self.decodeNonNegativeIfPresent(container, forKey: .variableSpeedZoneByteCount)
         supportsWraparoundReads = try container.decodeIfPresent(Bool.self, forKey: .supportsWraparoundReads)
         maxTrackSize = try Self.decodeNonNegativeIfPresent(container, forKey: .maxTrackSize)

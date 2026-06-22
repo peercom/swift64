@@ -46,6 +46,7 @@ public final class C64 {
         public let mountedDiskFormat: DiskImage.Format?
         public let highLevelDiskFormat: DiskImage.Format?
         public let diskHasUnsavedChanges: Bool
+        public let highLevelDiskWriteProtected: Bool
         public let canExportModifiedD64: Bool
         public let tapeHasCapturedWritePulses: Bool
         public let canExportCapturedTAP: Bool
@@ -167,6 +168,9 @@ public final class C64 {
 
         // 1541 drive wiring
         drive1541.iecBus = iecBus
+        diskDrive.onD64ImageChanged = { [weak self] data in
+            self?.refreshTrueDriveD64Image(afterHighLevelMutation: data)
+        }
 
         // Wire up chip references
         memory.vic = vic
@@ -336,8 +340,19 @@ public final class C64 {
         diskDrive.exportedD64Image
     }
 
+    private func refreshTrueDriveD64Image(afterHighLevelMutation data: Data) {
+        guard diskDrive.mountedFormat == .d64 else { return }
+        _ = drive1541.insertDisk(data, isG64: false)
+        drive1541.setWriteProtected(diskDrive.isWriteProtected)
+    }
+
     public func markExportedD64ImageSaved() {
         diskDrive.markChangesSaved()
+    }
+
+    public func setMountedDiskWriteProtected(_ protected: Bool) {
+        diskDrive.setWriteProtected(protected)
+        drive1541.setWriteProtected(protected)
     }
 
     public func exportedCapturedTAPImage(version: UInt8 = 1) -> Data? {
@@ -369,6 +384,7 @@ public final class C64 {
             mountedDiskFormat: mountedDiskImage?.format,
             highLevelDiskFormat: diskDrive.mountedFormat,
             diskHasUnsavedChanges: diskDrive.hasUnsavedChanges,
+            highLevelDiskWriteProtected: diskDrive.isWriteProtected,
             canExportModifiedD64: diskDrive.exportedD64Image != nil,
             tapeHasCapturedWritePulses: !tapeUnit.writePulses.isEmpty,
             canExportCapturedTAP: tapeUnit.capturedWriteTAP() != nil,
@@ -403,6 +419,9 @@ public final class C64 {
 
         // Also load into the 1541's GCR disk for true drive emulation.
         lowLevelResult = drive1541.insertDisk(data, isG64: isG64)
+        if lowLevelResult {
+            drive1541.setWriteProtected(highLevelResult ? diskDrive.isWriteProtected : isG64)
+        }
 
         if highLevelResult && !lowLevelResult {
             drive1541.ejectDisk()

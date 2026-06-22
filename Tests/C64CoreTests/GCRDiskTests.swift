@@ -103,6 +103,22 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
     }
 
+    func testG64LoadReportsDuplicateSectorHeaders() {
+        let rawTrack = Self.g64HeaderBlock(track: 18, sector: 0)
+            + [UInt8](repeating: 0x55, count: 8)
+            + Self.g64HeaderBlock(track: 18, sector: 0)
+            + [UInt8](repeating: 0x55, count: 8)
+            + Self.g64HeaderBlock(track: 18, sector: 1)
+        let g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: rawTrack)
+        let disk = GCRDisk()
+
+        XCTAssertTrue(disk.loadG64(Data(g64)))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.duplicateSectorHeaderCount, 1)
+        XCTAssertEqual(disk.image?.capabilities.duplicateSectorHeaderCount, 1)
+        XCTAssertEqual(disk.image?.capabilities.hasDuplicateSectorHeaders, true)
+    }
+
     func testG64LoadReportsNativeHalfTrackPreservation() {
         var g64 = [UInt8]()
         g64.append(contentsOf: Array("GCR-1541".utf8))
@@ -621,5 +637,76 @@ final class GCRDiskTests: XCTestCase {
         g64.append(0x04)
         g64.append(0x00)
         return g64
+    }
+
+    private func makeSingleTrackG64(halfTrack: Int, rawTrack: [UInt8]) -> [UInt8] {
+        var g64 = [UInt8]()
+        g64.append(contentsOf: Array("GCR-1541".utf8))
+        g64.append(0x00)
+        g64.append(84)
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+
+        let offsetTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        let speedTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+
+        let trackOffset = g64.count
+        g64.append(UInt8(rawTrack.count & 0xFF))
+        g64.append(UInt8(rawTrack.count >> 8))
+        g64.append(contentsOf: rawTrack)
+
+        let offsetPos = offsetTableStart + halfTrack * 4
+        g64[offsetPos] = UInt8(trackOffset & 0xFF)
+        g64[offsetPos + 1] = UInt8((trackOffset >> 8) & 0xFF)
+        g64[offsetPos + 2] = UInt8((trackOffset >> 16) & 0xFF)
+        g64[offsetPos + 3] = UInt8((trackOffset >> 24) & 0xFF)
+
+        let speedPos = speedTableStart + halfTrack * 4
+        g64[speedPos] = 0x02
+        return g64
+    }
+
+    private static let gcrEncode: [UInt8] = [
+        0x0A, 0x0B, 0x12, 0x13, 0x0E, 0x0F, 0x16, 0x17,
+        0x09, 0x19, 0x1A, 0x1B, 0x0D, 0x1D, 0x1E, 0x15,
+    ]
+
+    private static func encodeGCR(_ bytes: [UInt8]) -> [UInt8] {
+        precondition(bytes.count == 4)
+        let values = [
+            gcrEncode[Int(bytes[0] >> 4)], gcrEncode[Int(bytes[0] & 0x0F)],
+            gcrEncode[Int(bytes[1] >> 4)], gcrEncode[Int(bytes[1] & 0x0F)],
+            gcrEncode[Int(bytes[2] >> 4)], gcrEncode[Int(bytes[2] & 0x0F)],
+            gcrEncode[Int(bytes[3] >> 4)], gcrEncode[Int(bytes[3] & 0x0F)],
+        ].map(UInt64.init)
+        let packed = (values[0] << 35) | (values[1] << 30) | (values[2] << 25) | (values[3] << 20)
+            | (values[4] << 15) | (values[5] << 10) | (values[6] << 5) | values[7]
+        return [
+            UInt8((packed >> 32) & 0xFF),
+            UInt8((packed >> 24) & 0xFF),
+            UInt8((packed >> 16) & 0xFF),
+            UInt8((packed >> 8) & 0xFF),
+            UInt8(packed & 0xFF),
+        ]
+    }
+
+    private static func encodeGCRBytes(_ bytes: [UInt8]) -> [UInt8] {
+        var padded = bytes
+        while padded.count % 4 != 0 { padded.append(0) }
+        var encoded: [UInt8] = []
+        for index in stride(from: 0, to: padded.count, by: 4) {
+            encoded.append(contentsOf: encodeGCR(Array(padded[index..<(index + 4)])))
+        }
+        return encoded
+    }
+
+    private static func g64HeaderBlock(track: UInt8, sector: UInt8) -> [UInt8] {
+        let id1: UInt8 = 0x41
+        let id2: UInt8 = 0x42
+        let checksum = sector ^ track ^ id2 ^ id1
+        let header: [UInt8] = [0x08, checksum, sector, track, id2, id1, 0x0F, 0x0F]
+        return [UInt8](repeating: 0xFF, count: 5) + encodeGCRBytes(header)
     }
 }

@@ -71,6 +71,8 @@ final class CompatibilityManifestTests: XCTestCase {
                 "nonDefaultSectorErrorCodeCount": 2,
                 "weakBitRangeCount": 3,
                 "weakBitTotalBitCount": 512,
+                "hasDuplicateSectorHeaders": true,
+                "duplicateSectorHeaderCount": 4,
                 "variableSpeedZoneByteCount": 7928,
                 "supportsWraparoundReads": true,
                 "maxTrackSize": 7928,
@@ -251,6 +253,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.nonDefaultSectorErrorCodeCount, 2)
         XCTAssertEqual(milestone.mediaStatus?.weakBitRangeCount, 3)
         XCTAssertEqual(milestone.mediaStatus?.weakBitTotalBitCount, 512)
+        XCTAssertEqual(milestone.mediaStatus?.hasDuplicateSectorHeaders, true)
+        XCTAssertEqual(milestone.mediaStatus?.duplicateSectorHeaderCount, 4)
         XCTAssertEqual(milestone.mediaStatus?.variableSpeedZoneByteCount, 7928)
         XCTAssertEqual(milestone.mediaStatus?.supportsWraparoundReads, true)
         XCTAssertEqual(milestone.mediaStatus?.maxTrackSize, 7928)

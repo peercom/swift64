@@ -124,6 +124,7 @@ public final class GCRDisk {
             guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else { continue }
 
             let trackBytes = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
+            let sectorHeaderStats = G64Parser.sectorHeaderStats(from: trackBytes, track: i / 2 + 1)
             let speedInfo = Self.g64SpeedInfo(
                 from: bytes,
                 speedTableStart: speedTableStart,
@@ -135,7 +136,8 @@ public final class GCRDisk {
                 bytes: trackBytes,
                 speedZone: speedInfo?.dominantZone ?? Self.speedZone(for: i / 2 + 1),
                 speedZoneMap: speedInfo?.speedZoneMap,
-                isNativeLowLevel: true
+                isNativeLowLevel: true,
+                duplicateSectorHeaderCount: sectorHeaderStats.duplicateSectorHeaderCount
             )
             newTracks[i] = info.bytes
             newTrackInfos[i] = info
@@ -231,7 +233,8 @@ public final class GCRDisk {
             speedZone: existing.speedZone,
             speedZoneMap: existing.speedZoneMap,
             weakBitRanges: ranges,
-            isNativeLowLevel: existing.isNativeLowLevel
+            isNativeLowLevel: existing.isNativeLowLevel,
+            duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
         )
         trackInfos[halfTrack] = updated
         tracks[halfTrack] = updated.bytes
@@ -288,7 +291,8 @@ public final class GCRDisk {
             speedZone: dominantZone,
             speedZoneMap: speedZoneMap,
             weakBitRanges: existing.weakBitRanges,
-            isNativeLowLevel: existing.isNativeLowLevel
+            isNativeLowLevel: existing.isNativeLowLevel,
+            duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
         )
         trackInfos[halfTrack] = updated
         tracks[halfTrack] = updated.bytes

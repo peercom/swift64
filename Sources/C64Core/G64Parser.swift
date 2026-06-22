@@ -11,6 +11,10 @@ private func g64log(_ msg: String) {
 }
 
 public enum G64Parser {
+    struct SectorHeaderStats: Equatable {
+        let validHeaderCount: Int
+        let duplicateSectorHeaderCount: Int
+    }
 
     // MARK: - G64 header constants
 
@@ -279,6 +283,44 @@ public enum G64Parser {
         }
 
         return sectors
+    }
+
+    static func sectorHeaderStats(from gcrData: [UInt8], track: Int) -> SectorHeaderStats {
+        let len = gcrData.count
+        guard len > 20 else {
+            return SectorHeaderStats(validHeaderCount: 0, duplicateSectorHeaderCount: 0)
+        }
+
+        let bits = toBits(gcrData + gcrData)
+        let maxBit = len * 8
+        var bitPos = 0
+        var sectorHeaderCounts: [Int: Int] = [:]
+
+        while bitPos < maxBit {
+            let afterSync = findSyncBit(in: bits, from: bitPos)
+            guard afterSync >= 0 && afterSync < maxBit else { break }
+
+            let headerDecode = decodeGCRFromBitsWithValidity(bits, from: afterSync, count: 8)
+            let headerBytes = headerDecode.bytes
+            if headerDecode.isValid &&
+                headerBytes.count >= 6 &&
+                headerBytes[0] == 0x08 &&
+                headerChecksumIsValid(headerBytes) &&
+                Int(headerBytes[3]) == track {
+                let sectorNum = Int(headerBytes[2])
+                sectorHeaderCounts[sectorNum, default: 0] += 1
+            }
+
+            bitPos = afterSync + 80
+        }
+
+        let duplicateCount = sectorHeaderCounts.values.reduce(0) { partial, count in
+            partial + max(0, count - 1)
+        }
+        return SectorHeaderStats(
+            validHeaderCount: sectorHeaderCounts.values.reduce(0, +),
+            duplicateSectorHeaderCount: duplicateCount
+        )
     }
 
     private static func decodeDataBlockAfterHeader(

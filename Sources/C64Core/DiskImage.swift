@@ -28,6 +28,7 @@ public struct DiskImage {
         public let nonDefaultSectorErrorCodeCount: Int
         public let weakBitRangeCount: Int
         public let weakBitTotalBitCount: Int
+        public let duplicateSectorHeaderCount: Int
         public let variableSpeedZoneByteCount: Int
         public let supportsWraparoundReads: Bool
         public let maxTrackSize: Int?
@@ -35,6 +36,7 @@ public struct DiskImage {
 
         public var isNativeLowLevel: Bool { nativeLowLevelTrackCount > 0 }
         public var hasSyntheticGCR: Bool { syntheticGCRTrackCount > 0 }
+        public var hasDuplicateSectorHeaders: Bool { duplicateSectorHeaderCount > 0 }
     }
 
     public struct Track: Equatable {
@@ -82,6 +84,9 @@ public struct DiskImage {
         /// True when the source is a native low-level stream rather than a
         /// synthetic D64 sector encoding.
         public let isNativeLowLevel: Bool
+        /// Count of repeated valid header IDs on this track. Some protected
+        /// media uses duplicate track/sector headers that D64 cannot represent.
+        public let duplicateSectorHeaderCount: Int
 
         public init(
             halfTrack: Int,
@@ -90,7 +95,8 @@ public struct DiskImage {
             speedZone: Int,
             speedZoneMap: [UInt8]? = nil,
             weakBitRanges: [WeakBitRange] = [],
-            isNativeLowLevel: Bool
+            isNativeLowLevel: Bool,
+            duplicateSectorHeaderCount: Int = 0
         ) {
             self.halfTrack = halfTrack
             self.bytes = bytes
@@ -99,6 +105,7 @@ public struct DiskImage {
             self.speedZoneMap = speedZoneMap
             self.weakBitRanges = weakBitRanges
             self.isNativeLowLevel = isNativeLowLevel
+            self.duplicateSectorHeaderCount = duplicateSectorHeaderCount
         }
     }
 
@@ -131,6 +138,9 @@ public struct DiskImage {
         let variableSpeedZoneByteCount = populated.reduce(0) { partial, track in
             partial + (track.speedZoneMap?.count ?? 0)
         }
+        let duplicateSectorHeaderCount = populated.reduce(0) { partial, track in
+            partial + track.duplicateSectorHeaderCount
+        }
         let sectorErrorCodeCount = sectorErrorCodes?.count ?? 0
         let nonDefaultSectorErrorCodeCount = sectorErrorCodes?.filter { code in
             code != 0x00 && code != 0x01
@@ -162,6 +172,7 @@ public struct DiskImage {
             nonDefaultSectorErrorCodeCount: nonDefaultSectorErrorCodeCount,
             weakBitRangeCount: weakBitRangeCount,
             weakBitTotalBitCount: weakBitTotalBitCount,
+            duplicateSectorHeaderCount: duplicateSectorHeaderCount,
             variableSpeedZoneByteCount: variableSpeedZoneByteCount,
             supportsWraparoundReads: true,
             maxTrackSize: maxTrackSize,

@@ -29,7 +29,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 DiskImage.Track.WeakBitRange(startBit: 0, endBit: 3),
                 DiskImage.Track.WeakBitRange(startBit: 8, endBit: 15),
             ],
-            isNativeLowLevel: true
+            isNativeLowLevel: true,
+            duplicateSectorHeaderCount: 1
         )
         let capabilities = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2).capabilities
 
@@ -37,6 +38,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             CompatibilityMediaStatus(
                 weakBitRangeCount: 2,
                 weakBitTotalBitCount: 12,
+                hasDuplicateSectorHeaders: true,
+                duplicateSectorHeaderCount: 1,
                 variableSpeedZoneByteCount: 2
             ),
             capabilities: capabilities
@@ -46,6 +49,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             CompatibilityMediaStatus(
                 weakBitRangeCount: 1,
                 weakBitTotalBitCount: 16,
+                hasDuplicateSectorHeaders: false,
+                duplicateSectorHeaderCount: 2,
                 variableSpeedZoneByteCount: 4
             ),
             capabilities: capabilities
@@ -53,6 +58,8 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         XCTAssertTrue(mismatches.contains("media.weakBitRangeCount 2 != 1"))
         XCTAssertTrue(mismatches.contains("media.weakBitTotalBitCount 12 != 16"))
+        XCTAssertTrue(mismatches.contains("media.hasDuplicateSectorHeaders true != false"))
+        XCTAssertTrue(mismatches.contains("media.duplicateSectorHeaderCount 1 != 2"))
         XCTAssertTrue(mismatches.contains("media.variableSpeedZoneByteCount 2 != 4"))
     }
 
@@ -908,6 +915,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalMediaNonDefaultSectorErrorCodeCount, 2)
         XCTAssertEqual(records.last?.finalMediaWeakBitRangeCount, 0)
         XCTAssertEqual(records.last?.finalMediaWeakBitTotalBitCount, 0)
+        XCTAssertEqual(records.last?.finalMediaHasDuplicateSectorHeaders, false)
+        XCTAssertEqual(records.last?.finalMediaDuplicateSectorHeaderCount, 0)
         XCTAssertEqual(records.last?.finalMediaVariableSpeedZoneByteCount, 0)
         XCTAssertEqual(records.last?.finalMediaSupportsWraparoundReads, true)
         XCTAssertNil(records.last?.finalMediaMaxTrackSize)
@@ -3075,6 +3084,14 @@ final class LocalDiskMatrixTests: XCTestCase {
            capabilities.weakBitTotalBitCount != weakBitTotalBitCount {
             mismatches.append("media.weakBitTotalBitCount \(capabilities.weakBitTotalBitCount) != \(weakBitTotalBitCount)")
         }
+        if let hasDuplicateSectorHeaders = expectation.hasDuplicateSectorHeaders,
+           capabilities.hasDuplicateSectorHeaders != hasDuplicateSectorHeaders {
+            mismatches.append("media.hasDuplicateSectorHeaders \(capabilities.hasDuplicateSectorHeaders) != \(hasDuplicateSectorHeaders)")
+        }
+        if let duplicateSectorHeaderCount = expectation.duplicateSectorHeaderCount,
+           capabilities.duplicateSectorHeaderCount != duplicateSectorHeaderCount {
+            mismatches.append("media.duplicateSectorHeaderCount \(capabilities.duplicateSectorHeaderCount) != \(duplicateSectorHeaderCount)")
+        }
         if let variableSpeedZoneByteCount = expectation.variableSpeedZoneByteCount,
            capabilities.variableSpeedZoneByteCount != variableSpeedZoneByteCount {
             mismatches.append("media.variableSpeedZoneByteCount \(capabilities.variableSpeedZoneByteCount) != \(variableSpeedZoneByteCount)")
@@ -3698,7 +3715,7 @@ private struct MatrixRunResult {
         let drive = c64.drive1541.statusSnapshot
         let media = c64.emulationStatus.mediaCapabilities
         let mediaText = media.map {
-            "\($0.format.displayName):tracks=\($0.populatedHalfTrackCount),native=\($0.nativeLowLevelTrackCount),synthetic=\($0.syntheticGCRTrackCount),errors=\($0.nonDefaultSectorErrorCodeCount),weakRanges=\($0.weakBitRangeCount),speedBytes=\($0.variableSpeedZoneByteCount)"
+            "\($0.format.displayName):tracks=\($0.populatedHalfTrackCount),native=\($0.nativeLowLevelTrackCount),synthetic=\($0.syntheticGCRTrackCount),errors=\($0.nonDefaultSectorErrorCodeCount),weakRanges=\($0.weakBitRangeCount),dupHeaders=\($0.duplicateSectorHeaderCount),speedBytes=\($0.variableSpeedZoneByteCount)"
         } ?? "none"
         let readText = drive.readHalfTrack.map { "readHalf=\($0)\(drive.usingHalfTrackFallback ? ",fallback" : "")" } ?? "readHalf=none"
         let verdict = passed ? "PASS" : "FAIL"
@@ -3800,6 +3817,8 @@ private struct MatrixRunResult {
             finalMediaNonDefaultSectorErrorCodeCount: media?.nonDefaultSectorErrorCodeCount,
             finalMediaWeakBitRangeCount: media?.weakBitRangeCount,
             finalMediaWeakBitTotalBitCount: media?.weakBitTotalBitCount,
+            finalMediaHasDuplicateSectorHeaders: media?.hasDuplicateSectorHeaders,
+            finalMediaDuplicateSectorHeaderCount: media?.duplicateSectorHeaderCount,
             finalMediaVariableSpeedZoneByteCount: media?.variableSpeedZoneByteCount,
             finalMediaSupportsWraparoundReads: media?.supportsWraparoundReads,
             finalMediaMaxTrackSize: media?.maxTrackSize,
@@ -4257,7 +4276,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 16
+    static let currentFormatVersion = 18
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -4327,6 +4346,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalMediaNonDefaultSectorErrorCodeCount: Int?
     let finalMediaWeakBitRangeCount: Int?
     let finalMediaWeakBitTotalBitCount: Int?
+    let finalMediaHasDuplicateSectorHeaders: Bool?
+    let finalMediaDuplicateSectorHeaderCount: Int?
     let finalMediaVariableSpeedZoneByteCount: Int?
     let finalMediaSupportsWraparoundReads: Bool?
     let finalMediaMaxTrackSize: Int?
@@ -4419,6 +4440,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalMediaNonDefaultSectorErrorCodeCount: Int? = nil,
         finalMediaWeakBitRangeCount: Int? = nil,
         finalMediaWeakBitTotalBitCount: Int? = nil,
+        finalMediaHasDuplicateSectorHeaders: Bool? = nil,
+        finalMediaDuplicateSectorHeaderCount: Int? = nil,
         finalMediaVariableSpeedZoneByteCount: Int? = nil,
         finalMediaSupportsWraparoundReads: Bool? = nil,
         finalMediaMaxTrackSize: Int? = nil,
@@ -4510,6 +4533,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalMediaNonDefaultSectorErrorCodeCount = finalMediaNonDefaultSectorErrorCodeCount
         self.finalMediaWeakBitRangeCount = finalMediaWeakBitRangeCount
         self.finalMediaWeakBitTotalBitCount = finalMediaWeakBitTotalBitCount
+        self.finalMediaHasDuplicateSectorHeaders = finalMediaHasDuplicateSectorHeaders
+        self.finalMediaDuplicateSectorHeaderCount = finalMediaDuplicateSectorHeaderCount
         self.finalMediaVariableSpeedZoneByteCount = finalMediaVariableSpeedZoneByteCount
         self.finalMediaSupportsWraparoundReads = finalMediaSupportsWraparoundReads
         self.finalMediaMaxTrackSize = finalMediaMaxTrackSize

@@ -479,9 +479,25 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(status.mountedDiskName, url.lastPathComponent)
         XCTAssertEqual(status.mountedDiskFormat, .g64)
         XCTAssertTrue(status.mediaCapabilities?.isNativeLowLevel == true)
+        XCTAssertTrue(status.highLevelDiskWriteProtected)
+        XCTAssertTrue(status.drive.writeProtected)
         XCTAssertEqual(status.drive.model, .model1541C)
         XCTAssertEqual(status.drive.lastIECCommandSummary, "none")
         XCTAssertNil(status.lastFailureReason)
+    }
+
+    func testC64EmulationStatusReportsD64WriteProtectState() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .d64)
+        XCTAssertFalse(c64.emulationStatus.highLevelDiskWriteProtected)
+        XCTAssertFalse(c64.emulationStatus.drive.writeProtected)
+
+        c64.setMountedDiskWriteProtected(true)
+
+        XCTAssertTrue(c64.emulationStatus.highLevelDiskWriteProtected)
+        XCTAssertTrue(c64.emulationStatus.drive.writeProtected)
     }
 
     func testC64EmulationStatusReportsFFFFHang() {
@@ -574,6 +590,90 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(c64.drive1541.via1.ddrb, 0)
         XCTAssertEqual(c64.drive1541.via1.portB, 0)
         XCTAssertEqual(c64.driveClockAccumulator, 0)
+    }
+
+    func testHighLevelD64MutationRefreshesTrueDriveGCRImage() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        let beforeGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
+
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "SYNC", data: [0x01, 0x08, 0xA9, 0x42, 0x60]))
+
+        let exported = try XCTUnwrap(c64.exportedD64Image)
+        let expected = GCRDisk()
+        XCTAssertTrue(expected.loadD64(exported))
+        XCTAssertEqual(
+            c64.drive1541.disk.trackInfo(halfTrack: 0)?.bytes,
+            expected.trackInfo(halfTrack: 0)?.bytes
+        )
+        XCTAssertEqual(
+            c64.drive1541.disk.trackInfo(halfTrack: 34)?.bytes,
+            expected.trackInfo(halfTrack: 34)?.bytes
+        )
+        XCTAssertGreaterThan(c64.drive1541.statusSnapshot.mediaChangeCount, beforeGeneration)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.mediaChanged)
+    }
+
+    func testHighLevelD64CommandMutationsRefreshTrueDriveGCRImage() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        var previousGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "N:SYNC,ID"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "ONE", data: [0x01, 0x08, 0xA9, 0x99, 0x60]))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "R:TWO=ONE"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "S:TWO"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-A:0,1,2"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-F:0,1,2"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xAD))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xBE))
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-W:2,0,1,3"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "V"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+    }
+
+    func testC64MountAndWriteProtectStateStaySyncedAcrossDrivePaths() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        XCTAssertFalse(c64.diskDrive.isWriteProtected)
+        XCTAssertFalse(c64.drive1541.statusSnapshot.writeProtected)
+
+        c64.setMountedDiskWriteProtected(true)
+        XCTAssertTrue(c64.diskDrive.isWriteProtected)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.writeProtected)
+        XCTAssertFalse(c64.diskDrive.savePRG(filename: "LOCKED", data: [0x01, 0x08, 0x60]))
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "26, WRITE PROTECT ON,00,00\r")
+
+        c64.setMountedDiskWriteProtected(false)
+        XCTAssertFalse(c64.diskDrive.isWriteProtected)
+        XCTAssertFalse(c64.drive1541.statusSnapshot.writeProtected)
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "OPEN", data: [0x01, 0x08, 0x60]))
+        XCTAssertFalse(c64.drive1541.statusSnapshot.writeProtected)
+
+        XCTAssertTrue(c64.mountDisk(makeMinimalG64(), fileName: "decoded.g64"))
+        XCTAssertTrue(c64.diskDrive.isWriteProtected)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.writeProtected)
+
+        XCTAssertTrue(c64.mountDisk(makeNativeOnlyG64(), fileName: "native-only.g64"))
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertTrue(c64.diskDrive.isWriteProtected)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.writeProtected)
     }
 
     func testC64ResetClearsPendingTypedTextQueue() {
@@ -1095,6 +1195,31 @@ final class Drive1541Tests: XCTestCase {
             }
         }
         return bytes
+    }
+
+    private func assertTrueDriveMatchesExportedD64(
+        _ c64: C64,
+        since previousGeneration: inout UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let exported = try XCTUnwrap(c64.exportedD64Image, file: file, line: line)
+        let expected = GCRDisk()
+        XCTAssertTrue(expected.loadD64(exported), file: file, line: line)
+
+        for halfTrack in 0..<GCRDisk.maxHalfTracks {
+            XCTAssertEqual(
+                c64.drive1541.disk.trackInfo(halfTrack: halfTrack)?.bytes,
+                expected.trackInfo(halfTrack: halfTrack)?.bytes,
+                "half track \(halfTrack)",
+                file: file,
+                line: line
+            )
+        }
+
+        let generation = c64.drive1541.statusSnapshot.mediaChangeCount
+        XCTAssertGreaterThan(generation, previousGeneration, file: file, line: line)
+        previousGeneration = generation
     }
 
     private func makeDiskImageWithTrack(bytes: [UInt8]) -> DiskImage {

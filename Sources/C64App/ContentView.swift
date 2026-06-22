@@ -52,6 +52,11 @@ struct ContentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Menu {
                         Button("Open Disk Image...") { openDisk() }
+                        Toggle("Write Protect D64", isOn: Binding(
+                            get: { status.highLevelDiskWriteProtected },
+                            set: { emulator.setMountedDiskWriteProtected($0) }
+                        ))
+                        .disabled(status.highLevelDiskFormat != .d64)
                         Button("Export Modified D64...") { exportModifiedD64() }
                             .disabled(!status.canExportModifiedD64 || !status.diskHasUnsavedChanges)
                         Button("Export Captured TAP...") { exportCapturedTAP() }
@@ -570,6 +575,7 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Media", value: mediaDescription)
                 StatusRow(label: "Fast Media", value: highLevelMediaDescription)
                 StatusRow(label: "Modified", value: modifiedDescription)
+                StatusRow(label: "Write Protect", value: status.highLevelDiskWriteProtected ? "on" : "off")
                 StatusRow(label: "Tape Capture", value: tapeCaptureDescription)
                 StatusRow(label: "Tape Save", value: tapeSaveDescription)
                 StatusRow(label: "Tape Decode", value: tapeDecodeDescription)
@@ -692,6 +698,9 @@ private struct DriveStatusPopover: View {
         if caps.preservesSectorErrorInfo {
             let nonDefault = caps.nonDefaultSectorErrorCodeCount
             suffixes.append(nonDefault > 0 ? "error table \(nonDefault)" : "error table")
+        }
+        if caps.hasDuplicateSectorHeaders {
+            suffixes.append("duplicate headers \(caps.duplicateSectorHeaderCount)")
         }
         let suffix = suffixes.isEmpty ? "" : ", \(suffixes.joined(separator: ", "))"
         if caps.isNativeLowLevel {
@@ -841,6 +850,11 @@ final class EmulatorController: ObservableObject {
         } catch {
             print("Could not read disk image \(url.lastPathComponent): \(error.localizedDescription)")
         }
+    }
+
+    func setMountedDiskWriteProtected(_ protected: Bool) {
+        c64.setMountedDiskWriteProtected(protected)
+        refreshStatus()
     }
 
     func mountTape(_ url: URL) {

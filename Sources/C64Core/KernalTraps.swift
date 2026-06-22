@@ -415,7 +415,7 @@ public final class KernalTraps {
 
     func handleOpen(cpu: CPU6502, memory: MemoryMap) -> Bool {
         let deviceNum = memory.ram[Int(KernalTraps.device)]
-        guard (8...11).contains(deviceNum), let drive = diskDrive, drive.isMounted else { return false }
+        guard (8...11).contains(deviceNum), let drive = diskDrive else { return false }
 
         let channel = Int(memory.ram[Int(KernalTraps.logicalFile)])
         let secondary = memory.ram[Int(KernalTraps.secondaryAddr)]
@@ -514,10 +514,6 @@ public final class KernalTraps {
             debugLog("[DISK] loadFromDisk: diskDrive is nil")
             return nil
         }
-        guard drive.isMounted else {
-            debugLog("[DISK] loadFromDisk: disk not mounted")
-            return nil
-        }
 
         debugLog("[DISK] loadFromDisk: filename=\"\(filename)\" directory has \(drive.directory.count) entries, diskName=\"\(drive.diskName)\"")
 
@@ -531,6 +527,7 @@ public final class KernalTraps {
         }
 
         guard let entry = drive.findFile(filename) else {
+            _ = drive.loadFileData(named: filename)
             debugLog("[DISK] File not found: \"\(filename)\" — directory entries: \(drive.directory.map { "\"\($0.filename)\" (\($0.typeName))" }.joined(separator: ", "))")
             return nil
         }
