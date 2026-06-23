@@ -113,7 +113,7 @@ final class VIA6522Tests: XCTestCase {
     func testPortAWriteInvokesOutputCallbackWhenOutputBitsChange() {
         let via = VIA6522()
         var observed: [UInt8] = []
-        via.onPortAWrite = { observed.append(via.portAOut) }
+        via.onPortAWrite = { _ in observed.append(via.portAOut) }
         via.writeRegister(0x03, value: 0xFF)
         observed.removeAll()
 
@@ -125,7 +125,7 @@ final class VIA6522Tests: XCTestCase {
     func testPortANoHandshakeWriteInvokesOutputCallbackWhenOutputBitsChange() {
         let via = VIA6522()
         var observed: [UInt8] = []
-        via.onPortAWrite = { observed.append(via.portAOut) }
+        via.onPortAWrite = { _ in observed.append(via.portAOut) }
         via.writeRegister(0x03, value: 0xFF)
         observed.removeAll()
 
@@ -138,7 +138,7 @@ final class VIA6522Tests: XCTestCase {
         let via = VIA6522()
         via.portAInput = 0x00
         var observed: [UInt8] = []
-        via.onPortAWrite = { observed.append(via.portAOut) }
+        via.onPortAWrite = { _ in observed.append(via.portAOut) }
         via.writeRegister(0x01, value: 0xF0)
         observed.removeAll()
 

@@ -133,6 +133,28 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertGreaterThan(drive.statusSnapshot.weakBitReadCount, 0)
     }
 
+    func testExportedG64PreservesWeakBitRangesInSwift64Extension() throws {
+        let drive = makeDriveWithTrack(
+            bytes: [UInt8](repeating: 0x00, count: 16),
+            weakBitRanges: [
+                DiskImage.Track.WeakBitRange(startBit: 0, endBit: 31),
+                DiskImage.Track.WeakBitRange(startBit: 64, endBit: 95),
+            ]
+        )
+
+        let exported = try XCTUnwrap(drive.disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 31),
+            DiskImage.Track.WeakBitRange(startBit: 64, endBit: 95),
+        ])
+        XCTAssertTrue(reloaded.image?.capabilities.preservesWeakBitRanges == true)
+        XCTAssertEqual(reloaded.image?.capabilities.weakBitRangeCount, 2)
+        XCTAssertEqual(reloaded.image?.capabilities.weakBitTotalBitCount, 64)
+    }
+
     func testEmptyOddHalfTrackReadsAdjacentFullTrackFlux() {
         let drive = makeDriveWithTracks([
             36: [0x00, 0xFF, 0x55, 0xAA, 0x33, 0xCC],
@@ -417,6 +439,65 @@ final class Drive1541Tests: XCTestCase {
             DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
             DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
         ])
+    }
+
+    func testGCRWriteGateEntrySpliceWrapsAroundTrackStart() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 4))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 0
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.tickGCRHead()
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 16, endBit: 31),
+        ])
+    }
+
+    func testGCRWriteGateWithoutFreshPortAByteErasesBits() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0xFF, 0xFF, 0xFF, 0xFF])))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 0
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        runWriteHeadErase(drive, erasedBits: 8)
+
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.bytes.first, 0x00)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteEraseBitCount, 8)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 0)
+        XCTAssertTrue(drive.disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testExportedG64PreservesWriteSpliceWeakRanges() throws {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+        drive.via2.writeRegister(0x03, value: 0x00)
+        drive.tickGCRHead()
+
+        let exported = try XCTUnwrap(drive.disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+            DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
+        ])
+        XCTAssertTrue(reloaded.image?.capabilities.preservesWeakBitRanges == true)
     }
 
     func testVIA2PortAWriteHonorsWriteProtectAndMotorGate() {
@@ -807,6 +888,20 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xAD))
         XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xBE))
         XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-W:2,0,1,3"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 3, filename: "CHANNEL,S,W"))
+        for byte in Array("SYNCED CHANNEL\r".utf8) {
+            XCTAssertTrue(c64.diskDrive.writeByte(channel: 3, byte: byte))
+        }
+        c64.diskDrive.closeChannel(3)
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "C:COPY=CHANNEL"))
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 3, filename: "EMPTY,S,W"))
+        c64.diskDrive.closeChannel(3)
         try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
 
         XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "V"))
@@ -1369,6 +1464,15 @@ final class Drive1541Tests: XCTestCase {
             if drive.statusSnapshot.gcrWriteByteCount >= target { return }
         }
         XCTFail("Timed out waiting for \(completeBytes) GCR write byte(s)")
+    }
+
+    private func runWriteHeadErase(_ drive: Drive1541, erasedBits: UInt64) {
+        let target = drive.statusSnapshot.gcrWriteEraseBitCount + erasedBits
+        for _ in 0..<12_000 {
+            drive.tickGCRHead()
+            if drive.statusSnapshot.gcrWriteEraseBitCount >= target { return }
+        }
+        XCTFail("Timed out waiting for \(erasedBits) GCR erase bit(s)")
     }
 
     private func runWriteHeadCycles(_ drive: Drive1541, cycles: Int = 256) {

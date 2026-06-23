@@ -599,6 +599,108 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.hasUnsavedChanges)
     }
 
+    func testOpenWriteChannelCreatesSEQFileOnClose() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "REPORT,S,W"))
+        for byte in Array("HELLO FROM SEQ\r".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+
+        let entry = try XCTUnwrap(drive.findFile("REPORT"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(drive.readFileData(entry), Array("HELLO FROM SEQ\r".utf8))
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 1)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testOpenWriteChannelCreatesZeroBlockSEQFileOnClose() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "EMPTY,S,W"))
+        drive.closeChannel(2)
+
+        let entry = try XCTUnwrap(drive.findFile("EMPTY"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(entry.fileSize, 0)
+        XCTAssertEqual(entry.firstTrack, 0)
+        XCTAssertEqual(entry.firstSector, 0)
+        XCTAssertEqual(drive.readFileData(entry), [])
+        XCTAssertEqual(drive.loadFileData(entry), [])
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testOpenWriteChannelCreatesPRGAndRejectsDuplicateWithoutReplace() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "OUTPUT,P,W"))
+        for byte in [0x01, 0x08, 0xA9, 0x2A, 0x60] as [UInt8] {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+
+        let entry = try XCTUnwrap(drive.findFile("OUTPUT"))
+        XCTAssertEqual(entry.typeName, "PRG")
+        XCTAssertEqual(drive.readFileData(entry), [0x01, 0x08, 0xA9, 0x2A, 0x60])
+
+        XCTAssertFalse(drive.openFile(channel: 3, filename: "OUTPUT,P,W"))
+        XCTAssertEqual(drive.currentCommandStatus, "63, FILE EXISTS,00,00\r")
+        XCTAssertTrue(drive.readByte(channel: 3).eof)
+    }
+
+    func testOpenReplaceWriteChannelCanTruncateExistingFileToZeroBlocks() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "TRUNC,S", data: Array("DATA".utf8)))
+        let freeAfterSave = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "@TRUNC,S,W"))
+        drive.closeChannel(2)
+
+        let entry = try XCTUnwrap(drive.findFile("TRUNC"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(entry.fileSize, 0)
+        XCTAssertEqual(entry.firstTrack, 0)
+        XCTAssertEqual(entry.firstSector, 0)
+        XCTAssertEqual(drive.readFileData(entry), [])
+        XCTAssertEqual(drive.freeBlocks(), freeAfterSave + 1)
+    }
+
+    func testOpenAppendChannelRewritesExistingFileWithAppendedData() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.savePRG(filename: "LOG,S", data: Array("ONE".utf8)))
+        let freeAfterFirstWrite = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "LOG,S,A"))
+        for byte in Array("TWO".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+
+        let entry = try XCTUnwrap(drive.findFile("LOG"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(drive.readFileData(entry), Array("ONETWO".utf8))
+        XCTAssertEqual(drive.freeBlocks(), freeAfterFirstWrite)
+    }
+
+    func testOpenWriteChannelRejectsWriteProtectedD64() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        drive.setWriteProtected(true)
+
+        XCTAssertFalse(drive.openFile(channel: 2, filename: "LOCKED,S,W"))
+        XCTAssertEqual(drive.currentCommandStatus, "26, WRITE PROTECT ON,00,00\r")
+        XCTAssertTrue(drive.readByte(channel: 2).eof)
+    }
+
     func testCommandChannelScratchDeletesFileAndReportsStatus() throws {
         let drive = DiskDrive()
         XCTAssertTrue(drive.mount(makeBlankWritableD64()))
@@ -734,6 +836,45 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(drive.readFileData(copied), [0x01, 0x08, 0xA9, 0x2A])
         XCTAssertEqual(drive.freeBlocks(), freeAfterSave - 1)
         XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelCopyPreservesSourceFileTypeAndOptions() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "SOURCE,S,W"))
+        for byte in Array("SEQ DATA\r".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "C:COPY=SOURCE,S"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let copied = try XCTUnwrap(drive.findFile("COPY"))
+        XCTAssertEqual(copied.typeName, "SEQ")
+        XCTAssertEqual(drive.readFileData(copied), Array("SEQ DATA\r".utf8))
+    }
+
+    func testCommandChannelCopyConcatenatesMultipleSources() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "ONE,S,W"))
+        for byte in Array("ONE".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+        XCTAssertTrue(drive.openFile(channel: 3, filename: "TWO,S,W"))
+        for byte in Array("TWO".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 3, byte: byte))
+        }
+        drive.closeChannel(3)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "C:JOINED=ONE,TWO"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let copied = try XCTUnwrap(drive.findFile("JOINED"))
+        XCTAssertEqual(copied.typeName, "SEQ")
+        XCTAssertEqual(drive.readFileData(copied), Array("ONETWO".utf8))
     }
 
     func testCommandChannelCopyClearsD64ErrorBytesForCopiedSectors() throws {
@@ -1170,7 +1311,7 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.hasUnsavedChanges)
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:0,1,2"))
-        XCTAssertEqual(readChannelString(drive, channel: 15), "65, NO BLOCK,00,00\r")
+        XCTAssertEqual(readChannelString(drive, channel: 15), "65, NO BLOCK,01,03\r")
         XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 1)
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-F:0,1,2"))

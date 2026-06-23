@@ -29,8 +29,8 @@ struct C64App: App {
         .commands {
             // File menu commands
             CommandGroup(after: .newItem) {
-                Button("Open Disk Image (D64/G64)...") {
-                    openFile(types: ["d64", "g64"], title: "Open Disk Image") { url in
+                Button("Open Disk Image (D64/G64/NIB/NBZ/P64)...") {
+                    openFile(types: ["d64", "g64", "nib", "nbz", "p64"], title: "Open Disk Image") { url in
                         emulator.mountDisk(url)
                     }
                 }

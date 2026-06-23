@@ -32,6 +32,21 @@ public final class GCRDisk {
     /// Cycles per GCR byte for each speed zone (at 1 MHz drive clock).
     /// Zone 3 = 26 cycles, Zone 2 = 28, Zone 1 = 30, Zone 0 = 32
     public static let cyclesPerByte = [32, 30, 28, 26]
+    private static let weakBitExtensionMagic = Array("SW64WKB1".utf8)
+    private static let nibMagic = Array("MNIB-1541-RAW".utf8)
+    private static let nibHeaderSize = 0x100
+    private static let nibTrackLength = 0x2000
+    private static let maxNIBPayloadSize = nibHeaderSize + maxHalfTracks * nibTrackLength
+    private static let p64Magic = Array("P64-1541".utf8)
+    private static let p64HeaderSize = 24
+    private static let p64ChunkHeaderSize = 12
+    private static let p64RotationTicks = 3_200_000
+    private static let p64StrongPulseStrength: UInt32 = 0x8000_0000
+
+    private struct P64Pulse {
+        let position: Int
+        let strength: UInt32
+    }
 
     private enum D64SectorErrorEffect {
         case ok
@@ -120,6 +135,8 @@ public final class GCRDisk {
 
         var newTracks: [[UInt8]?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         var newTrackInfos: [DiskImage.Track?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var trackLengths = [Int](repeating: 0, count: numTracks)
+        var standardPayloadEnd = speedTableStart + numTracks * 4
 
         for i in 0..<numTracks {
             let pos = offsetTableStart + i * 4
@@ -132,6 +149,8 @@ public final class GCRDisk {
 
             let trackLen = Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8)
             guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else { continue }
+            trackLengths[i] = trackLen
+            standardPayloadEnd = max(standardPayloadEnd, offset + 2 + trackLen)
 
             let trackBytes = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
             let sectorHeaderStats = G64Parser.sectorHeaderStats(from: trackBytes, track: i / 2 + 1)
@@ -155,9 +174,230 @@ public final class GCRDisk {
 
         guard newTracks.contains(where: { $0 != nil }) else { return false }
 
+        standardPayloadEnd = max(
+            standardPayloadEnd,
+            Self.g64StandardPayloadEnd(
+                from: bytes,
+                speedTableStart: speedTableStart,
+                trackLengths: trackLengths
+            )
+        )
+        if let weakRanges = Self.g64WeakBitExtension(
+            from: bytes,
+            startingAt: standardPayloadEnd,
+            trackInfos: newTrackInfos
+        ) {
+            for (halfTrack, ranges) in weakRanges {
+                guard let existing = newTrackInfos[halfTrack] else { continue }
+                let updated = DiskImage.Track(
+                    halfTrack: existing.halfTrack,
+                    bytes: existing.bytes,
+                    bitLength: existing.bitLength,
+                    speedZone: existing.speedZone,
+                    speedZoneMap: existing.speedZoneMap,
+                    weakBitRanges: ranges,
+                    isNativeLowLevel: existing.isNativeLowLevel,
+                    duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
+                )
+                newTracks[halfTrack] = updated.bytes
+                newTrackInfos[halfTrack] = updated
+            }
+        }
+
         tracks = newTracks
         trackInfos = newTrackInfos
         image = DiskImage(format: .g64, tracks: newTrackInfos, maxTrackSize: maxTrackSize)
+        hasUnsavedLowLevelWrites = false
+        return true
+    }
+
+    // MARK: - Load from NIB
+
+    /// Load raw NIBTOOLS `MNIB-1541-RAW` images as native low-level tracks.
+    ///
+    /// NIB stores 8192 bytes per captured halftrack, with header entries using
+    /// nibtools' two-based halftrack numbering: 2 is track 1.0, 3 is track 1.5.
+    public func loadNIB(_ data: Data) -> Bool {
+        loadNIBPayload(data, format: .nib)
+    }
+
+    /// Load compressed NIBTOOLS NBZ images as native low-level tracks.
+    ///
+    /// NBZ is a NIB image compressed with the NIBTOOLS LZ77 marker stream
+    /// (`LZ_Uncompress` in nibtools), not gzip/zlib.
+    public func loadNBZ(_ data: Data) -> Bool {
+        guard let decompressed = Self.nibtoolsLZUncompressed(
+            [UInt8](data),
+            maxOutputBytes: Self.maxNIBPayloadSize
+        ) else {
+            return false
+        }
+        return loadNIBPayload(Data(decompressed), format: .nbz)
+    }
+
+    /// Load VICE/Micro64 P64 NRZI flux-pulse images as native low-level tracks.
+    ///
+    /// P64 stores transition positions at 16 MHz resolution. The current 1541
+    /// head consumes GCR bit cells, so this importer range-decodes the flux
+    /// pulses and quantizes them onto the closest standard 1541 speed-zone bit
+    /// cells. Sub-maximum pulse strengths are kept as weak-bit annotations.
+    public func loadP64(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        guard bytes.count >= Self.p64HeaderSize,
+              Array(bytes[0..<8]) == Self.p64Magic,
+              Self.littleEndian32(from: bytes, at: 8) == 0,
+              let flags = Self.littleEndian32(from: bytes, at: 12),
+              let chunkStreamSizeValue = Self.littleEndian32(from: bytes, at: 16) else {
+            return false
+        }
+
+        let chunkStreamSize = Int(chunkStreamSizeValue)
+        let chunkStreamStart = Self.p64HeaderSize
+        guard chunkStreamSize >= 0,
+              chunkStreamStart + chunkStreamSize <= bytes.count else {
+            return false
+        }
+
+        var newTracks: [[UInt8]?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var newTrackInfos: [DiskImage.Track?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var offset = chunkStreamStart
+        let streamEnd = chunkStreamStart + chunkStreamSize
+        var sawDone = false
+
+        while offset < streamEnd {
+            guard offset + Self.p64ChunkHeaderSize <= streamEnd else { return false }
+            let signature = Array(bytes[offset..<(offset + 4)])
+            guard let chunkSizeValue = Self.littleEndian32(from: bytes, at: offset + 4) else {
+                return false
+            }
+            let chunkSize = Int(chunkSizeValue)
+            let chunkDataStart = offset + Self.p64ChunkHeaderSize
+            let chunkDataEnd = chunkDataStart + chunkSize
+            guard chunkSize >= 0, chunkDataEnd <= streamEnd else { return false }
+
+            if signature == Array("DONE".utf8) {
+                guard chunkSize == 0 else { return false }
+                sawDone = true
+                offset = chunkDataEnd
+                break
+            }
+
+            if signature.count == 4,
+               signature[0] == UInt8(ascii: "H"),
+               signature[1] == UInt8(ascii: "T"),
+               signature[2] == UInt8(ascii: "P") {
+                let p64HalfTrack = Int(signature[3] & 0x7F)
+                let halfTrack = p64HalfTrack - 2
+                guard halfTrack >= 0 && halfTrack < Self.maxHalfTracks else {
+                    return false
+                }
+                guard chunkSize >= 8 else { return false }
+
+                guard let pulseCountValue = Self.littleEndian32(from: bytes, at: chunkDataStart),
+                      let encodedSizeValue = Self.littleEndian32(from: bytes, at: chunkDataStart + 4) else {
+                    return false
+                }
+                let pulseCount = Int(pulseCountValue)
+                let encodedSize = Int(encodedSizeValue)
+                let encodedStart = chunkDataStart + 8
+                let encodedEnd = encodedStart + encodedSize
+                guard pulseCount >= 0, encodedSize >= 0, encodedEnd <= chunkDataEnd else {
+                    return false
+                }
+
+                let encoded = Array(bytes[encodedStart..<encodedEnd])
+                guard let pulses = Self.decodeP64Pulses(encoded, pulseCount: pulseCount) else {
+                    return false
+                }
+                let speedZone = Self.speedZone(for: halfTrack / 2 + 1)
+                let converted = Self.p64Track(from: pulses, halfTrack: halfTrack, speedZone: speedZone)
+                guard !converted.bytes.isEmpty else { return false }
+
+                let sectorHeaderStats = G64Parser.sectorHeaderStats(
+                    from: converted.bytes,
+                    track: halfTrack / 2 + 1
+                )
+                let info = DiskImage.Track(
+                    halfTrack: halfTrack,
+                    bytes: converted.bytes,
+                    speedZone: speedZone,
+                    weakBitRanges: converted.weakBitRanges,
+                    isNativeLowLevel: true,
+                    duplicateSectorHeaderCount: sectorHeaderStats.duplicateSectorHeaderCount
+                )
+                newTracks[halfTrack] = info.bytes
+                newTrackInfos[halfTrack] = info
+            }
+
+            offset = chunkDataEnd
+        }
+
+        guard sawDone,
+              newTracks.contains(where: { $0 != nil }) else {
+            return false
+        }
+
+        tracks = newTracks
+        trackInfos = newTrackInfos
+        image = DiskImage(
+            format: .p64,
+            tracks: newTrackInfos,
+            maxTrackSize: newTrackInfos.compactMap { $0?.bytes.count }.max()
+        )
+        writeProtected = (flags & 0x01) != 0
+        hasUnsavedLowLevelWrites = false
+        return true
+    }
+
+    private func loadNIBPayload(_ data: Data, format: DiskImage.Format) -> Bool {
+        let bytes = [UInt8](data)
+        guard bytes.count >= Self.nibHeaderSize,
+              bytes.starts(with: Self.nibMagic) else {
+            return false
+        }
+
+        var newTracks: [[UInt8]?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var newTrackInfos: [DiskImage.Track?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
+        var entryOffset = 0x10
+        var payloadOffset = Self.nibHeaderSize
+        var populated = 0
+
+        while entryOffset + 1 < Self.nibHeaderSize {
+            let nibHalfTrack = Int(bytes[entryOffset])
+            if nibHalfTrack == 0 { break }
+            let rawDensity = bytes[entryOffset + 1]
+            let halfTrack = nibHalfTrack - 2
+            guard halfTrack >= 0 && halfTrack < GCRDisk.maxHalfTracks else {
+                return false
+            }
+            guard payloadOffset + Self.nibTrackLength <= bytes.count else {
+                return false
+            }
+
+            let trackBytes = Array(bytes[payloadOffset..<(payloadOffset + Self.nibTrackLength)])
+            let speedZone = Int(rawDensity % 0x10) & 0x03
+            let sectorHeaderStats = G64Parser.sectorHeaderStats(
+                from: trackBytes,
+                track: halfTrack / 2 + 1
+            )
+            let info = DiskImage.Track(
+                halfTrack: halfTrack,
+                bytes: trackBytes,
+                speedZone: speedZone,
+                isNativeLowLevel: true,
+                duplicateSectorHeaderCount: sectorHeaderStats.duplicateSectorHeaderCount
+            )
+            newTracks[halfTrack] = trackBytes
+            newTrackInfos[halfTrack] = info
+            populated += 1
+            entryOffset += 2
+            payloadOffset += Self.nibTrackLength
+        }
+
+        guard populated > 0 else { return false }
+        tracks = newTracks
+        trackInfos = newTrackInfos
+        image = DiskImage(format: format, tracks: newTrackInfos, maxTrackSize: Self.nibTrackLength)
         hasUnsavedLowLevelWrites = false
         return true
     }
@@ -461,7 +701,7 @@ public final class GCRDisk {
     /// Ensure a native low-level track stream exists for write-head activity.
     ///
     /// D64-backed synthetic tracks are pre-populated for full tracks. Creating
-    /// new low-level tracks is reserved for native G64 media because D64 cannot
+    /// new low-level tracks is reserved for native media because D64 cannot
     /// represent arbitrary halftracks or raw bitstreams.
     @discardableResult
     public func ensureWritableTrack(
@@ -469,7 +709,7 @@ public final class GCRDisk {
         speedZone: Int,
         fillByte: UInt8 = 0x55
     ) -> Bool {
-        guard image?.format == .g64,
+        guard image?.hasNativeLowLevelTracks == true,
               halfTrack >= 0 && halfTrack < tracks.count else {
             return false
         }
@@ -568,7 +808,7 @@ public final class GCRDisk {
     }
 
     public var exportedG64Image: Data? {
-        guard image?.format == .g64 else { return nil }
+        guard image?.hasNativeLowLevelTracks == true else { return nil }
         let populatedHalfTrackIndexes = trackInfos.indices.filter { trackInfos[$0] != nil }
         guard !populatedHalfTrackIndexes.isEmpty else { return nil }
 
@@ -619,6 +859,7 @@ public final class GCRDisk {
             Self.writeLittleEndian32(speedEntries[trackIndex], into: &data, at: speedTableStart + trackIndex * 4)
         }
 
+        Self.appendWeakBitExtension(from: trackInfos, to: &data)
         return Data(data)
     }
 
@@ -778,6 +1019,346 @@ public final class GCRDisk {
         bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
         bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
         bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
+    }
+
+    private static func appendLittleEndian16(_ value: UInt16, to bytes: inout [UInt8]) {
+        bytes.append(UInt8(value & 0xFF))
+        bytes.append(UInt8((value >> 8) & 0xFF))
+    }
+
+    private static func appendLittleEndian32(_ value: UInt32, to bytes: inout [UInt8]) {
+        bytes.append(UInt8(value & 0xFF))
+        bytes.append(UInt8((value >> 8) & 0xFF))
+        bytes.append(UInt8((value >> 16) & 0xFF))
+        bytes.append(UInt8((value >> 24) & 0xFF))
+    }
+
+    private static func littleEndian16(from bytes: [UInt8], at offset: Int) -> UInt16? {
+        guard offset >= 0 && offset + 2 <= bytes.count else { return nil }
+        return UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+    }
+
+    private static func littleEndian32(from bytes: [UInt8], at offset: Int) -> UInt32? {
+        guard offset >= 0 && offset + 4 <= bytes.count else { return nil }
+        return UInt32(bytes[offset])
+            | (UInt32(bytes[offset + 1]) << 8)
+            | (UInt32(bytes[offset + 2]) << 16)
+            | (UInt32(bytes[offset + 3]) << 24)
+    }
+
+    private static func decodeP64Pulses(_ encoded: [UInt8], pulseCount: Int) -> [P64Pulse]? {
+        guard pulseCount >= 0 else { return nil }
+        var decoder = P64RangeDecoder(bytes: encoded)
+        guard decoder.start() else { return nil }
+
+        var probabilities = [UInt32](repeating: 2048, count: 8 * 65_536 + 4)
+        var states = [UInt16](repeating: 0, count: 10)
+        let offsets = [
+            0,
+            65_536,
+            131_072,
+            196_608,
+            262_144,
+            327_680,
+            393_216,
+            458_752,
+            524_288,
+            524_290,
+        ]
+
+        func decodeBit(model: Int) -> UInt32? {
+            let index = offsets[model] + Int(states[model])
+            guard index >= 0 && index < probabilities.count else { return nil }
+            guard let bit = decoder.decodeBit(probability: &probabilities[index], shift: 4) else {
+                return nil
+            }
+            states[model] = UInt16(bit)
+            return bit
+        }
+
+        func decodeDWord(model: Int) -> UInt32? {
+            var value: UInt32 = 0
+            for byteIndex in 0..<4 {
+                var byteValue: UInt32 = 0
+                var context: UInt16 = 1
+                for bitIndex in stride(from: 7, through: 0, by: -1) {
+                    let probabilityIndex = offsets[model + byteIndex]
+                        + Int(((states[model + byteIndex] << 8) | context) & 0xFFFF)
+                    guard probabilityIndex >= 0 && probabilityIndex < probabilities.count,
+                          let bit = decoder.decodeBit(probability: &probabilities[probabilityIndex], shift: 4) else {
+                        return nil
+                    }
+                    byteValue |= bit << UInt32(bitIndex)
+                    context = (context << 1) | UInt16(bit)
+                }
+                states[model + byteIndex] = UInt16(byteValue)
+                value |= byteValue << UInt32(byteIndex * 8)
+            }
+            return value
+        }
+
+        var pulses: [P64Pulse] = []
+        pulses.reserveCapacity(min(pulseCount, 100_000))
+        var lastPosition: UInt32 = 0
+        var previousDeltaPosition: UInt32 = 0
+        var lastStrength: UInt32 = 0
+
+        for _ in 0..<pulseCount {
+            let deltaPosition: UInt32
+            guard let positionFlag = decodeBit(model: 8) else { return nil }
+            if positionFlag != 0 {
+                guard let decodedDelta = decodeDWord(model: 0) else { return nil }
+                if decodedDelta == 0 { break }
+                previousDeltaPosition = decodedDelta
+                deltaPosition = decodedDelta
+            } else {
+                deltaPosition = previousDeltaPosition
+            }
+
+            let (newPosition, positionOverflow) = lastPosition.addingReportingOverflow(deltaPosition)
+            guard !positionOverflow,
+                  newPosition < UInt32(Self.p64RotationTicks) else {
+                return nil
+            }
+            lastPosition = newPosition
+
+            guard let strengthFlag = decodeBit(model: 9) else { return nil }
+            if strengthFlag != 0 {
+                guard let strengthDelta = decodeDWord(model: 4) else { return nil }
+                lastStrength = lastStrength &+ strengthDelta
+            }
+
+            pulses.append(P64Pulse(position: Int(lastPosition), strength: lastStrength))
+        }
+
+        return pulses
+    }
+
+    private static func p64Track(
+        from pulses: [P64Pulse],
+        halfTrack: Int,
+        speedZone: Int
+    ) -> (bytes: [UInt8], weakBitRanges: [DiskImage.Track.WeakBitRange]) {
+        let zone = max(0, min(3, speedZone))
+        let byteCount = trackLengths[zone]
+        let bitCount = byteCount * 8
+        let ticksPerBit = max(1, cyclesPerByte[zone] * 2)
+        var bytes = [UInt8](repeating: 0, count: byteCount)
+        var weakRanges: [DiskImage.Track.WeakBitRange] = []
+
+        for pulse in pulses where pulse.strength > 0 {
+            let cell = ((pulse.position + ticksPerBit / 2) / ticksPerBit) % bitCount
+            let byteIndex = cell / 8
+            let bitIndex = 7 - (cell % 8)
+            bytes[byteIndex] |= UInt8(1 << bitIndex)
+
+            if pulse.strength < Self.p64StrongPulseStrength {
+                let start = max(0, cell - 1)
+                let end = min(bitCount - 1, cell + 1)
+                weakRanges.append(DiskImage.Track.WeakBitRange(startBit: start, endBit: end))
+            }
+        }
+
+        return (bytes, mergedWeakBitRanges(weakRanges))
+    }
+
+    private struct P64RangeDecoder {
+        let bytes: [UInt8]
+        var offset = 0
+        var code: UInt64 = 0
+        var low: UInt64 = 0
+        var high: UInt64 = 0xFFFF_FFFF
+
+        mutating func start() -> Bool {
+            guard bytes.count >= 4 else { return false }
+            code = 0
+            low = 0
+            high = 0xFFFF_FFFF
+            for _ in 0..<4 {
+                code = ((code << 8) | UInt64(readByte())) & 0xFFFF_FFFF
+            }
+            return true
+        }
+
+        mutating func decodeBit(probability: inout UInt32, shift: UInt32) -> UInt32? {
+            guard probability > 0 else { return nil }
+            let middle = low + (((high - low) >> 12) * UInt64(probability))
+            let bit: UInt32
+            if code <= middle {
+                probability += (0x0FFF - probability) >> shift
+                high = middle
+                bit = 1
+            } else {
+                probability -= probability >> shift
+                low = middle + 1
+                bit = 0
+            }
+            normalize()
+            return bit
+        }
+
+        private mutating func normalize() {
+            while ((low ^ high) & 0xFF00_0000) == 0 {
+                low = (low << 8) & 0xFFFF_FFFF
+                high = ((high << 8) | 0xFF) & 0xFFFF_FFFF
+                code = ((code << 8) | UInt64(readByte())) & 0xFFFF_FFFF
+            }
+        }
+
+        private mutating func readByte() -> UInt8 {
+            guard offset < bytes.count else { return 0 }
+            let byte = bytes[offset]
+            offset += 1
+            return byte
+        }
+    }
+
+    private static func appendWeakBitExtension(from trackInfos: [DiskImage.Track?], to data: inout [UInt8]) {
+        let records = trackInfos.enumerated().flatMap { halfTrack, track -> [(Int, DiskImage.Track.WeakBitRange)] in
+            guard let track else { return [] }
+            return track.weakBitRanges.map { (halfTrack, $0) }
+        }
+        guard !records.isEmpty, records.count <= Int(UInt16.max) else { return }
+
+        data.append(contentsOf: weakBitExtensionMagic)
+        appendLittleEndian16(UInt16(records.count), to: &data)
+        for (halfTrack, range) in records {
+            guard halfTrack <= UInt8.max,
+                  range.startBit >= 0,
+                  range.endBit >= range.startBit,
+                  range.endBit <= Int(UInt32.max) else {
+                continue
+            }
+            data.append(UInt8(halfTrack))
+            appendLittleEndian32(UInt32(range.startBit), to: &data)
+            appendLittleEndian32(UInt32(range.endBit), to: &data)
+        }
+    }
+
+    private static func g64StandardPayloadEnd(
+        from bytes: [UInt8],
+        speedTableStart: Int,
+        trackLengths: [Int]
+    ) -> Int {
+        var end = speedTableStart + trackLengths.count * 4
+        for trackIndex in trackLengths.indices {
+            let pos = speedTableStart + trackIndex * 4
+            guard let value = littleEndian32(from: bytes, at: pos) else { continue }
+            guard value >= 4 else { continue }
+            let start = Int(value)
+            let length = (trackLengths[trackIndex] + 3) / 4
+            guard length > 0, start + length <= bytes.count else { continue }
+            end = max(end, start + length)
+        }
+        return min(end, bytes.count)
+    }
+
+    private static func g64WeakBitExtension(
+        from bytes: [UInt8],
+        startingAt offset: Int,
+        trackInfos: [DiskImage.Track?]
+    ) -> [Int: [DiskImage.Track.WeakBitRange]]? {
+        guard offset >= 0,
+              offset + weakBitExtensionMagic.count + 2 <= bytes.count else {
+            return nil
+        }
+        guard Array(bytes[offset..<(offset + weakBitExtensionMagic.count)]) == weakBitExtensionMagic else {
+            return nil
+        }
+
+        var cursor = offset + weakBitExtensionMagic.count
+        guard let recordCount = littleEndian16(from: bytes, at: cursor) else { return nil }
+        cursor += 2
+        guard cursor + Int(recordCount) * 9 <= bytes.count else { return nil }
+
+        var rangesByHalfTrack: [Int: [DiskImage.Track.WeakBitRange]] = [:]
+        for _ in 0..<recordCount {
+            let halfTrack = Int(bytes[cursor])
+            cursor += 1
+            guard let startBit = littleEndian32(from: bytes, at: cursor),
+                  let endBit = littleEndian32(from: bytes, at: cursor + 4) else {
+                return nil
+            }
+            cursor += 8
+
+            guard halfTrack >= 0,
+                  halfTrack < trackInfos.count,
+                  let track = trackInfos[halfTrack],
+                  startBit <= endBit,
+                  endBit < UInt32(track.bitLength) else {
+                continue
+            }
+
+            rangesByHalfTrack[halfTrack, default: []].append(DiskImage.Track.WeakBitRange(
+                startBit: Int(startBit),
+                endBit: Int(endBit)
+            ))
+        }
+
+        return rangesByHalfTrack.mapValues(Self.mergedWeakBitRanges)
+    }
+
+    /// Bounded Swift decoder for the NBZ compression stream used by NIBTOOLS.
+    ///
+    /// The format is Marcus Geelnard's small LZ77 marker-byte stream as used
+    /// by NIBTOOLS `LZ_Uncompress`: byte 0 chooses the marker, marker+0 emits
+    /// a literal marker, and marker+varLength+varOffset copies from history.
+    private static func nibtoolsLZUncompressed(_ bytes: [UInt8], maxOutputBytes: Int) -> [UInt8]? {
+        guard !bytes.isEmpty, maxOutputBytes > 0 else { return nil }
+        let marker = bytes[0]
+        var inputIndex = 1
+        var output: [UInt8] = []
+        output.reserveCapacity(min(maxOutputBytes, bytes.count * 2))
+
+        while inputIndex < bytes.count {
+            let symbol = bytes[inputIndex]
+            inputIndex += 1
+
+            if symbol != marker {
+                guard output.count < maxOutputBytes else { return nil }
+                output.append(symbol)
+                continue
+            }
+
+            guard inputIndex < bytes.count else { return nil }
+            if bytes[inputIndex] == 0 {
+                inputIndex += 1
+                guard output.count < maxOutputBytes else { return nil }
+                output.append(marker)
+                continue
+            }
+
+            guard let length = readNBZVariableSize(bytes, index: &inputIndex),
+                  let offset = readNBZVariableSize(bytes, index: &inputIndex),
+                  length > 0,
+                  offset > 0,
+                  offset <= output.count,
+                  output.count + length <= maxOutputBytes else {
+                return nil
+            }
+
+            for _ in 0..<length {
+                output.append(output[output.count - offset])
+            }
+        }
+
+        return output
+    }
+
+    private static func readNBZVariableSize(_ bytes: [UInt8], index: inout Int) -> Int? {
+        var value = 0
+        var byteCount = 0
+
+        while true {
+            guard index < bytes.count, byteCount < 5 else { return nil }
+            let byte = bytes[index]
+            index += 1
+            byteCount += 1
+            value = (value << 7) | Int(byte & 0x7F)
+            if byte & 0x80 == 0 {
+                return value
+            }
+        }
     }
 
     // MARK: - GCR encoding

@@ -43,9 +43,11 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minVariableSpeedZoneSamples": 32,
                 "minGCRWrites": 7,
                 "minGCRWriteSplices": 2,
+                "minGCRWriteEraseBits": 9,
                 "requiredVariableSpeedZones": [0, 3],
                 "track": 18,
                 "halfTrack": 34,
+                "headBitPosition": 12345,
                 "readTrack": 18,
                 "readHalfTrack": 34,
                 "usingHalfTrackFallback": false,
@@ -232,9 +234,11 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minVariableSpeedZoneSamples, 32)
         XCTAssertEqual(milestone.driveStatus?.minGCRWrites, 7)
         XCTAssertEqual(milestone.driveStatus?.minGCRWriteSplices, 2)
+        XCTAssertEqual(milestone.driveStatus?.minGCRWriteEraseBits, 9)
         XCTAssertEqual(milestone.driveStatus?.requiredVariableSpeedZones, [0, 3])
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
+        XCTAssertEqual(milestone.driveStatus?.headBitPosition, 12345)
         XCTAssertEqual(milestone.driveStatus?.readTrack, 18)
         XCTAssertEqual(milestone.driveStatus?.readHalfTrack, 34)
         XCTAssertEqual(milestone.driveStatus?.usingHalfTrackFallback, false)
@@ -464,6 +468,9 @@ final class CompatibilityManifestTests: XCTestCase {
             { "file": "program.prg", "mediaType": "prg", "command": "RUN" },
             { "file": "disk.d64", "mediaType": "d64", "command": "LOAD\\"*\\",8,1" },
             { "file": "raw.g64", "mediaType": "g64", "command": "LOAD\\"*\\",8,1" },
+            { "file": "raw.nib", "mediaType": "nib", "command": "LOAD\\"*\\",8,1" },
+            { "file": "packed.nbz", "mediaType": "nbz", "command": "LOAD\\"*\\",8,1" },
+            { "file": "flux.p64", "mediaType": "p64", "command": "LOAD\\"*\\",8,1" },
             { "file": "tape.t64", "mediaType": "t64", "command": "LOAD" },
             { "file": "signal.tap", "mediaType": "tap", "command": "LOAD" },
             { "file": "cart.crt", "mediaType": "crt", "command": "SYS 32768" }
@@ -473,7 +480,7 @@ final class CompatibilityManifestTests: XCTestCase {
 
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
 
-        XCTAssertEqual(manifest.milestones.compactMap(\.mediaType), [.prg, .d64, .g64, .t64, .tap, .crt])
+        XCTAssertEqual(manifest.milestones.compactMap(\.mediaType), [.prg, .d64, .g64, .nib, .nbz, .p64, .t64, .tap, .crt])
     }
 
     func testManifestDecodesC64CProfiles() throws {

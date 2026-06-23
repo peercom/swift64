@@ -125,6 +125,9 @@ public final class DiskDrive {
         var writePosition: Int = 0
         var isOpen: Bool = false
         var clearsCommandStatusOnEOF: Bool = false
+        var outputFilename: String?
+        var outputFileType: UInt8 = 0x82
+        var outputReplacesExisting: Bool = false
 
         var hasData: Bool { position < data.count }
 
@@ -136,7 +139,8 @@ public final class DiskDrive {
         }
 
         mutating func writeByte(_ byte: UInt8) {
-            guard writePosition < 256 else { return }
+            let maximumBufferedBytes = outputFilename == nil ? 256 : 1_048_576
+            guard writePosition < maximumBufferedBytes else { return }
             if writeData.count < writePosition {
                 writeData.append(contentsOf: [UInt8](repeating: 0, count: writePosition - writeData.count))
             }
@@ -522,6 +526,11 @@ public final class DiskDrive {
     @discardableResult
     public func savePRG(filename: String, data: [UInt8]) -> Bool {
         let request = parseDiskFilename(filename)
+        return saveFile(request: request, data: data, fileType: 0x82)
+    }
+
+    @discardableResult
+    private func saveFile(request: DiskFilenameRequest, data: [UInt8], fileType: UInt8) -> Bool {
         guard isMounted,
               mountedGeometry != nil,
               mountedFormat == .d64,
@@ -546,7 +555,23 @@ public final class DiskDrive {
         }
 
         let sectorCount = sectorCountNeeded(forPayloadSize: data.count)
-        guard sectorCount > 0 else { return false }
+        if sectorCount == 0 {
+            let directorySlot: DirectorySlot
+            if let existing {
+                directorySlot = existing.slot
+                clearDirectoryEntry(slot: directorySlot)
+                for key in releasedSectors {
+                    setBAMSector(track: key >> 8, sector: key & 0xFF, free: true)
+                }
+            } else {
+                guard let freeSlot = findFreeDirectorySlot() else { return false }
+                directorySlot = freeSlot
+            }
+            writeDirectoryEntry(slot: directorySlot, filename: request.name, fileType: fileType, firstSector: (0, 0), sectorCount: 0)
+            parseDirectory()
+            markD64Modified()
+            return true
+        }
 
         guard let allocated = selectFreeSectors(count: sectorCount, releasing: releasedSectors) else { return false }
         let allocatedKeys = Set(allocated.map { sectorChainKey(track: $0.track, sector: $0.sector) })
@@ -571,7 +596,7 @@ public final class DiskDrive {
         }
 
         writePRGChain(data: data, sectors: allocated)
-        writeDirectoryEntry(slot: directorySlot, filename: request.name, firstSector: allocated[0], sectorCount: sectorCount)
+        writeDirectoryEntry(slot: directorySlot, filename: request.name, fileType: fileType, firstSector: allocated[0], sectorCount: sectorCount)
         parseDirectory()
         markD64Modified()
         return true
@@ -784,8 +809,8 @@ public final class DiskDrive {
             switch result {
             case .changed:
                 commandStatus = "00, OK,00,00\r"
-            case .alreadyAllocated:
-                commandStatus = "65, NO BLOCK,00,00\r"
+            case .alreadyAllocated(let track, let sector):
+                commandStatus = String(format: "65, NO BLOCK,%02d,%02d\r", track, sector)
             case .invalidBlock:
                 commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
             case .driveNotReady:
@@ -842,6 +867,14 @@ public final class DiskDrive {
     private struct DiskFilenameRequest {
         let name: String
         let replaceExisting: Bool
+        let fileType: UInt8
+        let accessMode: DiskFileAccessMode
+    }
+
+    private enum DiskFileAccessMode {
+        case read
+        case write
+        case append
     }
 
     private struct NewDiskCommand {
@@ -889,7 +922,7 @@ public final class DiskDrive {
 
     private enum BlockAllocationResult: Equatable {
         case changed
-        case alreadyAllocated
+        case alreadyAllocated(track: Int, sector: Int)
         case invalidBlock
         case driveNotReady
         case writeProtected
@@ -1171,12 +1204,49 @@ public final class DiskDrive {
         guard validateDirectorySectorsReadable() else { return .readError }
 
         if allocate && !isBAMSectorFree(track: track, sector: sector) {
-            return .alreadyAllocated
+            let nextFree = nextFreeBlock(afterTrack: track, sector: sector) ?? (track: 0, sector: 0)
+            return .alreadyAllocated(track: nextFree.track, sector: nextFree.sector)
         }
 
         setBAMSector(track: track, sector: sector, free: !allocate)
         markD64Modified()
         return .changed
+    }
+
+    private func nextFreeBlock(afterTrack track: Int, sector: Int) -> (track: Int, sector: Int)? {
+        guard let geometry = mountedGeometry else { return nil }
+
+        func firstFree(on track: Int, in sectors: Range<Int>) -> (track: Int, sector: Int)? {
+            guard track >= 1 && track <= geometry.trackCount else { return nil }
+            for candidateSector in sectors where isBAMSectorFree(track: track, sector: candidateSector) {
+                return (track, candidateSector)
+            }
+            return nil
+        }
+
+        let sectorsOnRequestedTrack = geometry.sectorsPerTrack[track]
+        if sector + 1 < sectorsOnRequestedTrack,
+           let next = firstFree(on: track, in: (sector + 1)..<sectorsOnRequestedTrack) {
+            return next
+        }
+        if track < geometry.trackCount {
+            for candidateTrack in (track + 1)...geometry.trackCount {
+                if let next = firstFree(on: candidateTrack, in: 0..<geometry.sectorsPerTrack[candidateTrack]) {
+                    return next
+                }
+            }
+        }
+        if track > 1 {
+            for candidateTrack in 1..<track {
+                if let next = firstFree(on: candidateTrack, in: 0..<geometry.sectorsPerTrack[candidateTrack]) {
+                    return next
+                }
+            }
+        }
+        if sector > 0 {
+            return firstFree(on: track, in: 0..<sector)
+        }
+        return nil
     }
 
     @discardableResult
@@ -1530,6 +1600,8 @@ public final class DiskDrive {
     private func parseDiskFilename(_ filename: String) -> DiskFilenameRequest {
         var name = filename
         var replaceExisting = false
+        var fileType: UInt8 = 0x82
+        var accessMode: DiskFileAccessMode = .read
 
         if name.hasPrefix("@") {
             replaceExisting = true
@@ -1547,11 +1619,49 @@ public final class DiskDrive {
             }
         }
 
-        if let comma = name.firstIndex(of: ",") {
-            name = String(name[..<comma])
+        let parts = name
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let first = parts.first {
+            name = first
         }
 
-        return DiskFilenameRequest(name: name, replaceExisting: replaceExisting)
+        for option in parts.dropFirst().map({ $0.uppercased() }) {
+            switch option {
+            case "P", "PRG":
+                fileType = 0x82
+            case "S", "SEQ":
+                fileType = 0x81
+            case "U", "USR":
+                fileType = 0x83
+            case "L", "REL":
+                fileType = 0x84
+            case "R":
+                accessMode = .read
+            case "W":
+                accessMode = .write
+            case "A":
+                accessMode = .append
+            default:
+                break
+            }
+        }
+
+        return DiskFilenameRequest(
+            name: name,
+            replaceExisting: replaceExisting,
+            fileType: fileType,
+            accessMode: accessMode
+        )
+    }
+
+    private func isDiskFilenameOption(_ option: String) -> Bool {
+        switch option.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case "P", "PRG", "S", "SEQ", "U", "USR", "L", "REL", "R", "W", "A":
+            return true
+        default:
+            return false
+        }
     }
 
     private func findFreeDirectorySlot() -> DirectorySlot? {
@@ -1703,21 +1813,53 @@ public final class DiskDrive {
         guard validateDirectorySectorsReadable() else { return .readError }
         guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
 
-        let destination = parseDiskFilename(String(expression[..<separator])).name
-        let source = parseDiskFilename(String(expression[expression.index(after: separator)...])).name
-        guard !destination.isEmpty, !source.isEmpty, destination != "$", source != "$" else {
+        let destinationRequest = parseDiskFilename(String(expression[..<separator]))
+        let sourceSpecs = splitCopySourceExpressions(String(expression[expression.index(after: separator)...]))
+        guard !destinationRequest.name.isEmpty, destinationRequest.name != "$", !sourceSpecs.isEmpty else {
             return .syntaxError
         }
-        guard findDirectorySlot(named: destination) == nil else { return .destinationExists }
-        guard let sourceEntry = findFile(source) else { return .missingSource }
+        guard findDirectorySlot(named: destinationRequest.name) == nil else { return .destinationExists }
 
-        guard let data = loadFileData(sourceEntry) else {
-            return .readError
+        var copiedData: [UInt8] = []
+        var copiedFileType: UInt8?
+        for sourceSpec in sourceSpecs {
+            let source = parseDiskFilename(sourceSpec).name
+            guard !source.isEmpty, source != "$" else { return .syntaxError }
+            guard let sourceEntry = findFile(source) else { return .missingSource }
+            guard let data = loadFileData(sourceEntry) else {
+                return .readError
+            }
+            if copiedFileType == nil {
+                copiedFileType = sourceEntry.fileType
+            }
+            copiedData.append(contentsOf: data)
         }
-        guard savePRG(filename: destination, data: data) else {
+
+        let request = DiskFilenameRequest(
+            name: destinationRequest.name,
+            replaceExisting: false,
+            fileType: copiedFileType ?? 0x82,
+            accessMode: .write
+        )
+        guard saveFile(request: request, data: copiedData, fileType: request.fileType) else {
             return .syntaxError
         }
         return .copied
+    }
+
+    private func splitCopySourceExpressions(_ expression: String) -> [String] {
+        let tokens = expression
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        var sources: [String] = []
+        for token in tokens where !token.isEmpty {
+            if isDiskFilenameOption(token), let last = sources.indices.last {
+                sources[last] += ",\(token)"
+            } else {
+                sources.append(token)
+            }
+        }
+        return sources
     }
 
     private func directorySlots(matching name: String) -> [(slot: DirectorySlot, entry: DirectoryEntry)] {
@@ -1798,12 +1940,13 @@ public final class DiskDrive {
     private func writeDirectoryEntry(
         slot: DirectorySlot,
         filename: String,
+        fileType: UInt8,
         firstSector: (track: Int, sector: Int),
         sectorCount: Int
     ) {
         guard var sectorData = readSector(track: slot.track, sector: slot.sector) else { return }
         let base = slot.entryIndex * 32
-        sectorData[base + 2] = 0x82
+        sectorData[base + 2] = fileType | 0x80
         sectorData[base + 3] = UInt8(firstSector.track)
         sectorData[base + 4] = UInt8(firstSector.sector)
 
@@ -2179,9 +2322,14 @@ public final class DiskDrive {
             return true
         }
 
-        if parseDiskFilename(filename).name.hasPrefix("#") {
+        let request = parseDiskFilename(filename)
+        if request.name.hasPrefix("#") {
             channels[channel] = Channel(data: [], writeData: [], position: 0, isOpen: true)
             return true
+        }
+
+        if request.accessMode == .write || request.accessMode == .append {
+            return openOutputFile(channel: channel, request: request)
         }
 
         if isDirectoryListingRequest(filename) {
@@ -2198,6 +2346,50 @@ public final class DiskDrive {
         // Actually, the raw file data on disk IS the PRG data (with load address)
         // So we just use it as-is
         channels[channel] = Channel(data: data, position: 0, isOpen: true)
+        return true
+    }
+
+    private func openOutputFile(channel: Int, request: DiskFilenameRequest) -> Bool {
+        guard isMounted, mountedFormat == .d64 else {
+            commandStatus = "74, DRIVE NOT READY,00,00\r"
+            return false
+        }
+        guard !isWriteProtected else {
+            commandStatus = "26, WRITE PROTECT ON,00,00\r"
+            return false
+        }
+        guard !request.name.isEmpty,
+              request.name != "$",
+              !request.name.hasPrefix("#"),
+              validateDirectorySectorsReadable() else {
+            return false
+        }
+
+        let existing = findFile(request.name)
+        if request.accessMode == .write && existing != nil && !request.replaceExisting {
+            commandStatus = "63, FILE EXISTS,00,00\r"
+            return false
+        }
+
+        var channelState = Channel(
+            data: [],
+            writeData: [],
+            position: 0,
+            writePosition: 0,
+            isOpen: true,
+            outputFilename: request.name,
+            outputFileType: request.fileType,
+            outputReplacesExisting: request.replaceExisting || request.accessMode == .append
+        )
+
+        if request.accessMode == .append, let existing {
+            guard let existingData = loadFileData(existing) else { return false }
+            channelState.writeData = existingData
+            channelState.writePosition = existingData.count
+        }
+
+        channels[channel] = channelState
+        commandStatus = "00, OK,00,00\r"
         return true
     }
 
@@ -2233,6 +2425,21 @@ public final class DiskDrive {
         guard channel >= 0 && channel < 16 else { return }
         if channel == 15, channels[channel].isOpen, !channels[channel].writeData.isEmpty {
             executeBufferedCommand(channel: channel)
+        } else if channel != 15,
+                  channels[channel].isOpen,
+                  let filename = channels[channel].outputFilename {
+            var request = parseDiskFilename(filename)
+            request = DiskFilenameRequest(
+                name: request.name,
+                replaceExisting: channels[channel].outputReplacesExisting,
+                fileType: channels[channel].outputFileType,
+                accessMode: .write
+            )
+            if !saveFile(request: request, data: channels[channel].writeData, fileType: channels[channel].outputFileType) {
+                if currentCommandStatus == "00, OK,00,00\r" {
+                    commandStatus = "72, DISK FULL,00,00\r"
+                }
+            }
         }
         channels[channel] = Channel()
     }

@@ -12,6 +12,9 @@ public enum CompatibilityMediaType: String, Decodable, Equatable {
     case prg
     case d64
     case g64
+    case nib
+    case nbz
+    case p64
     case t64
     case tap
     case crt
@@ -894,9 +897,11 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let minVariableSpeedZoneSamples: Int?
     public let minGCRWrites: Int?
     public let minGCRWriteSplices: Int?
+    public let minGCRWriteEraseBits: Int?
     public let requiredVariableSpeedZones: [Int]
     public let track: Int?
     public let halfTrack: Int?
+    public let headBitPosition: Int?
     public let readTrack: Int?
     public let readHalfTrack: Int?
     public let usingHalfTrackFallback: Bool?
@@ -919,9 +924,11 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case minVariableSpeedZoneSamples
         case minGCRWrites
         case minGCRWriteSplices
+        case minGCRWriteEraseBits
         case requiredVariableSpeedZones
         case track
         case halfTrack
+        case headBitPosition
         case readTrack
         case readHalfTrack
         case usingHalfTrackFallback
@@ -945,9 +952,11 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minVariableSpeedZoneSamples: Int? = nil,
         minGCRWrites: Int? = nil,
         minGCRWriteSplices: Int? = nil,
+        minGCRWriteEraseBits: Int? = nil,
         requiredVariableSpeedZones: [Int] = [],
         track: Int? = nil,
         halfTrack: Int? = nil,
+        headBitPosition: Int? = nil,
         readTrack: Int? = nil,
         readHalfTrack: Int? = nil,
         usingHalfTrackFallback: Bool? = nil,
@@ -969,9 +978,11 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minVariableSpeedZoneSamples = minVariableSpeedZoneSamples
         self.minGCRWrites = minGCRWrites
         self.minGCRWriteSplices = minGCRWriteSplices
+        self.minGCRWriteEraseBits = minGCRWriteEraseBits
         self.requiredVariableSpeedZones = requiredVariableSpeedZones
         self.track = track
         self.halfTrack = halfTrack
+        self.headBitPosition = headBitPosition
         self.readTrack = readTrack
         self.readHalfTrack = readHalfTrack
         self.usingHalfTrackFallback = usingHalfTrackFallback
@@ -996,6 +1007,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minVariableSpeedZoneSamples = try Self.decodeNonNegativeIfPresent(container, forKey: .minVariableSpeedZoneSamples)
         minGCRWrites = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRWrites)
         minGCRWriteSplices = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRWriteSplices)
+        minGCRWriteEraseBits = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRWriteEraseBits)
         requiredVariableSpeedZones = try container.decodeIfPresent([Int].self, forKey: .requiredVariableSpeedZones) ?? []
         for zone in requiredVariableSpeedZones where !(0...3).contains(zone) {
             throw DecodingError.dataCorruptedError(
@@ -1006,6 +1018,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         }
         track = try Self.decodeNonNegativeIfPresent(container, forKey: .track)
         halfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .halfTrack)
+        headBitPosition = try Self.decodeNonNegativeIfPresent(container, forKey: .headBitPosition)
         readTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .readTrack)
         readHalfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .readHalfTrack)
         usingHalfTrackFallback = try container.decodeIfPresent(Bool.self, forKey: .usingHalfTrackFallback)

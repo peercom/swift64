@@ -33,6 +33,7 @@ public final class Drive1541 {
         public let variableSpeedZoneSampleCount: UInt64
         public let variableSpeedZoneMask: UInt8
         public let gcrWriteByteCount: UInt64
+        public let gcrWriteEraseBitCount: UInt64
         public let gcrWriteModeActive: Bool
         public let gcrWriteSpliceCount: UInt64
         public let writeProtected: Bool
@@ -147,7 +148,10 @@ public final class Drive1541 {
 
     /// Total low-level GCR bytes written through the emulated drive head.
     public private(set) var gcrWriteByteCount: UInt64 = 0
+    /// Total low-level bits cleared while the write gate is active without a fresh data byte.
+    public private(set) var gcrWriteEraseBitCount: UInt64 = 0
     var gcrWriteBitOffset: Int = 0
+    var gcrWriteFreshBitsRemaining: Int = 0
     public private(set) var gcrWriteSpliceCount: UInt64 = 0
     var previousGCRWriteGateActive: Bool = false
 
@@ -242,8 +246,8 @@ public final class Drive1541 {
 
         // VIA2 port A is the disk data register. In write mode the 1541 ROM
         // presents a GCR byte here; the rotating write head serializes it.
-        via2.onPortAWrite = { [weak self] in
-            self?.loadGCRWriteByteFromVIA2PortA()
+        via2.onPortAWrite = { [weak self] reason in
+            self?.loadGCRWriteByteFromVIA2PortA(reason: reason)
         }
     }
 
@@ -290,7 +294,23 @@ public final class Drive1541 {
     // MARK: - Disk operations
 
     public func insertDisk(_ data: Data, isG64: Bool = false) -> Bool {
-        let mounted = isG64 ? disk.loadG64(data) : disk.loadD64(data)
+        insertDisk(data, format: isG64 ? .g64 : .d64)
+    }
+
+    public func insertDisk(_ data: Data, format: DiskImage.Format) -> Bool {
+        let mounted: Bool
+        switch format {
+        case .d64:
+            mounted = disk.loadD64(data)
+        case .g64:
+            mounted = disk.loadG64(data)
+        case .nib:
+            mounted = disk.loadNIB(data)
+        case .nbz:
+            mounted = disk.loadNBZ(data)
+        case .p64:
+            mounted = disk.loadP64(data)
+        }
         if mounted {
             markMediaChanged()
             resetGCRReadPipeline()
@@ -356,6 +376,7 @@ public final class Drive1541 {
             variableSpeedZoneSampleCount: variableSpeedZoneSampleCount,
             variableSpeedZoneMask: variableSpeedZoneMask,
             gcrWriteByteCount: gcrWriteByteCount,
+            gcrWriteEraseBitCount: gcrWriteEraseBitCount,
             gcrWriteModeActive: gcrWriteModeActive,
             gcrWriteSpliceCount: gcrWriteSpliceCount,
             writeProtected: disk.writeProtected,
@@ -381,6 +402,7 @@ public final class Drive1541 {
         value = value &* 1099511628211 &+ via2PortAReadCount
         value = value &* 1099511628211 &+ syncDetectionCount
         value = value &* 1099511628211 &+ gcrWriteByteCount
+        value = value &* 1099511628211 &+ gcrWriteEraseBitCount
         value = value &* 1099511628211 &+ gcrWriteSpliceCount
         value = value &* 1099511628211 &+ UInt64(decodedIECCommandBytes.count)
         value = value &* 1099511628211 &+ UInt64(decodedIECDataBytes.count)
@@ -502,7 +524,9 @@ public final class Drive1541 {
         variableSpeedZoneSampleCount = 0
         variableSpeedZoneMask = 0
         gcrWriteByteCount = 0
+        gcrWriteEraseBitCount = 0
         gcrWriteBitOffset = 0
+        gcrWriteFreshBitsRemaining = 0
         gcrWriteSpliceCount = 0
         previousGCRWriteGateActive = false
         decodedIECCommandBytes.removeAll(keepingCapacity: true)
@@ -526,6 +550,7 @@ public final class Drive1541 {
         soDelay = 0
         via2.ca1 = true
         gcrWriteBitOffset = 0
+        gcrWriteFreshBitsRemaining = 0
         previousGCRWriteGateActive = false
     }
 
@@ -866,7 +891,7 @@ public final class Drive1541 {
         let totalBits = target.info?.bitLength ?? target.bytes.count * 8
         guard totalBits > 0 else { return }
 
-        let startBit = (headBitPosition + startBitOffset) % totalBits
+        let startBit = ((headBitPosition + startBitOffset) % totalBits + totalBits) % totalBits
         guard disk.addWeakBitRange(
             startBit: startBit,
             bitCount: Self.writeSpliceBitCount,
@@ -900,21 +925,29 @@ public final class Drive1541 {
 
                 if (uf4Counter & 2) != 0 && (prevUF4 & 2) == 0 {
                     if headBitPosition >= totalBits { headBitPosition = 0 }
+                    let hasFreshDataBit = gcrWriteFreshBitsRemaining > 0
                     let sourceBitIndex = 7 - gcrWriteBitOffset
-                    let bit = (via2.portAOut >> UInt8(sourceBitIndex)) & 0x01 != 0
+                    let bit = hasFreshDataBit
+                        ? (via2.portAOut >> UInt8(sourceBitIndex)) & 0x01 != 0
+                        : false
                     if disk.writeBitAtBitPosition(
                         bit,
                         halfTrack: target.halfTrack,
                         bitPosition: headBitPosition
                     ) {
                         headBitPosition += 1
-                        gcrWriteBitOffset = (gcrWriteBitOffset + 1) & 0x07
-                        if gcrWriteBitOffset == 0 {
-                            gcrWriteByteCount += 1
-                            if gcrTraceLog < 200 {
-                                gcrTraceLog += 1
-                                C64Trace.log(.gcr, "[GCR-WRITE] @\(debugCycleCount) count=\(gcrWriteByteCount) PA=$\(String(format:"%02X", via2.portAOut)) halfTrack=\(target.halfTrack) bit=\(headBitPosition)")
+                        if hasFreshDataBit {
+                            gcrWriteFreshBitsRemaining -= 1
+                            gcrWriteBitOffset = (gcrWriteBitOffset + 1) & 0x07
+                            if gcrWriteBitOffset == 0 {
+                                gcrWriteByteCount += 1
+                                if gcrTraceLog < 200 {
+                                    gcrTraceLog += 1
+                                    C64Trace.log(.gcr, "[GCR-WRITE] @\(debugCycleCount) count=\(gcrWriteByteCount) PA=$\(String(format:"%02X", via2.portAOut)) halfTrack=\(target.halfTrack) bit=\(headBitPosition)")
+                                }
                             }
+                        } else {
+                            gcrWriteEraseBitCount += 1
                         }
                     }
                 }
@@ -983,8 +1016,18 @@ public final class Drive1541 {
         return zone
     }
 
-    private func loadGCRWriteByteFromVIA2PortA() {
+    private func loadGCRWriteByteFromVIA2PortA(reason: VIA6522.PortAChangeReason) {
+        guard reason != .reset else {
+            gcrWriteFreshBitsRemaining = 0
+            return
+        }
         gcrWriteBitOffset = 0
+        switch reason {
+        case .outputRegister, .outputRegisterNoHandshake:
+            gcrWriteFreshBitsRemaining = 8
+        case .dataDirection, .reset:
+            gcrWriteFreshBitsRemaining = 0
+        }
         syncDetected = false
         shiftRegister = 0
         bitCounter = 0

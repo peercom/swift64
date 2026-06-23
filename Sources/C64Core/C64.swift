@@ -438,24 +438,48 @@ public final class C64 {
 
     // MARK: - Media loading
 
-    /// Mount a D64 or G64 disk image.
+    /// Mount a D64, G64, NIB, or NBZ disk image.
     public func mountDisk(_ url: URL) -> Bool {
         guard let data = try? Data(contentsOf: url) else { return false }
         return mountDisk(data, fileName: url.lastPathComponent)
     }
 
-    /// Mount a disk image from data, using the filename extension to detect D64 vs G64.
+    /// Mount a disk image from data, using the filename extension and known
+    /// low-level signatures to detect D64, G64, NIB, NBZ, or P64.
     public func mountDisk(_ data: Data, fileName: String) -> Bool {
         let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
-        let isG64 = ext == "g64" || (ext != "d64" && data.starts(with: Array("GCR-1541".utf8)))
+        let format: DiskImage.Format
+        if ext == "g64" || (ext != "d64" && data.starts(with: Array("GCR-1541".utf8))) {
+            format = .g64
+        } else if ext == "nib" || (ext != "d64" && data.starts(with: Array("MNIB-1541-RAW".utf8))) {
+            format = .nib
+        } else if ext == "nbz" {
+            format = .nbz
+        } else if ext == "p64" || (ext != "d64" && data.starts(with: Array("P64-1541".utf8))) {
+            format = .p64
+        } else {
+            format = .d64
+        }
 
-        let highLevelResult = isG64 ? diskDrive.mountG64(data) : diskDrive.mount(data)
+        let highLevelResult: Bool
+        switch format {
+        case .d64:
+            highLevelResult = diskDrive.mount(data)
+        case .g64:
+            highLevelResult = diskDrive.mountG64(data)
+        case .nib:
+            highLevelResult = false
+        case .nbz:
+            highLevelResult = false
+        case .p64:
+            highLevelResult = false
+        }
         var lowLevelResult = false
 
         // Also load into the 1541's GCR disk for true drive emulation.
-        lowLevelResult = drive1541.insertDisk(data, isG64: isG64)
+        lowLevelResult = drive1541.insertDisk(data, format: format)
         if lowLevelResult {
-            drive1541.setWriteProtected(highLevelResult ? diskDrive.isWriteProtected : isG64)
+            drive1541.setWriteProtected(highLevelResult ? diskDrive.isWriteProtected : format != .d64)
         }
 
         if highLevelResult && !lowLevelResult {

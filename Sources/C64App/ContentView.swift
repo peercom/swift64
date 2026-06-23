@@ -126,7 +126,7 @@ struct ContentView: View {
     }
 
     func openDisk() {
-        openFile(types: ["d64", "g64"], title: "Open Disk Image") { url in
+        openFile(types: ["d64", "g64", "nib", "nbz", "p64"], title: "Open Disk Image") { url in
             emulator.mountDisk(url)
         }
     }
@@ -608,12 +608,13 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Drive CPU", value: "$\(hex16(status.drive.cpuPC))\(status.drive.cpuJammed ? " JAM" : "")")
                 StatusRow(label: "LED / Motor", value: "\(onOff(status.drive.ledOn)) / \(onOff(status.drive.motorOn))")
                 StatusRow(label: "Track", value: "\(status.drive.track)  half \(status.drive.halfTrack)")
+                StatusRow(label: "Head Bit", value: "\(status.drive.headBitPosition)")
                 StatusRow(label: "Read Track", value: readTrackDescription)
                 StatusRow(label: "Sync", value: "\(onOff(status.drive.syncDetected))  count \(status.drive.syncDetectionCount)")
                 StatusRow(label: "Byte Ready", value: "\(onOff(status.drive.byteReady))  count \(status.drive.byteReadyCount)")
                 StatusRow(label: "Weak Bits", value: "\(status.drive.weakBitReadCount)")
                 StatusRow(label: "Speed Zones", value: "\(status.drive.variableSpeedZoneSampleCount)  mask $\(hex8(status.drive.variableSpeedZoneMask))")
-                StatusRow(label: "Write Head", value: "\(onOff(status.drive.gcrWriteModeActive))  count \(status.drive.gcrWriteByteCount)  splices \(status.drive.gcrWriteSpliceCount)")
+                StatusRow(label: "Write Head", value: "\(onOff(status.drive.gcrWriteModeActive))  count \(status.drive.gcrWriteByteCount)  splices \(status.drive.gcrWriteSpliceCount)  erase \(status.drive.gcrWriteEraseBitCount)")
                 StatusRow(label: "Port A Reads", value: "\(status.drive.via2PortAReadCount)")
                 StatusRow(label: "IEC Bytes", value: status.drive.lastIECCommandSummary)
                 StatusRow(label: "No Progress", value: "\(status.drive.noProgressCycleCount) cycles")
@@ -847,7 +848,7 @@ final class EmulatorController: ObservableObject {
     func loadFile(_ url: URL) {
         let ext = url.pathExtension.lowercased()
         switch ext {
-        case "d64", "g64":
+        case "d64", "g64", "nib", "nbz", "p64":
             mountDisk(url)
         case "t64", "tap":
             mountTape(url)

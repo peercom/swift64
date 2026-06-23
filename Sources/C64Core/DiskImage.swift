@@ -5,11 +5,17 @@ public struct DiskImage {
     public enum Format: Equatable {
         case d64
         case g64
+        case nib
+        case nbz
+        case p64
 
         public var displayName: String {
             switch self {
             case .d64: return "D64"
             case .g64: return "G64"
+            case .nib: return "NIB"
+            case .nbz: return "NBZ"
+            case .p64: return "P64"
             }
         }
     }
@@ -156,19 +162,38 @@ public struct DiskImage {
             if !hasWeakBitRanges {
                 unsupported.append("Weak/random bits")
             }
+        case .nib:
+            unsupported.append("Flux-level timing")
+            unsupported.append("P64 metadata")
+            if !hasWeakBitRanges {
+                unsupported.append("Weak/random bits")
+            }
+        case .nbz:
+            unsupported.append("Flux-level timing")
+            unsupported.append("P64 metadata")
+            if !hasWeakBitRanges {
+                unsupported.append("Weak/random bits")
+            }
+        case .p64:
+            unsupported.append("Flux timing quantized to GCR bit cells")
         }
+
+        let isNativePreservationFormat = format == .g64
+            || format == .nib
+            || format == .nbz
+            || format == .p64
 
         return Capabilities(
             format: format,
             populatedHalfTrackCount: populated.count,
             nativeLowLevelTrackCount: nativeCount,
             syntheticGCRTrackCount: syntheticCount,
-            preservesHalfTracks: format == .g64 && hasHalfTrackData,
-            preservesRawTrackLengths: format == .g64 && nativeCount > 0,
-            preservesSpeedZones: format == .g64 && nativeCount > 0,
-            preservesVariableSpeedZones: format == .g64 && hasVariableSpeedZones,
+            preservesHalfTracks: isNativePreservationFormat && hasHalfTrackData,
+            preservesRawTrackLengths: isNativePreservationFormat && nativeCount > 0,
+            preservesSpeedZones: isNativePreservationFormat && nativeCount > 0,
+            preservesVariableSpeedZones: isNativePreservationFormat && hasVariableSpeedZones,
             preservesSectorErrorInfo: sectorErrorCodes != nil,
-            preservesWeakBitRanges: false,
+            preservesWeakBitRanges: isNativePreservationFormat && hasWeakBitRanges,
             sectorErrorCodeCount: sectorErrorCodeCount,
             nonDefaultSectorErrorCodeCount: nonDefaultSectorErrorCodeCount,
             weakBitRangeCount: weakBitRangeCount,

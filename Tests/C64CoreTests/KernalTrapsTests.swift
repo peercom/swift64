@@ -911,6 +911,44 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
     }
 
+    func testKernalOpenWriteChannelCreatesSEQFileOnClose() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+
+        prepareKernalOpenTrap(c64, filename: "TEXT,S,W", logicalFile: 2, secondary: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        prepareKernalCHKOUTTrap(c64, channel: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        for byte in Array("HELLO CHANNEL\r".utf8) {
+            prepareKernalCHROUTTrap(c64, byte: byte)
+            XCTAssertTrue(c64.kernalTraps.checkTrap())
+        }
+        prepareKernalCloseTrap(c64, channel: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        let entry = try XCTUnwrap(c64.diskDrive.findFile("TEXT"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(c64.diskDrive.readFileData(entry), Array("HELLO CHANNEL\r".utf8))
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+    }
+
+    func testKernalOpenCloseWriteChannelCreatesEmptySEQFile() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+
+        prepareKernalOpenTrap(c64, filename: "EMPTY,S,W", logicalFile: 2, secondary: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        prepareKernalCloseTrap(c64, channel: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        let entry = try XCTUnwrap(c64.diskDrive.findFile("EMPTY"))
+        XCTAssertEqual(entry.typeName, "SEQ")
+        XCTAssertEqual(entry.fileSize, 0)
+        XCTAssertEqual(entry.firstTrack, 0)
+        XCTAssertEqual(entry.firstSector, 0)
+        XCTAssertEqual(c64.diskDrive.readFileData(entry), [])
+    }
+
     func testCompatTrueDriveAllowsKernalChannelTrapsThroughC64Gate() {
         let c64 = C64()
         c64.trueDriveEmulationMode = .compat1541

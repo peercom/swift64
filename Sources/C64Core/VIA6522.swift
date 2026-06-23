@@ -3,6 +3,13 @@ import Foundation
 /// MOS 6522 VIA (Versatile Interface Adapter) used in the 1541 disk drive.
 /// Two instances: VIA1 (serial bus interface at $1800) and VIA2 (disk controller at $1C00).
 public final class VIA6522 {
+    public enum PortAChangeReason {
+        case outputRegister
+        case outputRegisterNoHandshake
+        case dataDirection
+        case reset
+    }
+
 
     // MARK: - Ports
 
@@ -114,7 +121,7 @@ public final class VIA6522 {
     public var onInterrupt: ((Bool) -> Void)?
 
     /// Callback when effective port A output may have changed.
-    public var onPortAWrite: (() -> Void)?
+    public var onPortAWrite: ((PortAChangeReason) -> Void)?
 
     /// Callback when port B is written (used by Drive1541 to update bus immediately)
     public var onPortBWrite: (() -> Void)?
@@ -203,7 +210,7 @@ public final class VIA6522 {
         ca1DebugCount = 0
 
         onInterrupt?(false)
-        onPortAWrite?()
+        onPortAWrite?(.reset)
         onPortBWrite?()
         onCA2Change?(ca2OutputState)
         onCB2Change?(cb2OutputState)
@@ -298,9 +305,9 @@ public final class VIA6522 {
         onPortBWrite?()
     }
 
-    func notifyPortAChanged(from previousValue: UInt8) {
+    func notifyPortAChanged(from previousValue: UInt8, reason: PortAChangeReason) {
         guard portAOut != previousValue else { return }
-        onPortAWrite?()
+        onPortAWrite?(reason)
     }
 
     // MARK: - Handshake edge detection
@@ -613,7 +620,7 @@ public final class VIA6522 {
             portA = value
             clearIFR(IRQ.ca1 | IRQ.ca2)
             handleCA2PortAHandshakeAccess()
-            notifyPortAChanged(from: previousPortAOut)
+            notifyPortAChanged(from: previousPortAOut, reason: .outputRegister)
 
         case 0x02:
             ddrb = value
@@ -621,7 +628,7 @@ public final class VIA6522 {
         case 0x03:
             let previousPortAOut = portAOut
             ddra = value
-            notifyPortAChanged(from: previousPortAOut)
+            notifyPortAChanged(from: previousPortAOut, reason: .dataDirection)
 
         case 0x04:  // T1L-L (write to latch low)
             timer1Latch = (timer1Latch & 0xFF00) | UInt16(value)
@@ -716,7 +723,7 @@ public final class VIA6522 {
         case 0x0F:  // ORA (no handshake)
             let previousPortAOut = portAOut
             portA = value
-            notifyPortAChanged(from: previousPortAOut)
+            notifyPortAChanged(from: previousPortAOut, reason: .outputRegisterNoHandshake)
 
         default: break
         }
