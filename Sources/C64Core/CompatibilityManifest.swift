@@ -698,6 +698,7 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
     public let preservesSpeedZones: Bool?
     public let preservesVariableSpeedZones: Bool?
     public let preservesSectorErrorInfo: Bool?
+    public let preservesWeakBitRanges: Bool?
     public let sectorErrorCodeCount: Int?
     public let nonDefaultSectorErrorCodeCount: Int?
     public let weakBitRangeCount: Int?
@@ -720,6 +721,7 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         case preservesSpeedZones
         case preservesVariableSpeedZones
         case preservesSectorErrorInfo
+        case preservesWeakBitRanges
         case sectorErrorCodeCount
         case nonDefaultSectorErrorCodeCount
         case weakBitRangeCount
@@ -743,6 +745,7 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         preservesSpeedZones: Bool? = nil,
         preservesVariableSpeedZones: Bool? = nil,
         preservesSectorErrorInfo: Bool? = nil,
+        preservesWeakBitRanges: Bool? = nil,
         sectorErrorCodeCount: Int? = nil,
         nonDefaultSectorErrorCodeCount: Int? = nil,
         weakBitRangeCount: Int? = nil,
@@ -764,6 +767,7 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         self.preservesSpeedZones = preservesSpeedZones
         self.preservesVariableSpeedZones = preservesVariableSpeedZones
         self.preservesSectorErrorInfo = preservesSectorErrorInfo
+        self.preservesWeakBitRanges = preservesWeakBitRanges
         self.sectorErrorCodeCount = sectorErrorCodeCount
         self.nonDefaultSectorErrorCodeCount = nonDefaultSectorErrorCodeCount
         self.weakBitRangeCount = weakBitRangeCount
@@ -788,6 +792,7 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         preservesSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesSpeedZones)
         preservesVariableSpeedZones = try container.decodeIfPresent(Bool.self, forKey: .preservesVariableSpeedZones)
         preservesSectorErrorInfo = try container.decodeIfPresent(Bool.self, forKey: .preservesSectorErrorInfo)
+        preservesWeakBitRanges = try container.decodeIfPresent(Bool.self, forKey: .preservesWeakBitRanges)
         sectorErrorCodeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .sectorErrorCodeCount)
         nonDefaultSectorErrorCodeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .nonDefaultSectorErrorCodeCount)
         weakBitRangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitRangeCount)
@@ -887,6 +892,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let minSyncDetections: Int?
     public let minWeakBitReads: Int?
     public let minVariableSpeedZoneSamples: Int?
+    public let minGCRWrites: Int?
+    public let minGCRWriteSplices: Int?
     public let requiredVariableSpeedZones: [Int]
     public let track: Int?
     public let halfTrack: Int?
@@ -895,11 +902,13 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let usingHalfTrackFallback: Bool?
     public let motorOn: Bool?
     public let ledOn: Bool?
+    public let gcrWriteModeActive: Bool?
     public let writeProtected: Bool?
     public let hasDisk: Bool?
     public let mediaChanged: Bool?
     public let minMediaChangeCount: Int?
     public let hasNativeLowLevelImage: Bool?
+    public let d64ExportBlockedByLowLevelWrites: Bool?
     public let lastIECCommandContains: String?
 
     private enum CodingKeys: String, CodingKey {
@@ -908,6 +917,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case minSyncDetections
         case minWeakBitReads
         case minVariableSpeedZoneSamples
+        case minGCRWrites
+        case minGCRWriteSplices
         case requiredVariableSpeedZones
         case track
         case halfTrack
@@ -916,11 +927,13 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case usingHalfTrackFallback
         case motorOn
         case ledOn
+        case gcrWriteModeActive
         case writeProtected
         case hasDisk
         case mediaChanged
         case minMediaChangeCount
         case hasNativeLowLevelImage
+        case d64ExportBlockedByLowLevelWrites
         case lastIECCommandContains
     }
 
@@ -930,6 +943,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minSyncDetections: Int? = nil,
         minWeakBitReads: Int? = nil,
         minVariableSpeedZoneSamples: Int? = nil,
+        minGCRWrites: Int? = nil,
+        minGCRWriteSplices: Int? = nil,
         requiredVariableSpeedZones: [Int] = [],
         track: Int? = nil,
         halfTrack: Int? = nil,
@@ -938,11 +953,13 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         usingHalfTrackFallback: Bool? = nil,
         motorOn: Bool? = nil,
         ledOn: Bool? = nil,
+        gcrWriteModeActive: Bool? = nil,
         writeProtected: Bool? = nil,
         hasDisk: Bool? = nil,
         mediaChanged: Bool? = nil,
         minMediaChangeCount: Int? = nil,
         hasNativeLowLevelImage: Bool? = nil,
+        d64ExportBlockedByLowLevelWrites: Bool? = nil,
         lastIECCommandContains: String? = nil
     ) {
         self.minGCRReads = minGCRReads
@@ -950,6 +967,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minSyncDetections = minSyncDetections
         self.minWeakBitReads = minWeakBitReads
         self.minVariableSpeedZoneSamples = minVariableSpeedZoneSamples
+        self.minGCRWrites = minGCRWrites
+        self.minGCRWriteSplices = minGCRWriteSplices
         self.requiredVariableSpeedZones = requiredVariableSpeedZones
         self.track = track
         self.halfTrack = halfTrack
@@ -958,11 +977,13 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.usingHalfTrackFallback = usingHalfTrackFallback
         self.motorOn = motorOn
         self.ledOn = ledOn
+        self.gcrWriteModeActive = gcrWriteModeActive
         self.writeProtected = writeProtected
         self.hasDisk = hasDisk
         self.mediaChanged = mediaChanged
         self.minMediaChangeCount = minMediaChangeCount
         self.hasNativeLowLevelImage = hasNativeLowLevelImage
+        self.d64ExportBlockedByLowLevelWrites = d64ExportBlockedByLowLevelWrites
         self.lastIECCommandContains = lastIECCommandContains
     }
 
@@ -973,6 +994,8 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minSyncDetections = try Self.decodeNonNegativeIfPresent(container, forKey: .minSyncDetections)
         minWeakBitReads = try Self.decodeNonNegativeIfPresent(container, forKey: .minWeakBitReads)
         minVariableSpeedZoneSamples = try Self.decodeNonNegativeIfPresent(container, forKey: .minVariableSpeedZoneSamples)
+        minGCRWrites = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRWrites)
+        minGCRWriteSplices = try Self.decodeNonNegativeIfPresent(container, forKey: .minGCRWriteSplices)
         requiredVariableSpeedZones = try container.decodeIfPresent([Int].self, forKey: .requiredVariableSpeedZones) ?? []
         for zone in requiredVariableSpeedZones where !(0...3).contains(zone) {
             throw DecodingError.dataCorruptedError(
@@ -988,11 +1011,13 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         usingHalfTrackFallback = try container.decodeIfPresent(Bool.self, forKey: .usingHalfTrackFallback)
         motorOn = try container.decodeIfPresent(Bool.self, forKey: .motorOn)
         ledOn = try container.decodeIfPresent(Bool.self, forKey: .ledOn)
+        gcrWriteModeActive = try container.decodeIfPresent(Bool.self, forKey: .gcrWriteModeActive)
         writeProtected = try container.decodeIfPresent(Bool.self, forKey: .writeProtected)
         hasDisk = try container.decodeIfPresent(Bool.self, forKey: .hasDisk)
         mediaChanged = try container.decodeIfPresent(Bool.self, forKey: .mediaChanged)
         minMediaChangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .minMediaChangeCount)
         hasNativeLowLevelImage = try container.decodeIfPresent(Bool.self, forKey: .hasNativeLowLevelImage)
+        d64ExportBlockedByLowLevelWrites = try container.decodeIfPresent(Bool.self, forKey: .d64ExportBlockedByLowLevelWrites)
         lastIECCommandContains = try container.decodeIfPresent(String.self, forKey: .lastIECCommandContains)
     }
 

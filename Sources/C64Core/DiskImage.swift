@@ -24,6 +24,7 @@ public struct DiskImage {
         public let preservesSpeedZones: Bool
         public let preservesVariableSpeedZones: Bool
         public let preservesSectorErrorInfo: Bool
+        public let preservesWeakBitRanges: Bool
         public let sectorErrorCodeCount: Int
         public let nonDefaultSectorErrorCodeCount: Int
         public let weakBitRangeCount: Int
@@ -152,7 +153,6 @@ public struct DiskImage {
             unsupported.append("Native copy-protection bitstream")
         case .g64:
             unsupported.append("Flux-level timing")
-            unsupported.append("Write-back")
             if !hasWeakBitRanges {
                 unsupported.append("Weak/random bits")
             }
@@ -168,6 +168,7 @@ public struct DiskImage {
             preservesSpeedZones: format == .g64 && nativeCount > 0,
             preservesVariableSpeedZones: format == .g64 && hasVariableSpeedZones,
             preservesSectorErrorInfo: sectorErrorCodes != nil,
+            preservesWeakBitRanges: false,
             sectorErrorCodeCount: sectorErrorCodeCount,
             nonDefaultSectorErrorCodeCount: nonDefaultSectorErrorCodeCount,
             weakBitRangeCount: weakBitRangeCount,

@@ -59,6 +59,8 @@ struct ContentView: View {
                         .disabled(status.highLevelDiskFormat != .d64)
                         Button("Export Modified D64...") { exportModifiedD64() }
                             .disabled(!status.canExportModifiedD64 || !status.diskHasUnsavedChanges)
+                        Button("Export Modified G64...") { exportModifiedG64() }
+                            .disabled(!status.canExportModifiedG64 || !status.diskHasUnsavedChanges)
                         Button("Export Captured TAP...") { exportCapturedTAP() }
                             .disabled(!status.canExportCapturedTAP)
                         Button("Export Saved T64...") { exportSavedT64() }
@@ -141,6 +143,22 @@ struct ContentView: View {
                 try emulator.exportModifiedD64(to: url)
             } catch {
                 print("Could not export modified D64: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func exportModifiedG64() {
+        let panel = NSSavePanel()
+        panel.title = "Export Modified G64"
+        panel.allowedContentTypes = [.init(filenameExtension: "g64")].compactMap { $0 }
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = emulator.suggestedModifiedG64Name
+
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try emulator.exportModifiedG64(to: url)
+            } catch {
+                print("Could not export modified G64: \(error.localizedDescription)")
             }
         }
     }
@@ -595,6 +613,7 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Byte Ready", value: "\(onOff(status.drive.byteReady))  count \(status.drive.byteReadyCount)")
                 StatusRow(label: "Weak Bits", value: "\(status.drive.weakBitReadCount)")
                 StatusRow(label: "Speed Zones", value: "\(status.drive.variableSpeedZoneSampleCount)  mask $\(hex8(status.drive.variableSpeedZoneMask))")
+                StatusRow(label: "Write Head", value: "\(onOff(status.drive.gcrWriteModeActive))  count \(status.drive.gcrWriteByteCount)  splices \(status.drive.gcrWriteSpliceCount)")
                 StatusRow(label: "Port A Reads", value: "\(status.drive.via2PortAReadCount)")
                 StatusRow(label: "IEC Bytes", value: status.drive.lastIECCommandSummary)
                 StatusRow(label: "No Progress", value: "\(status.drive.noProgressCycleCount) cycles")
@@ -640,7 +659,16 @@ private struct DriveStatusPopover: View {
 
     private var modifiedDescription: String {
         if status.diskHasUnsavedChanges {
-            return status.canExportModifiedD64 ? "yes, exportable D64" : "yes"
+            if status.d64ExportBlockedByLowLevelWrites {
+                return "yes, raw D64 changes"
+            }
+            if status.canExportModifiedD64 {
+                return "yes, exportable D64"
+            }
+            if status.canExportModifiedG64 {
+                return "yes, exportable G64"
+            }
+            return "yes"
         }
         return "no"
     }
@@ -701,6 +729,10 @@ private struct DriveStatusPopover: View {
         }
         if caps.hasDuplicateSectorHeaders {
             suffixes.append("duplicate headers \(caps.duplicateSectorHeaderCount)")
+        }
+        if caps.weakBitRangeCount > 0 {
+            let label = caps.preservesWeakBitRanges ? "weak ranges" : "volatile weak ranges"
+            suffixes.append("\(label) \(caps.weakBitRangeCount)")
         }
         let suffix = suffixes.isEmpty ? "" : ", \(suffixes.joined(separator: ", "))"
         if caps.isNativeLowLevel {
@@ -771,6 +803,16 @@ final class EmulatorController: ObservableObject {
         let url = URL(fileURLWithPath: name)
         let base = url.deletingPathExtension().lastPathComponent
         return "\(base)-modified.d64"
+    }
+
+    var suggestedModifiedG64Name: String {
+        guard let name = c64.emulationStatus.mountedDiskName else {
+            return "modified.g64"
+        }
+
+        let url = URL(fileURLWithPath: name)
+        let base = url.deletingPathExtension().lastPathComponent
+        return "\(base)-modified.g64"
     }
 
     var suggestedCapturedTAPName: String {
@@ -887,6 +929,24 @@ final class EmulatorController: ObservableObject {
         c64.markExportedD64ImageSaved()
         refreshStatus()
         print("Modified D64 exported: \(url.lastPathComponent)")
+    }
+
+    func exportModifiedG64(to url: URL) throws {
+        guard let data = c64.exportedG64Image else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        try data.write(to: url, options: .atomic)
+        c64.markExportedG64ImageSaved()
+        refreshStatus()
+        print("Modified G64 exported: \(url.lastPathComponent)")
     }
 
     func exportCapturedTAP(to url: URL) throws {

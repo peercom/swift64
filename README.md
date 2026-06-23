@@ -24,16 +24,16 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 | SID | 3 voices, ADSR envelopes with exponential decay/release, waveforms/noise LFSR, model-aware routed filter foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
-| Disk Drive | D64/G64 via Kernal traps, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path with IEC/VIA/GCR emulation |
+| Disk Drive | D64/G64 via Kernal traps, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path and first-stage low-level GCR write-head plumbing with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats |
 | Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Action Replay bank/RAM/IO2 mapping, KCS Power ROM/IO/RAM mode control, Atomic Power/Nordic Power ROM/RAM/Ultimax mode control, Action Replay 3 mirrored ROML/ROMH mapping, Action Replay 4 bank/control/IO2 mapping, Final Cartridge I IO-toggle mapping, Final Cartridge Plus segmented ROM/control mapping, Final Cartridge III 16K bank/control/NMI mapping, Simon's BASIC upper-ROM control, Super Games 16K bank/control latch, C64 Game System/System 3 IO1-address bank switching, Warp Speed IO mirroring and ROM-window control, Stardos capacitor-gated ROML/Kernal replacement mapping, Game Killer Kernal-window ROM and IO disable latch, Prophet64 IO2 bank/disable control, EXOS HIRAM-gated Kernal replacement mapping, Freeze Frame reset/IO/freeze ROM-window control, Freeze Machine 16K/32K reset/IO/freeze ROM-window control, Snapshot64 freeze-visible 4K Ultimax ROM mapping, Super Explode V5 bank/IO2/capacitor-gated ROM control, Super Snapshot V5 ROM/RAM/control mapping, MACH 5 ROM/IO mirror enable-disable control, Dinamic IO1-read bank switching, Zaxxon fixed-ROM read-selected upper banks, COMAL-80 black/default 16K bank switching, Structured BASIC IO1 bank/off control, Ross read-triggered bank/off control, Dela EP64/EP7x8/EP256 and Rex EP256 EPROM bank decoding, Mikro Assembler IO mirrors, Magic Formel `$E000` bank switching, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, Epyx FastLoad ROM/IO2/capacitor-gate behavior, EasyFlash bank/control/RAM mapping, and normal-mapped Westermann/Rex cartridge aliases |
 
 ### What needs work
 
 - Many games and demos will not run correctly yet — VIC-II timing, sprite multiplexing, and advanced raster effects need further refinement
-- True-drive 1541 compatibility is read-focused and still being validated against protected G64/custom-loader disks
-- True-drive GCR writes, native G64 write-back, and low-level 1541 format support are deferred until read compatibility is stable
-- NIB/P64/flux-level media import and G64 write-back are not implemented; weak/random bit readback is available for low-level tracks that provide weak-bit ranges
+- True-drive 1541 compatibility is still being validated against protected G64/custom-loader disks
+- Full magnetic erase behavior, complete low-level 1541 format support, and flux-level write semantics are deferred until the low-level read/write path is stable
+- NIB/P64/flux-level media import is not implemented; weak/random bit readback and byte-level G64 export are available for low-level tracks, but standard G64 export does not preserve weak-bit annotations yet
 - SID filter is simplified and not yet calibrated to measured 6581/8580 curves
 - Freezer button CPU-state capture, Super Snapshot V5 32K RAM-expansion setting, COMAL-80 grey-revision mode selection, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
 - Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
@@ -56,6 +56,10 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Simultaneous NMI/IRQ arbitration now has focused coverage: NMI vectors first, then a still-asserted IRQ is serviced after RTI restores `I` clear
 - BRK/IRQ/NMI stack status bytes now have focused coverage: BRK pushes the break flag set while hardware IRQ/NMI pushes it clear
 - NMI can now hijack BRK/IRQ vector fetches before the low vector byte is read, while late NMIs are prevented from half-hijacking only the high byte; held late NMIs are deferred until after the first handler opcode, and released transients are missed
+- VIC-II low-phase refresh and idle memory side effects are now visible: refresh slots read `$3fff` downward through the 8-bit refresh counter, reset at frame start, wrap correctly, and idle slots read `$3fff` or `$39ff` in ECM without stalling the CPU
+- VIC-II late-start bad-line/DMA-delay behavior now latches unstable `$ff/$f` startup data for the first newly-started c-accesses before normal matrix/color fetches resume
+- VIC-II sprite DMA eligibility is now latched by the cycle-55/56 enable/Y-coordinate check, so post-check `$D015` or sprite-Y writes cannot falsely create current-line DMA while already-latched DMA still reaches its fetch slot and continues through later sprite body rows
+- VIC-II sprite vertical-expansion state now keeps an MCBASE counter and covers the cycle-15 `$D017` clear crunch formula so the next sprite DMA fetch starts from the crunched byte offset
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
 - SID 6581 combined noise waveforms now approximate DAC-bit drain toward noise LFSR lockup while 8580 preserves the cleaner digital combined-noise path; TEST-bit reseeding covers recovery from the locked state
@@ -72,18 +76,21 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - VIA 6522 Port A output changes now have observable callbacks on ORA/DDRA writes, giving disk/peripheral integrations the same kind of immediate pin-update hook already used on Port B
 - VIA 6522 CA2 handshake and pulse output modes now respond to ORA writes as well as ORA reads
 - VIA 6522 CB2 manual, handshake, and pulse output modes now track PCR and Port B access with observable output-state callbacks, including CB1-edge handshake release
+- Low-level GCR tracks can now be mutated in memory by the 1541 write head: while VIA2 Port A is configured as output, the rotating head serializes the current GCR byte bit-by-bit using the active speed-zone timing, splices it into the current exact halftrack while the motor is running and write-protect is clear, creates missing native G64 halftracks with the active speed-zone length for first-stage format/write-back work, marks write-gate entry/exit splice regions as weak/random bits, clears overlapping weak-bit annotations at bit precision, exposes write-mode/write-count/splice-count diagnostics, and marks the low-level image dirty
+- D64-backed low-level GCR writes can now be decoded back into exportable D64 sectors when the resulting GCR headers/data/checksums are valid; low-level writes that cannot be represented as clean D64 sectors now block stale D64 export instead of silently dropping raw-track changes and surface that blocked state in drive status; native G64 byte streams can be exported back to G64 with raw track bytes and per-byte speed maps preserved, while weak/splice annotations remain in-memory only
 - 1541 motor control now models a bounded spindle spin-down window after the VIA motor command turns off, instead of stopping the GCR head instantly
 - 1541 media insert/eject now clears stale GCR head sync, byte-ready, shift-register, and delayed-SO state so a new disk cannot inherit read-pipeline state from the previous image
 - High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
+- High-level D64 SAVE now extends a full first directory sector by allocating another directory sector on track 18, matching 1541 DOS behavior instead of failing after eight files, while avoiding partial directory-chain mutation when the data area has no free sectors
 - High-level 1541 command-channel `N:`/`NEW:` formatting now clears writable D64 images, rebuilds the BAM and empty directory, preserves D64 geometry/error-table shape, and reports status-channel results
-- High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, `C:NEW=OLD` PRG copies, `V:`/`VALIDATE` BAM rebuilds, `B-R`/`U1` block reads into data channels, and status-channel readback
+- High-level disk command-channel support now handles `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, `C:NEW=OLD` PRG copies, `V:`/`VALIDATE` BAM rebuilds, `B-R`/`U1` block reads, `U2` block writes with immediate BAM/directory metadata refresh, `U0` reset/device-address forms, and status-channel readback
 - The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
 - Empty odd halftracks now fall back to adjacent full-track flux, while explicit native G64 halftrack data still overrides the fallback
 - Drive status, local milestone expectations, and JSONL results now distinguish requested head halftrack from the effective low-level halftrack being read
 - Compatibility manifests can now select PRG/D64/G64/T64/TAP/CRT media and `fastLoad`, `compat1541`, or `standard1541` drive modes per milestone
 - Compatibility milestone manifests now reject duplicate milestone IDs and duplicate result keys before running, keeping resume logs and aggregate summaries unambiguous
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
-- Media capability checks now include weak/random-bit range counts, total weak-bit coverage, and per-byte variable-speed-zone coverage for protected G64 validation
+- Media capability checks now include weak/random-bit range counts, total weak-bit coverage, weak-bit preservation flags, and per-byte variable-speed-zone coverage for protected G64 validation
 - Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, expected-failure metadata and mismatch diagnostics, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, write compact aggregate JSON summaries with run configuration metadata, manifest content fingerprints, selected/missing media counts, expected-failure drift counts/details, derived `outcome`/`acceptanceFailures` fields, optionally fail acceptance runs on missing manifest media, unclassified failures, or unexpected failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL
 - Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
@@ -190,9 +197,12 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
 - VIC-II bad-line timing now exposes separate BA warning and AEC halt phases, reports per-cycle bad-line character-fetch bus ownership, and stalls the C64 CPU only during the AEC-low fetch window while VIC/CIA/SID/drive timing continues
 - VIC-II sprite fetching now uses deterministic two-cycle per-sprite DMA slots with observable bus ownership and CPU stalls instead of repeatedly fetching every sprite during the loose sprite window
-- VIC-II sprite DMA now drops BA during the pre-DMA warning window, including slots that begin just after the rasterline wraps, while keeping the CPU running until AEC goes low
+- VIC-II sprite DMA now drops BA during the pre-DMA warning window, including slots that begin just after the rasterline wraps, while keeping the CPU running until AEC goes low and preserving latched warnings after post-check `$D015` changes
+- VIC-II sprite display now latches separately at the cycle-58 DMA/Y-match check, so sprite DMA can continue after `$D015` is cleared while a late Y-coordinate change can still suppress display for that line
+- VIC-II sprite DMA now continues across following sprite body rows after the initial Y compare instead of dropping the second row at the next cycle-55/56 check, with whole-machine RDY stall coverage
 - VIC-II timing now exposes low-phase refresh, display-data, sprite-pointer, and active-sprite middle-byte access phases separately from CPU-stealing high-phase bus ownership
 - VIC-II sprite pointer bytes are now latched during their low-phase pointer slots and later consumed by the sprite DMA fetch path
+- VIC-II wrapped sprite DMA now keeps the low-phase middle-byte read tied to the latched DMA burst instead of falling back to the new rasterline's sprite row calculation
 - VIC-II bad-line fetches now latch both character codes and color RAM nibbles into the line buffers during the character-fetch window
 - VIC-II text/bitmap rendering now uses completed bad-line matrix/color buffers instead of rereading live screen/color RAM for the already-latched character row
 - VIC-II latched matrix buffers are now tied to their fetched VCBASE, preventing a completed row buffer from being reused for the wrong character row
@@ -366,7 +376,7 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESUME=1 SWIFT64_LOCAL_
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RUN_ID=giana-compat-001 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 ```
 
-To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include a format version, run ID, optional `skipped` marker, manifest hash, optional milestone ID/name, the milestone media type, action summary, max-cycle budget, `expectedFailure` match/mismatch diagnostics, final CPU registers/lines/raster position, 1541 drive state, final failure/no-progress diagnostics, media capability counts including weak-bit and variable-speed-zone counters, tape state, bounded decoded screen text, screen hashes, and optional screenshot paths. The aggregate summary records runner/result-format metadata, run ID, manifest/result/screenshot paths when configured, the manifest content hash, resume, failed-screenshot, and limit settings, manifest milestone count, selected milestone count, missing media filenames, pass/fail/skip counts, expected vs unexpected failure counts/details, expected-failure drift counts/details for known regressions whose category or reason markers changed, derived `outcome` values (`notRun`, `passed`, `expectedFailures`, `unexpectedFailures`, or `acceptanceFailed`), `acceptanceFailures` gate names, category counts including `protectedMedia`, `cartridge`, and `app`, unclassified failure counts/details for unknown or generic emulator failures, tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys. Add `SWIFT64_LOCAL_MILESTONE_REQUIRE_ALL_MEDIA=1` for strict preservation runs that should fail immediately when `compatibility.json` references media that is not present in the bounded local selection, add `SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED=1` for runs that should fail whenever a milestone lands in the unknown/generic emulator bucket, and add `SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED=1` to fail on any failure that is not matched by manifest `expectedFailure` metadata:
+To write a compact aggregate summary for dashboards or manual triage, set `SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON`. The per-milestone JSONL records include a format version, run ID, optional `skipped` marker, manifest hash, optional milestone ID/name, the milestone media type, action summary, max-cycle budget, `expectedFailure` match/mismatch diagnostics, final CPU registers/lines/raster position, 1541 drive state, final failure/no-progress diagnostics, media capability counts and preservation flags including weak-bit and variable-speed-zone counters, tape state, bounded decoded screen text, screen hashes, and optional screenshot paths. The aggregate summary records runner/result-format metadata, run ID, manifest/result/screenshot paths when configured, the manifest content hash, resume, failed-screenshot, and limit settings, manifest milestone count, selected milestone count, missing media filenames, pass/fail/skip counts, expected vs unexpected failure counts/details, expected-failure drift counts/details for known regressions whose category or reason markers changed, derived `outcome` values (`notRun`, `passed`, `expectedFailures`, `unexpectedFailures`, or `acceptanceFailed`), `acceptanceFailures` gate names, category counts including `protectedMedia`, `cartridge`, and `app`, unclassified failure counts/details for unknown or generic emulator failures, tape-specific failures, cycle totals, the slowest milestone, failed milestone details, and failed/skipped milestone keys. Add `SWIFT64_LOCAL_MILESTONE_REQUIRE_ALL_MEDIA=1` for strict preservation runs that should fail immediately when `compatibility.json` references media that is not present in the bounded local selection, add `SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED=1` for runs that should fail whenever a milestone lands in the unknown/generic emulator bucket, and add `SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED=1` to fail on any failure that is not matched by manifest `expectedFailure` metadata:
 
 ```sh
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_RESULTS_JSONL=/tmp/swift64-milestones.jsonl SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON=/tmp/swift64-milestone-summary.json swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
@@ -434,8 +444,11 @@ Example milestone manifest:
         "minSyncDetections": 1,
         "minWeakBitReads": 1,
         "minVariableSpeedZoneSamples": 1,
+        "minGCRWrites": 0,
+        "minGCRWriteSplices": 0,
         "requiredVariableSpeedZones": [0, 3],
         "hasNativeLowLevelImage": true,
+        "gcrWriteModeActive": false,
         "readTrack": 18,
         "readHalfTrack": 34,
         "usingHalfTrackFallback": false
@@ -451,6 +464,7 @@ Example milestone manifest:
         "preservesSpeedZones": true,
         "preservesVariableSpeedZones": true,
         "preservesSectorErrorInfo": false,
+        "preservesWeakBitRanges": false,
         "sectorErrorCodeCount": 0,
         "nonDefaultSectorErrorCodeCount": 0,
         "weakBitRangeCount": 0,
@@ -458,7 +472,7 @@ Example milestone manifest:
         "variableSpeedZoneByteCount": 0,
         "supportsWraparoundReads": true,
         "maxTrackSize": 7928,
-        "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
+        "unsupportedFeaturesContains": ["Weak/random bits"]
       },
       "weakBitRanges": [
         { "halfTrack": 34, "startBit": 128, "endBit": 255 }

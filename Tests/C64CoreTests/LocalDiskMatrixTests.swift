@@ -36,6 +36,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         XCTAssertTrue(mediaStatusMismatches(
             CompatibilityMediaStatus(
+                preservesWeakBitRanges: false,
                 weakBitRangeCount: 2,
                 weakBitTotalBitCount: 12,
                 hasDuplicateSectorHeaders: true,
@@ -47,6 +48,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         let mismatches = mediaStatusMismatches(
             CompatibilityMediaStatus(
+                preservesWeakBitRanges: true,
                 weakBitRangeCount: 1,
                 weakBitTotalBitCount: 16,
                 hasDuplicateSectorHeaders: false,
@@ -61,6 +63,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(mismatches.contains("media.hasDuplicateSectorHeaders true != false"))
         XCTAssertTrue(mismatches.contains("media.duplicateSectorHeaderCount 1 != 2"))
         XCTAssertTrue(mismatches.contains("media.variableSpeedZoneByteCount 2 != 4"))
+        XCTAssertTrue(mismatches.contains("media.preservesWeakBitRanges false != true"))
     }
 
     func testTapeStatusMismatchReportsSignalAndExportFields() {
@@ -678,8 +681,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             driveStatus: CompatibilityDriveStatus(
                 minWeakBitReads: 1,
                 minVariableSpeedZoneSamples: 1,
+                minGCRWrites: 1,
+                minGCRWriteSplices: 1,
                 requiredVariableSpeedZones: [0, 4],
                 track: 17,
+                gcrWriteModeActive: true,
                 hasDisk: true
             ),
             mediaStatus: CompatibilityMediaStatus(isNativeLowLevel: true),
@@ -701,9 +707,12 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("byte-ready 0 < 1"))
         XCTAssertTrue(reason.contains("drive.minWeakBitReads 0 < 1"))
         XCTAssertTrue(reason.contains("drive.minVariableSpeedZoneSamples 0 < 1"))
+        XCTAssertTrue(reason.contains("drive.minGCRWrites 0 < 1"))
+        XCTAssertTrue(reason.contains("drive.minGCRWriteSplices 0 < 1"))
         XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones missing 0"))
         XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones invalid 4"))
         XCTAssertTrue(reason.contains("drive.track"))
+        XCTAssertTrue(reason.contains("drive.gcrWriteModeActive"))
         XCTAssertTrue(reason.contains("drive.hasDisk"))
         XCTAssertTrue(reason.contains("media capabilities unavailable"))
         XCTAssertTrue(reason.contains("RAM $0801"))
@@ -902,6 +911,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneSampleCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneMask, 0)
+        XCTAssertEqual(records.last?.finalGCRWriteByteCount, 0)
+        XCTAssertEqual(records.last?.finalGCRWriteModeActive, false)
+        XCTAssertEqual(records.last?.finalGCRWriteSpliceCount, 0)
+        XCTAssertEqual(records.last?.finalD64ExportBlockedByLowLevelWrites, false)
         XCTAssertEqual(records.last?.finalDriveNoProgressCycleCount, 0)
         XCTAssertNil(records.last?.finalFailureReason)
         XCTAssertEqual(records.last?.finalMediaFormat, "D64")
@@ -911,6 +924,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalMediaHasSyntheticGCR, true)
         XCTAssertEqual(records.last?.finalMediaIsNativeLowLevel, false)
         XCTAssertEqual(records.last?.finalMediaPreservesSectorErrorInfo, true)
+        XCTAssertEqual(records.last?.finalMediaPreservesWeakBitRanges, false)
         XCTAssertEqual(records.last?.finalMediaSectorErrorCodeCount, 683)
         XCTAssertEqual(records.last?.finalMediaNonDefaultSectorErrorCodeCount, 2)
         XCTAssertEqual(records.last?.finalMediaWeakBitRangeCount, 0)
@@ -974,6 +988,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
+        XCTAssertNil(legacyRecord.finalGCRWriteByteCount)
+        XCTAssertNil(legacyRecord.finalGCRWriteModeActive)
+        XCTAssertNil(legacyRecord.finalGCRWriteSpliceCount)
         XCTAssertNil(legacyRecord.finalDriveNoProgressCycleCount)
         XCTAssertNil(legacyRecord.finalFailureReason)
         XCTAssertNil(legacyRecord.finalMediaFormat)
@@ -2124,6 +2141,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media capabilities unavailable").category, .media)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minWeakBitReads 0 < 1").category, .protectedMedia)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minVariableSpeedZoneSamples 0 < 1").category, .protectedMedia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minGCRWrites 0 < 1").category, .protectedMedia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "drive.minGCRWriteSplices 0 < 1").category, .protectedMedia)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "write head did not create G64 halftrack").category, .protectedMedia)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "media.variableSpeedZoneByteCount 0 != 256").category, .protectedMedia)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "tape.rawPlaybackActive false != true").category, .tape)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "RAM $0801 00 != 01").category, .ram)
@@ -2536,17 +2556,22 @@ final class LocalDiskMatrixTests: XCTestCase {
             let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
             let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
             let variableSpeedZoneSamples = driveStatus.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
+            let gcrWrites = driveStatus.gcrWriteByteCount - baseline.gcrWriteByteCount
+            let gcrWriteSplices = driveStatus.gcrWriteSpliceCount - baseline.gcrWriteSpliceCount
             let pcReached = milestone.pcRanges.isEmpty || milestone.pcRanges.contains { $0.contains(c64.cpu.pc) }
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
             let driveExpectationMatches = milestone.driveStatus.map { expectation in
                 driveStatusMismatches(
                     expectation,
                     snapshot: driveStatus,
+                    status: c64.emulationStatus,
                     gcrReads: gcrReads,
                     byteReady: byteReady,
                     syncDetections: syncDetections,
                     weakBitReads: weakBitReads,
-                    variableSpeedZoneSamples: variableSpeedZoneSamples
+                    variableSpeedZoneSamples: variableSpeedZoneSamples,
+                    gcrWrites: gcrWrites,
+                    gcrWriteSplices: gcrWriteSplices
                 ).isEmpty
             } ?? true
             let mediaExpectationMatches = milestone.mediaStatus.map { expectation in
@@ -2853,6 +2878,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
         let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
         let variableSpeedZoneSamples = driveStatus.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
+        let gcrWrites = driveStatus.gcrWriteByteCount - baseline.gcrWriteByteCount
+        let gcrWriteSplices = driveStatus.gcrWriteSpliceCount - baseline.gcrWriteSpliceCount
         var unmet: [String] = []
 
         if !milestone.pcRanges.isEmpty && !milestone.pcRanges.contains(where: { $0.contains(c64.cpu.pc) }) {
@@ -2868,11 +2895,14 @@ final class LocalDiskMatrixTests: XCTestCase {
             unmet.append(contentsOf: driveStatusMismatches(
                 driveStatusExpectation,
                 snapshot: driveStatus,
+                status: c64.emulationStatus,
                 gcrReads: gcrReads,
                 byteReady: byteReady,
                 syncDetections: syncDetections,
                 weakBitReads: weakBitReads,
-                variableSpeedZoneSamples: variableSpeedZoneSamples
+                variableSpeedZoneSamples: variableSpeedZoneSamples,
+                gcrWrites: gcrWrites,
+                gcrWriteSplices: gcrWriteSplices
             ))
         }
         if let mediaStatusExpectation = milestone.mediaStatus {
@@ -2942,11 +2972,14 @@ final class LocalDiskMatrixTests: XCTestCase {
     private func driveStatusMismatches(
         _ expectation: CompatibilityDriveStatus,
         snapshot: Drive1541.StatusSnapshot,
+        status: C64.EmulationStatus,
         gcrReads: UInt64,
         byteReady: UInt64,
         syncDetections: UInt64,
         weakBitReads: UInt64,
-        variableSpeedZoneSamples: UInt64
+        variableSpeedZoneSamples: UInt64,
+        gcrWrites: UInt64,
+        gcrWriteSplices: UInt64
     ) -> [String] {
         var mismatches: [String] = []
         if let minGCRReads = expectation.minGCRReads, gcrReads < nonNegativeUInt64(minGCRReads) {
@@ -2966,6 +2999,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let minVariableSpeedZoneSamples = expectation.minVariableSpeedZoneSamples,
            variableSpeedZoneSamples < nonNegativeUInt64(minVariableSpeedZoneSamples) {
             mismatches.append("drive.minVariableSpeedZoneSamples \(variableSpeedZoneSamples) < \(minVariableSpeedZoneSamples)")
+        }
+        if let minGCRWrites = expectation.minGCRWrites, gcrWrites < nonNegativeUInt64(minGCRWrites) {
+            mismatches.append("drive.minGCRWrites \(gcrWrites) < \(minGCRWrites)")
+        }
+        if let minGCRWriteSplices = expectation.minGCRWriteSplices,
+           gcrWriteSplices < nonNegativeUInt64(minGCRWriteSplices) {
+            mismatches.append("drive.minGCRWriteSplices \(gcrWriteSplices) < \(minGCRWriteSplices)")
         }
         for zone in expectation.requiredVariableSpeedZones {
             guard (0...3).contains(zone) else {
@@ -2998,6 +3038,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let ledOn = expectation.ledOn, snapshot.ledOn != ledOn {
             mismatches.append("drive.ledOn \(snapshot.ledOn) != \(ledOn)")
         }
+        if let gcrWriteModeActive = expectation.gcrWriteModeActive,
+           snapshot.gcrWriteModeActive != gcrWriteModeActive {
+            mismatches.append("drive.gcrWriteModeActive \(snapshot.gcrWriteModeActive) != \(gcrWriteModeActive)")
+        }
         if let writeProtected = expectation.writeProtected, snapshot.writeProtected != writeProtected {
             mismatches.append("drive.writeProtected \(snapshot.writeProtected) != \(writeProtected)")
         }
@@ -3014,6 +3058,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let hasNativeLowLevelImage = expectation.hasNativeLowLevelImage,
            snapshot.hasNativeLowLevelImage != hasNativeLowLevelImage {
             mismatches.append("drive.hasNativeLowLevelImage \(snapshot.hasNativeLowLevelImage) != \(hasNativeLowLevelImage)")
+        }
+        if let d64ExportBlockedByLowLevelWrites = expectation.d64ExportBlockedByLowLevelWrites,
+           status.d64ExportBlockedByLowLevelWrites != d64ExportBlockedByLowLevelWrites {
+            mismatches.append("drive.d64ExportBlockedByLowLevelWrites \(status.d64ExportBlockedByLowLevelWrites) != \(d64ExportBlockedByLowLevelWrites)")
         }
         if let lastIECCommandContains = expectation.lastIECCommandContains,
            !snapshot.lastIECCommandSummary.localizedCaseInsensitiveContains(lastIECCommandContains) {
@@ -3067,6 +3115,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let preservesSectorErrorInfo = expectation.preservesSectorErrorInfo,
            capabilities.preservesSectorErrorInfo != preservesSectorErrorInfo {
             mismatches.append("media.preservesSectorErrorInfo \(capabilities.preservesSectorErrorInfo) != \(preservesSectorErrorInfo)")
+        }
+        if let preservesWeakBitRanges = expectation.preservesWeakBitRanges,
+           capabilities.preservesWeakBitRanges != preservesWeakBitRanges {
+            mismatches.append("media.preservesWeakBitRanges \(capabilities.preservesWeakBitRanges) != \(preservesWeakBitRanges)")
         }
         if let sectorErrorCodeCount = expectation.sectorErrorCodeCount,
            capabilities.sectorErrorCodeCount != sectorErrorCodeCount {
@@ -3719,7 +3771,7 @@ private struct MatrixRunResult {
         } ?? "none"
         let readText = drive.readHalfTrack.map { "readHalf=\($0)\(drive.usingHalfTrackFallback ? ",fallback" : "")" } ?? "readHalf=none"
         let verdict = passed ? "PASS" : "FAIL"
-        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) weakBits=\(drive.weakBitReadCount) speedSamples=\(drive.variableSpeedZoneSampleCount) speedZones=$\(hex8(drive.variableSpeedZoneMask)) reason=\(reason)"
+        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) gcrWrites=\(drive.gcrWriteByteCount) gcrSplices=\(drive.gcrWriteSpliceCount) weakBits=\(drive.weakBitReadCount) speedSamples=\(drive.variableSpeedZoneSampleCount) speedZones=$\(hex8(drive.variableSpeedZoneMask)) reason=\(reason)"
     }
 
     var category: MilestoneResultCategory {
@@ -3799,6 +3851,10 @@ private struct MatrixRunResult {
             finalWeakBitReadCount: drive.weakBitReadCount,
             finalVariableSpeedZoneSampleCount: drive.variableSpeedZoneSampleCount,
             finalVariableSpeedZoneMask: drive.variableSpeedZoneMask,
+            finalGCRWriteByteCount: drive.gcrWriteByteCount,
+            finalGCRWriteModeActive: drive.gcrWriteModeActive,
+            finalGCRWriteSpliceCount: drive.gcrWriteSpliceCount,
+            finalD64ExportBlockedByLowLevelWrites: c64.emulationStatus.d64ExportBlockedByLowLevelWrites,
             finalLastIECCommandSummary: drive.lastIECCommandSummary,
             finalDriveNoProgressCycleCount: drive.noProgressCycleCount,
             finalFailureReason: tapeStatus.lastFailureReason,
@@ -3813,6 +3869,7 @@ private struct MatrixRunResult {
             finalMediaPreservesSpeedZones: media?.preservesSpeedZones,
             finalMediaPreservesVariableSpeedZones: media?.preservesVariableSpeedZones,
             finalMediaPreservesSectorErrorInfo: media?.preservesSectorErrorInfo,
+            finalMediaPreservesWeakBitRanges: media?.preservesWeakBitRanges,
             finalMediaSectorErrorCodeCount: media?.sectorErrorCodeCount,
             finalMediaNonDefaultSectorErrorCodeCount: media?.nonDefaultSectorErrorCodeCount,
             finalMediaWeakBitRangeCount: media?.weakBitRangeCount,
@@ -3949,7 +4006,10 @@ private enum MilestoneResultCategory: String {
             || lower.contains("speedzone")
             || lower.contains("speed zone")
             || lower.contains("speed-zone")
-            || lower.contains("requiredvariablespeedzones") {
+            || lower.contains("requiredvariablespeedzones")
+            || lower.contains("gcrwrite")
+            || lower.contains("gcr write")
+            || lower.contains("write head") {
             return .protectedMedia
         }
         if lower.contains("media") {
@@ -4276,7 +4336,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 18
+    static let currentFormatVersion = 22
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -4328,6 +4388,10 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalWeakBitReadCount: UInt64?
     let finalVariableSpeedZoneSampleCount: UInt64?
     let finalVariableSpeedZoneMask: UInt8?
+    let finalGCRWriteByteCount: UInt64?
+    let finalGCRWriteModeActive: Bool?
+    let finalGCRWriteSpliceCount: UInt64?
+    let finalD64ExportBlockedByLowLevelWrites: Bool?
     let finalLastIECCommandSummary: String?
     let finalDriveNoProgressCycleCount: UInt64?
     let finalFailureReason: String?
@@ -4342,6 +4406,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalMediaPreservesSpeedZones: Bool?
     let finalMediaPreservesVariableSpeedZones: Bool?
     let finalMediaPreservesSectorErrorInfo: Bool?
+    let finalMediaPreservesWeakBitRanges: Bool?
     let finalMediaSectorErrorCodeCount: Int?
     let finalMediaNonDefaultSectorErrorCodeCount: Int?
     let finalMediaWeakBitRangeCount: Int?
@@ -4422,6 +4487,10 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalWeakBitReadCount: UInt64? = nil,
         finalVariableSpeedZoneSampleCount: UInt64? = nil,
         finalVariableSpeedZoneMask: UInt8? = nil,
+        finalGCRWriteByteCount: UInt64? = nil,
+        finalGCRWriteModeActive: Bool? = nil,
+        finalGCRWriteSpliceCount: UInt64? = nil,
+        finalD64ExportBlockedByLowLevelWrites: Bool? = nil,
         finalLastIECCommandSummary: String? = nil,
         finalDriveNoProgressCycleCount: UInt64? = nil,
         finalFailureReason: String? = nil,
@@ -4436,6 +4505,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalMediaPreservesSpeedZones: Bool? = nil,
         finalMediaPreservesVariableSpeedZones: Bool? = nil,
         finalMediaPreservesSectorErrorInfo: Bool? = nil,
+        finalMediaPreservesWeakBitRanges: Bool? = nil,
         finalMediaSectorErrorCodeCount: Int? = nil,
         finalMediaNonDefaultSectorErrorCodeCount: Int? = nil,
         finalMediaWeakBitRangeCount: Int? = nil,
@@ -4515,6 +4585,10 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalWeakBitReadCount = finalWeakBitReadCount
         self.finalVariableSpeedZoneSampleCount = finalVariableSpeedZoneSampleCount
         self.finalVariableSpeedZoneMask = finalVariableSpeedZoneMask
+        self.finalGCRWriteByteCount = finalGCRWriteByteCount
+        self.finalGCRWriteModeActive = finalGCRWriteModeActive
+        self.finalGCRWriteSpliceCount = finalGCRWriteSpliceCount
+        self.finalD64ExportBlockedByLowLevelWrites = finalD64ExportBlockedByLowLevelWrites
         self.finalLastIECCommandSummary = finalLastIECCommandSummary
         self.finalDriveNoProgressCycleCount = finalDriveNoProgressCycleCount
         self.finalFailureReason = finalFailureReason
@@ -4529,6 +4603,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalMediaPreservesSpeedZones = finalMediaPreservesSpeedZones
         self.finalMediaPreservesVariableSpeedZones = finalMediaPreservesVariableSpeedZones
         self.finalMediaPreservesSectorErrorInfo = finalMediaPreservesSectorErrorInfo
+        self.finalMediaPreservesWeakBitRanges = finalMediaPreservesWeakBitRanges
         self.finalMediaSectorErrorCodeCount = finalMediaSectorErrorCodeCount
         self.finalMediaNonDefaultSectorErrorCodeCount = finalMediaNonDefaultSectorErrorCodeCount
         self.finalMediaWeakBitRangeCount = finalMediaWeakBitRangeCount

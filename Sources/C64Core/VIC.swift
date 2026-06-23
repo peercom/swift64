@@ -121,6 +121,8 @@ public final class VIC {
 
     /// Bad line condition
     var badLine: Bool = false
+    /// Raster cycle where the current bad-line sequence started.
+    var badLineStartCycle: Int?
     /// Whether DEN was observed on raster $30, arming bad lines for this frame.
     var badLineDENLatched: Bool = false
     /// Prevents repeated raster IRQs after multiple compare writes on the same rasterline.
@@ -196,7 +198,7 @@ public final class VIC {
                 return .spritePointer(sprite: sprite)
             }
             if let sprite = spriteMiddleByteSlotForCurrentCycle(),
-               spriteLineRow(for: sprite) != nil {
+               spriteMiddleByteOffset(for: sprite) != nil {
                 return .spriteMiddleByte(sprite: sprite)
             }
             return .idle
@@ -240,6 +242,8 @@ public final class VIC {
         aecLineLow
     }
 
+    /// 8-bit DRAM refresh counter used by the VIC low-phase refresh slots.
+    var refreshCounter: UInt8 = 0xFF
     /// Row counter (RC) — 0 to 7, tracks which line within a char row
     var rowCounter: Int = 0
     /// Video counter (VC) — pointer into screen memory
@@ -279,6 +283,12 @@ public final class VIC {
     var spriteYExpFF = [Bool](repeating: false, count: 8)
     /// Sprite data counters (MC, byte offset 0...63 within sprite data)
     var spriteMC = [Int](repeating: 0, count: 8)
+    /// Sprite data counter base used by vertical expansion/crunch effects.
+    var spriteMCBase = [Int](repeating: 0, count: 8)
+    /// MC value after the most recent sprite data fetch.
+    var spriteLastFetchedMC = [Int](repeating: 0, count: 8)
+    /// Starting MC byte offset used by the most recent sprite data fetch.
+    var spriteLastFetchedByteOffset = [Int](repeating: -1, count: 8)
     /// Rasterline for which the sprite expansion state has been initialized.
     var spriteExpansionLine = [Int?](repeating: nil, count: 8)
     /// Sprite display active
@@ -290,6 +300,10 @@ public final class VIC {
     /// Sprite DMA slot that began on the previous line's final cycle and
     /// continues onto cycle 0 of the current line.
     var spriteDMAWrapContinuationSlot: Int?
+    /// Rasterline for which sprite DMA enable/Y-match has been sampled.
+    var spriteDMACheckLine: Int?
+    /// Per-sprite DMA eligibility latched by the cycle 55/56 sprite check.
+    var spriteDMACheckMask: UInt8 = 0
 
     /// Per-visible-pixel raster state captured as the beam advances. This keeps
     /// simple raster color bars and mid-line border mode changes observable even
@@ -319,7 +333,7 @@ public final class VIC {
             return slot
         }
         guard let slot = spriteDMASlotForCurrentCycle(),
-              spriteLineRow(for: slot) != nil else {
+              spriteDMAEligible(slot, onRasterLine: Int(rasterLine)) else {
             return nil
         }
         return slot
@@ -328,7 +342,7 @@ public final class VIC {
     /// Active sprite whose DMA slot is within the BA warning window.
     public var activeSpriteBAWarningSlot: Int? {
         guard let slot = spriteBAWarningSlotForCurrentCycle(),
-              spriteLineRow(for: slot, onRasterLine: spriteBAWarningRasterLine(for: slot)) != nil else {
+              spriteDMAEligible(slot, onRasterLine: spriteBAWarningRasterLine(for: slot)) else {
             return nil
         }
         return slot
@@ -388,6 +402,7 @@ public final class VIC {
         rasterCycle = 0
         displayActive = false
         badLine = false
+        badLineStartCycle = nil
         badLineDENLatched = false
         rasterIRQTriggeredThisLine = false
         lightPenX = 0
@@ -395,6 +410,7 @@ public final class VIC {
         lightPenLatchedThisFrame = false
         verticalBorderActive = true
         horizontalBorderActive = true
+        refreshCounter = 0xFF
         rowCounter = 0
         videoCounter = 0
         videoCounterBase = 0
@@ -416,11 +432,16 @@ public final class VIC {
         graphicsBufferColorData = [UInt8](repeating: 0, count: 40)
         spriteYExpFF = [Bool](repeating: false, count: 8)
         spriteMC = [Int](repeating: 0, count: 8)
+        spriteMCBase = [Int](repeating: 0, count: 8)
+        spriteLastFetchedMC = [Int](repeating: 0, count: 8)
+        spriteLastFetchedByteOffset = [Int](repeating: -1, count: 8)
         spriteExpansionLine = [Int?](repeating: nil, count: 8)
         spriteDisplay = [Bool](repeating: false, count: 8)
         spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
         spritePointers = [UInt8](repeating: 0, count: 8)
         spriteDMAWrapContinuationSlot = nil
+        spriteDMACheckLine = nil
+        spriteDMACheckMask = 0
         lastHighPhaseMemoryReads = []
         lastHighPhaseColorRAMReads = []
         lastLowPhaseMemoryReads = []
@@ -460,6 +481,13 @@ public final class VIC {
         }
 
         let shouldStallCPU = isStealingCPU
+
+        if rasterCycle == 55 || rasterCycle == 56 {
+            latchSpriteDMAEligibilityForCurrentLine()
+        }
+        if rasterCycle == 58 {
+            latchSpriteDisplayForCurrentLine()
+        }
 
         captureRasterTraceForCurrentCycle()
         performLowPhaseAccess()
@@ -509,13 +537,16 @@ public final class VIC {
             if yMatch && badLineDENLatched && canStartBadLine {
                 badLine = true
                 if !wasBadLine {
+                    badLineStartCycle = rasterCycle
                     rowCounter = 0
                 }
             } else {
                 badLine = false
+                badLineStartCycle = nil
             }
         } else {
             badLine = false
+            badLineStartCycle = nil
         }
 
         if badLine && !wasBadLine {
@@ -537,6 +568,7 @@ public final class VIC {
 
         if rasterLine >= UInt16(rasterLinesPerFrame) {
             rasterLine = 0
+            refreshCounter = 0xFF
             videoCounterBase = 0
             badLineDENLatched = false
             lightPenLatchedThisFrame = false
@@ -545,6 +577,8 @@ public final class VIC {
         }
         clearRasterTrace()
         rasterIRQTriggeredThisLine = false
+        spriteDMACheckLine = nil
+        spriteDMACheckMask = 0
         checkRasterInterrupt()
 
         // Video counter management
@@ -654,11 +688,11 @@ public final class VIC {
     }
 
     func captureSpriteTrace(startPixel: Int, endPixel: Int) {
-        guard spriteEnabled != 0 else { return }
+        guard spriteDisplay.contains(true) else { return }
         guard spriteTraceLine == rasterLine else { return }
 
         for sprite in stride(from: 7, through: 0, by: -1) {
-            guard spriteEnabled & (1 << sprite) != 0 && spriteDisplay[sprite] else { continue }
+            guard spriteDisplay[sprite] else { continue }
 
             let spriteMask = UInt8(1 << sprite)
             let behindBG = spritePriority & spriteMask != 0
@@ -825,6 +859,10 @@ public final class VIC {
     func performLowPhaseAccess() {
         lastLowPhaseMemoryReads.removeAll(keepingCapacity: true)
         switch lowPhaseAccess {
+        case .idle:
+            performIdleAccess(traceReads: &lastLowPhaseMemoryReads)
+        case .refresh:
+            performRefreshAccess(traceReads: &lastLowPhaseMemoryReads)
         case let .displayData(column):
             fetchDisplayData(column: column, traceReads: &lastLowPhaseMemoryReads)
         case let .spritePointer(sprite):
@@ -837,9 +875,20 @@ public final class VIC {
             spritePointers[sprite] = readMem(address)
         case let .spriteMiddleByte(sprite):
             fetchSpriteMiddleByte(sprite: sprite, traceReads: &lastLowPhaseMemoryReads)
-        case .idle, .refresh:
-            return
         }
+    }
+
+    func performRefreshAccess(traceReads: inout [UInt16]) {
+        let address = UInt16(0x3F00) | UInt16(refreshCounter)
+        traceReads.append(address)
+        _ = readMemory?(address)
+        refreshCounter &-= 1
+    }
+
+    func performIdleAccess(traceReads: inout [UInt16]) {
+        let address: UInt16 = extendedBGMode ? 0x39FF : 0x3FFF
+        traceReads.append(address)
+        _ = readMemory?(address)
     }
 
     func raiseInterrupt(_ flag: UInt8) {
@@ -892,6 +941,14 @@ public final class VIC {
         lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
         lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
 
+        if badLineFetchUsesUnstableStartupData(column: column) {
+            lineBuffer[column] = 0xFF
+            colorBuffer[column] = 0x0F
+            badLineFetchMask |= UInt64(1) << UInt64(column)
+            displayLineBufferValid = badLineFetchMask == (UInt64(1) << 40) - 1
+            return
+        }
+
         let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
         let vc = UInt16(videoCounterBase + column)
         if column == 0 {
@@ -906,6 +963,12 @@ public final class VIC {
 
         badLineFetchMask |= UInt64(1) << UInt64(column)
         displayLineBufferValid = badLineFetchMask == (UInt64(1) << 40) - 1
+    }
+
+    func badLineFetchUsesUnstableStartupData(column: Int) -> Bool {
+        guard let startCycle = badLineStartCycle, startCycle >= 12 else { return false }
+        let firstFetchColumn = max(0, startCycle - 15)
+        return column >= firstFetchColumn && column < min(40, firstFetchColumn + 3)
     }
 
     func hasLatchedMatrixColumn(_ column: Int, rowBase: Int) -> Bool {
@@ -1424,7 +1487,7 @@ public final class VIC {
                 guard distance >= 1 && distance <= 3 else { return nil }
                 return (sprite, distance)
             }
-            .filter { spriteLineRow(for: $0.sprite, onRasterLine: spriteBAWarningRasterLine(for: $0.sprite)) != nil }
+            .filter { spriteDMAEligible($0.sprite, onRasterLine: spriteBAWarningRasterLine(for: $0.sprite)) }
             .min { lhs, rhs in
                 if lhs.distance == rhs.distance {
                     return lhs.sprite < rhs.sprite
@@ -1470,6 +1533,17 @@ public final class VIC {
 
     func spriteLineByteOffset(for sprite: Int, onRasterLine line: Int) -> Int? {
         guard sprite >= 0 && sprite < 8 else { return nil }
+        if line == Int(rasterLine),
+           spriteExpansionLine[sprite] == line,
+           spriteDMAEligibilityKnown(onRasterLine: line),
+           spriteDMAEligible(sprite, onRasterLine: line) {
+            return spriteMC[sprite]
+        }
+
+        return spriteLineByteOffsetFromRegisters(for: sprite, onRasterLine: line)
+    }
+
+    func spriteLineByteOffsetFromRegisters(for sprite: Int, onRasterLine line: Int) -> Int? {
         guard spriteEnabled & (1 << sprite) != 0 else { return nil }
 
         let expandedY = spriteExpandY & (1 << sprite) != 0
@@ -1485,6 +1559,65 @@ public final class VIC {
             return (offset / 2) * 3
         }
         return offset * 3
+    }
+
+    func spriteDMAEligibilityKnown(onRasterLine line: Int) -> Bool {
+        spriteDMACheckLine == line
+    }
+
+    func spriteDMAEligible(_ sprite: Int, onRasterLine line: Int) -> Bool {
+        guard sprite >= 0 && sprite < 8 else { return false }
+        if spriteDMAEligibilityKnown(onRasterLine: line) {
+            return spriteDMACheckMask & (1 << sprite) != 0
+        }
+        return spriteLineByteOffsetFromRegisters(for: sprite, onRasterLine: line) != nil
+    }
+
+    func latchSpriteDMAEligibilityForCurrentLine() {
+        let line = Int(rasterLine)
+        if spriteDMACheckLine != line {
+            spriteDMACheckLine = line
+            spriteDMACheckMask = 0
+        }
+
+        let lowRaster = UInt8(truncatingIfNeeded: line)
+        for sprite in 0..<8 {
+            let mask = UInt8(1 << sprite)
+            guard spriteDMACheckMask & mask == 0 else { continue }
+            guard spriteEnabled & mask != 0 else { continue }
+
+            if spriteY[sprite] == lowRaster {
+                initializeSpriteDMAState(sprite: sprite, onRasterLine: line)
+                spriteDMACheckMask |= mask
+                continue
+            }
+
+            guard spriteDisplay[sprite] else { continue }
+            guard spriteLineByteOffsetFromRegisters(for: sprite, onRasterLine: line) != nil else { continue }
+            spriteDMACheckMask |= mask
+        }
+    }
+
+    func latchSpriteDisplayForCurrentLine() {
+        let line = Int(rasterLine)
+        let lowRaster = UInt8(truncatingIfNeeded: line)
+
+        for sprite in 0..<8 where spriteDMAEligible(sprite, onRasterLine: line) {
+            spriteMC[sprite] = spriteMCBase[sprite]
+            if spriteY[sprite] == lowRaster {
+                spriteDisplay[sprite] = true
+            }
+        }
+    }
+
+    func initializeSpriteDMAState(sprite: Int, onRasterLine line: Int) {
+        spriteExpansionLine[sprite] = line
+        spriteDisplay[sprite] = false
+        spriteMCBase[sprite] = 0
+        spriteMC[sprite] = 0
+        spriteLastFetchedMC[sprite] = 0
+        spriteLastFetchedByteOffset[sprite] = -1
+        spriteYExpFF[sprite] = spriteExpandY & (1 << sprite) == 0
     }
 
     func spriteLineOffset(for sprite: Int, onRasterLine line: Int, expandedY: Bool? = nil) -> Int? {
@@ -1512,6 +1645,9 @@ public final class VIC {
                 spriteExpansionLine[sprite] = nil
                 spriteYExpFF[sprite] = false
                 spriteDisplay[sprite] = false
+                spriteMCBase[sprite] = 0
+                spriteLastFetchedMC[sprite] = 0
+                spriteLastFetchedByteOffset[sprite] = -1
                 continue
             }
 
@@ -1520,17 +1656,20 @@ public final class VIC {
                 spriteExpansionLine[sprite] = nil
                 spriteYExpFF[sprite] = false
                 spriteDisplay[sprite] = false
+                spriteMCBase[sprite] = 0
+                spriteLastFetchedByteOffset[sprite] = -1
                 continue
             }
 
             spriteExpansionLine[sprite] = line
             if expandedY {
                 spriteYExpFF[sprite] = offset % 2 == 1
-                spriteMC[sprite] = (offset / 2) * 3
+                spriteMCBase[sprite] = (offset / 2) * 3
             } else {
                 spriteYExpFF[sprite] = true
-                spriteMC[sprite] = offset * 3
+                spriteMCBase[sprite] = offset * 3
             }
+            spriteMC[sprite] = spriteMCBase[sprite]
         }
     }
 
@@ -1545,8 +1684,19 @@ public final class VIC {
             guard !spriteYExpFF[sprite] else { continue }
 
             spriteYExpFF[sprite] = true
-            spriteMC[sprite] = min(63, spriteMC[sprite] + 3)
+            if rasterCycle == 15 {
+                let crunchedBase = spriteCrunchMCBase(base: spriteMCBase[sprite], mc: spriteLastFetchedMC[sprite])
+                spriteMCBase[sprite] = crunchedBase
+                spriteMC[sprite] = crunchedBase
+            } else {
+                spriteMC[sprite] = min(63, spriteMC[sprite] + 3)
+                spriteMCBase[sprite] = spriteMC[sprite]
+            }
         }
+    }
+
+    func spriteCrunchMCBase(base: Int, mc: Int) -> Int {
+        ((0x2A & (base & mc)) | (0x15 & (base | mc))) & 0x3F
     }
 
     func fetchSpriteData(sprite: Int) {
@@ -1557,7 +1707,6 @@ public final class VIC {
         let readMem = readMemory ?? { _ in return 0 }
 
         guard let byteOffset = spriteLineByteOffset(for: sprite) else {
-            spriteDisplay[sprite] = false
             return
         }
 
@@ -1567,15 +1716,26 @@ public final class VIC {
         spriteLineData[sprite][0] = readMem(dataAddr)
         spriteLineData[sprite][1] = readMem(dataAddr + 1)
         spriteLineData[sprite][2] = readMem(dataAddr + 2)
+        spriteLastFetchedByteOffset[sprite] = byteOffset
         if spriteExpansionLine[sprite] == Int(rasterLine) {
             spriteMC[sprite] = min(63, byteOffset + 3)
+            spriteLastFetchedMC[sprite] = spriteMC[sprite]
         }
-        spriteDisplay[sprite] = true
+    }
+
+    func spriteMiddleByteOffset(for sprite: Int) -> Int? {
+        guard sprite >= 0 && sprite < 8 else { return nil }
+        guard spriteMiddleByteSlotForCurrentCycle() == sprite else { return nil }
+
+        if activeSpriteDMASlot == sprite, spriteLastFetchedByteOffset[sprite] >= 0 {
+            return spriteLastFetchedByteOffset[sprite]
+        }
+        return spriteLineByteOffset(for: sprite)
     }
 
     func fetchSpriteMiddleByte(sprite: Int, traceReads: inout [UInt16]) {
         guard sprite >= 0 && sprite < 8 else { return }
-        guard let byteOffset = spriteLineByteOffset(for: sprite) else { return }
+        guard let byteOffset = spriteMiddleByteOffset(for: sprite) else { return }
 
         let readMem = readMemory ?? { _ in return 0 }
         let spritePtr = UInt16(spritePointers[sprite]) * 64
@@ -1585,7 +1745,7 @@ public final class VIC {
     }
 
     func renderSprites(_ line: inout [UInt32], fbY: Int, foregroundMask: [Bool]? = nil) {
-        guard spriteEnabled != 0 else { return }
+        guard spriteDisplay.contains(true) else { return }
 
         let graphicsLine = line
         let background = ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)]
@@ -1614,7 +1774,7 @@ public final class VIC {
 
         // Render sprites from back to front (sprite 7 first, 0 last = highest priority)
         for i in stride(from: 7, through: 0, by: -1) {
-            guard spriteEnabled & (1 << i) != 0 && spriteDisplay[i] else { continue }
+            guard spriteDisplay[i] else { continue }
 
             let sx = Int(spriteX[i])
             let expandX = spriteExpandX & (1 << i) != 0

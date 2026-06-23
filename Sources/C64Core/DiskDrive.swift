@@ -190,6 +190,21 @@ public final class DiskDrive {
         return Data(imageData)
     }
 
+    @discardableResult
+    public func replaceMountedD64ImageAfterLowLevelWrite(_ data: Data) -> Bool {
+        guard mountedFormat == .d64,
+              let geometry = Self.d64Geometry(forByteCount: data.count),
+              geometry.dataSize == mountedGeometry?.dataSize else {
+            return false
+        }
+
+        imageData = [UInt8](data)
+        mountedGeometry = geometry
+        parseDirectory()
+        markD64Modified()
+        return true
+    }
+
     public func markChangesSaved() {
         guard mountedFormat == .d64 else { return }
         hasUnsavedChanges = false
@@ -523,14 +538,10 @@ public final class DiskDrive {
         let existing = findDirectorySlot(named: request.name)
         guard request.replaceExisting || existing == nil else { return false }
 
-        let directorySlot: DirectorySlot
         let releasedSectors: Set<Int>
         if let existing {
-            directorySlot = existing.slot
             releasedSectors = fileChainKeys(firstTrack: Int(existing.entry.firstTrack), firstSector: Int(existing.entry.firstSector))
         } else {
-            guard let freeSlot = findFreeDirectorySlot() else { return false }
-            directorySlot = freeSlot
             releasedSectors = []
         }
 
@@ -539,6 +550,14 @@ public final class DiskDrive {
 
         guard let allocated = selectFreeSectors(count: sectorCount, releasing: releasedSectors) else { return false }
         let allocatedKeys = Set(allocated.map { sectorChainKey(track: $0.track, sector: $0.sector) })
+
+        let directorySlot: DirectorySlot
+        if let existing {
+            directorySlot = existing.slot
+        } else {
+            guard let freeSlot = findFreeDirectorySlot() else { return false }
+            directorySlot = freeSlot
+        }
 
         if existing != nil {
             clearDirectoryEntry(slot: directorySlot)
@@ -564,6 +583,10 @@ public final class DiskDrive {
         let commandBytes = Array(command.utf8)
         if let result = executeMemoryCommand(commandBytes) {
             return result
+        }
+        if let changedAddress = parseDeviceAddressChangeCommand(command) {
+            commandStatus = changedAddress ? "00, OK,00,00\r" : "30, SYNTAX ERROR,00,00\r"
+            return changedAddress
         }
 
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -783,10 +806,14 @@ public final class DiskDrive {
             return true
         }
 
-        if upper == "UJ" || upper == "UJ:" || upper == "UI" || upper == "UI:" || upper == "UI+" || upper == "UI-" {
+        if isDriveResetCommand(upper) {
             guard resetDriveCommand() else { return false }
             commandStatus = "00, OK,00,00\r"
             return true
+        }
+        if let changedAddress = parseDeviceAddressChangeCommand(trimmed) {
+            commandStatus = changedAddress ? "00, OK,00,00\r" : "30, SYNTAX ERROR,00,00\r"
+            return changedAddress
         }
 
         if upper == "V" || upper == "V:" || upper == "V0" || upper == "V0:" || upper == "VALIDATE" || upper == "VALIDATE:" {
@@ -870,6 +897,19 @@ public final class DiskDrive {
         case syntaxError
     }
 
+    private struct BlockCommandRequest {
+        let channel: Int
+        let driveNumber: Int
+        let track: Int
+        let sector: Int
+    }
+
+    private enum BinaryBlockCommandParseResult {
+        case request(BlockCommandRequest)
+        case notBinary
+        case syntaxError
+    }
+
     private func parseNewDiskCommand(_ expression: String) -> NewDiskCommand? {
         let parts = expression.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
         let name = String(parts.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -896,34 +936,41 @@ public final class DiskDrive {
             return nil
         }
 
+        switch parseBinaryUserBlockCommand(command, userPrefixes: ["U1", "UA"]) {
+        case .request(let request):
+            return blockRead(request: request)
+        case .syntaxError:
+            return .syntaxError
+        case .notBinary:
+            break
+        }
+
         var expression = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         if expression.hasPrefix(":") || expression.hasPrefix(",") {
             expression.removeFirst()
         }
 
-        let parts = expression
-            .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
-            .map(String.init)
-        guard parts.count == 4,
-              let channel = Int(parts[0]),
-              let driveNumber = Int(parts[1]),
-              let track = Int(parts[2]),
-              let sector = Int(parts[3]),
-              (0...14).contains(channel),
-              driveNumber == 0 else {
+        guard let request = parseTextBlockCommandRequest(expression) else {
+            return .syntaxError
+        }
+        return blockRead(request: request)
+    }
+
+    private func blockRead(request: BlockCommandRequest) -> BlockReadResult {
+        guard (0...14).contains(request.channel), request.driveNumber == 0 else {
             return .syntaxError
         }
 
-        if let code = readSectorErrorCode(track: track, sector: sector),
+        if let code = readSectorErrorCode(track: request.track, sector: request.sector),
            isReadSideSectorError(code) {
-            commandStatus = String(format: "%02d, READ ERROR,%02d,%02d\r", Int(code), track, sector)
+            commandStatus = String(format: "%02d, READ ERROR,%02d,%02d\r", Int(code), request.track, request.sector)
             return .readError
         }
 
-        guard let sectorData = readSector(track: track, sector: sector) else {
+        guard let sectorData = readSector(track: request.track, sector: request.sector) else {
             return .invalidBlock
         }
-        channels[channel] = Channel(data: sectorData, position: 0, isOpen: true)
+        channels[request.channel] = Channel(data: sectorData, position: 0, isOpen: true)
         return .read
     }
 
@@ -944,11 +991,54 @@ public final class DiskDrive {
             return nil
         }
 
+        switch parseBinaryUserBlockCommand(command, userPrefixes: ["U2", "UB"]) {
+        case .request(let request):
+            return blockWrite(request: request)
+        case .syntaxError:
+            return .syntaxError
+        case .notBinary:
+            break
+        }
+
         var expression = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         if expression.hasPrefix(":") || expression.hasPrefix(",") {
             expression.removeFirst()
         }
 
+        guard let request = parseTextBlockCommandRequest(expression) else {
+            return .syntaxError
+        }
+        return blockWrite(request: request)
+    }
+
+    private func blockWrite(request: BlockCommandRequest) -> BlockWriteResult {
+        guard (0...14).contains(request.channel), request.driveNumber == 0 else {
+            return .syntaxError
+        }
+
+        guard let geometry = mountedGeometry,
+              request.track >= 1 && request.track <= geometry.trackCount,
+              request.sector >= 0 && request.sector < geometry.sectorsPerTrack[request.track] else {
+            return .invalidBlock
+        }
+
+        var sectorData = [UInt8](repeating: 0, count: 256)
+        let buffered = channels[request.channel].writeData
+        if !buffered.isEmpty {
+            sectorData.replaceSubrange(0..<min(buffered.count, 256), with: buffered.prefix(256))
+        }
+        writeSector(track: request.track, sector: request.sector, data: sectorData)
+        refreshDirectoryMetadataAfterSectorWrite(track: request.track)
+        markD64Modified()
+        return .written
+    }
+
+    private func refreshDirectoryMetadataAfterSectorWrite(track: Int) {
+        guard track == 18 else { return }
+        parseDirectory()
+    }
+
+    private func parseTextBlockCommandRequest(_ expression: String) -> BlockCommandRequest? {
         let parts = expression
             .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
             .map(String.init)
@@ -956,26 +1046,52 @@ public final class DiskDrive {
               let channel = Int(parts[0]),
               let driveNumber = Int(parts[1]),
               let track = Int(parts[2]),
-              let sector = Int(parts[3]),
-              (0...14).contains(channel),
-              driveNumber == 0 else {
+              let sector = Int(parts[3]) else {
+            return nil
+        }
+        return BlockCommandRequest(channel: channel, driveNumber: driveNumber, track: track, sector: sector)
+    }
+
+    private func parseBinaryUserBlockCommand(_ command: String, userPrefixes: [String]) -> BinaryBlockCommandParseResult {
+        let commandBytes = Array(command.utf8)
+        guard let prefix = userPrefixes.first(where: { asciiHasPrefix(commandBytes, $0) }) else {
+            return .notBinary
+        }
+
+        var payload = Array(commandBytes.dropFirst(prefix.utf8.count))
+        while payload.first == UInt8(ascii: ":") ||
+              payload.first == UInt8(ascii: ",") ||
+              payload.first == UInt8(ascii: " ") ||
+              payload.first == 0x09 {
+            payload.removeFirst()
+        }
+        while payload.last == 0x0D || payload.last == 0x0A {
+            payload.removeLast()
+        }
+
+        guard payload.contains(where: { $0 < 0x20 }) else {
+            return .notBinary
+        }
+        guard payload.count == 4 else {
             return .syntaxError
         }
+        return .request(BlockCommandRequest(
+            channel: Int(payload[0]),
+            driveNumber: Int(payload[1]),
+            track: Int(payload[2]),
+            sector: Int(payload[3])
+        ))
+    }
 
-        guard let geometry = mountedGeometry,
-              track >= 1 && track <= geometry.trackCount,
-              sector >= 0 && sector < geometry.sectorsPerTrack[track] else {
-            return .invalidBlock
+    private func asciiHasPrefix(_ bytes: [UInt8], _ prefix: String) -> Bool {
+        let prefixBytes = Array(prefix.utf8)
+        guard bytes.count >= prefixBytes.count else { return false }
+        for index in 0..<prefixBytes.count {
+            let byte = bytes[index]
+            let normalized = byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z") ? byte - 0x20 : byte
+            guard normalized == prefixBytes[index] else { return false }
         }
-
-        var sectorData = [UInt8](repeating: 0, count: 256)
-        let buffered = channels[channel].writeData
-        if !buffered.isEmpty {
-            sectorData.replaceSubrange(0..<min(buffered.count, 256), with: buffered.prefix(256))
-        }
-        writeSector(track: track, sector: sector, data: sectorData)
-        markD64Modified()
-        return .written
+        return true
     }
 
     private func blockPointer(command: String) -> BlockPointerResult? {
@@ -1089,6 +1205,47 @@ public final class DiskDrive {
         dosMemory = [UInt8](repeating: 0, count: 0x10000)
         parseDirectory()
         return true
+    }
+
+    private func isDriveResetCommand(_ uppercasedCommand: String) -> Bool {
+        uppercasedCommand == "U0" ||
+        uppercasedCommand == "U0:" ||
+        uppercasedCommand == "UJ" ||
+        uppercasedCommand == "UJ:" ||
+        uppercasedCommand == "UI" ||
+        uppercasedCommand == "UI:" ||
+        uppercasedCommand == "UI+" ||
+        uppercasedCommand == "UI-"
+    }
+
+    private func parseDeviceAddressChangeCommand(_ command: String) -> Bool? {
+        let upper = command.uppercased()
+        let prefix: String
+        if upper.hasPrefix("U0>") {
+            prefix = "U0>"
+        } else if upper.hasPrefix("U0:>") {
+            prefix = "U0:>"
+        } else {
+            return nil
+        }
+
+        let rawSuffix = String(command.dropFirst(prefix.count))
+        if rawSuffix.unicodeScalars.count == 1,
+           let scalar = rawSuffix.unicodeScalars.first,
+           scalar.value < 0x20 {
+            return (8...11).contains(Int(scalar.value))
+        }
+
+        let suffix = rawSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !suffix.isEmpty else { return false }
+        if let number = parseCommandNumber(suffix) {
+            return (8...11).contains(number)
+        }
+        if suffix.unicodeScalars.count == 1,
+           let scalar = suffix.unicodeScalars.first {
+            return (8...11).contains(Int(scalar.value))
+        }
+        return false
     }
 
     private func executeMemoryCommand(_ commandBytes: [UInt8]) -> Bool? {
@@ -1398,14 +1555,17 @@ public final class DiskDrive {
     }
 
     private func findFreeDirectorySlot() -> DirectorySlot? {
+        guard let geometry = mountedGeometry, geometry.trackCount >= 18 else { return nil }
         var track = 18
         var sector = 1
         var visitedSectors = Set<Int>()
+        var lastDirectorySector: (track: Int, sector: Int)?
 
         while track != 0 {
             let key = sectorChainKey(track: track, sector: sector)
             guard !visitedSectors.contains(key) else { return nil }
             visitedSectors.insert(key)
+            lastDirectorySector = (track, sector)
 
             guard let data = readSector(track: track, sector: sector) else { return nil }
             for index in 0..<8 where data[index * 32 + 2] == 0 {
@@ -1416,6 +1576,33 @@ public final class DiskDrive {
             sector = Int(data[1])
         }
 
+        guard let lastDirectorySector,
+              let newSector = allocateDirectoryExtensionSector(occupied: visitedSectors) else {
+            return nil
+        }
+
+        guard var previousSector = readSector(track: lastDirectorySector.track, sector: lastDirectorySector.sector) else {
+            return nil
+        }
+        previousSector[0] = 18
+        previousSector[1] = UInt8(newSector)
+        var directorySector = [UInt8](repeating: 0, count: 256)
+        directorySector[0] = 0
+        directorySector[1] = 0xFF
+
+        setBAMSector(track: 18, sector: newSector, free: false)
+        writeSector(track: lastDirectorySector.track, sector: lastDirectorySector.sector, data: previousSector)
+        writeSector(track: 18, sector: newSector, data: directorySector)
+        return DirectorySlot(track: 18, sector: newSector, entryIndex: 0)
+    }
+
+    private func allocateDirectoryExtensionSector(occupied: Set<Int>) -> Int? {
+        guard let geometry = mountedGeometry, geometry.trackCount >= 18 else { return nil }
+        for sector in 0..<geometry.sectorsPerTrack[18] {
+            let key = sectorChainKey(track: 18, sector: sector)
+            guard !occupied.contains(key), isBAMSectorFree(track: 18, sector: sector) else { continue }
+            return sector
+        }
         return nil
     }
 

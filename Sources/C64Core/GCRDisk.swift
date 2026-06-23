@@ -3,6 +3,12 @@ import Foundation
 /// Manages GCR-encoded track data for the 1541 disk drive emulation.
 /// Stores raw GCR byte streams per track, as read by the drive head.
 public final class GCRDisk {
+    public struct D64DecodeResult: Equatable {
+        public let image: Data
+        public let decodedSectorCount: Int
+        public let changedSectorCount: Int
+        public let incompleteTracks: [Int]
+    }
 
     // MARK: - Constants
 
@@ -71,6 +77,10 @@ public final class GCRDisk {
 
     /// The currently mounted low-level image, if any.
     public internal(set) var image: DiskImage?
+
+    /// True after the in-memory low-level track stream has been changed by the
+    /// emulated write head. Export/write-back is tracked separately.
+    public internal(set) var hasUnsavedLowLevelWrites: Bool = false
 
     /// Whether a disk is inserted.
     public var hasDisk: Bool { tracks.contains { $0 != nil } }
@@ -148,6 +158,7 @@ public final class GCRDisk {
         tracks = newTracks
         trackInfos = newTrackInfos
         image = DiskImage(format: .g64, tracks: newTrackInfos, maxTrackSize: maxTrackSize)
+        hasUnsavedLowLevelWrites = false
         return true
     }
 
@@ -202,6 +213,7 @@ public final class GCRDisk {
             tracks: trackInfos,
             sectorErrorCodes: sectorErrorCodes
         )
+        hasUnsavedLowLevelWrites = false
         return true
     }
 
@@ -246,6 +258,50 @@ public final class GCRDisk {
                 sectorErrorCodes: image.sectorErrorCodes
             )
         }
+        return true
+    }
+
+    /// Add weak/random bit annotations to an existing track, splitting around
+    /// track wrap and merging with any existing weak ranges.
+    @discardableResult
+    public func addWeakBitRange(startBit: Int, bitCount: Int, forHalfTrack halfTrack: Int) -> Bool {
+        guard halfTrack >= 0 && halfTrack < trackInfos.count,
+              let existing = trackInfos[halfTrack],
+              existing.bitLength > 0,
+              bitCount > 0 else {
+            return false
+        }
+
+        let wrappedStart = ((startBit % existing.bitLength) + existing.bitLength) % existing.bitLength
+        let addedRanges = Self.bitRanges(
+            start: wrappedStart,
+            count: bitCount,
+            totalBits: existing.bitLength
+        ).map {
+            DiskImage.Track.WeakBitRange(startBit: $0.lowerBound, endBit: $0.upperBound)
+        }
+        let weakBitRanges = Self.mergedWeakBitRanges(existing.weakBitRanges + addedRanges)
+        let updated = DiskImage.Track(
+            halfTrack: existing.halfTrack,
+            bytes: existing.bytes,
+            bitLength: existing.bitLength,
+            speedZone: existing.speedZone,
+            speedZoneMap: existing.speedZoneMap,
+            weakBitRanges: weakBitRanges,
+            isNativeLowLevel: existing.isNativeLowLevel,
+            duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
+        )
+        trackInfos[halfTrack] = updated
+        tracks[halfTrack] = updated.bytes
+        if let image {
+            self.image = DiskImage(
+                format: image.format,
+                tracks: trackInfos,
+                maxTrackSize: image.maxTrackSize,
+                sectorErrorCodes: image.sectorErrorCodes
+            )
+        }
+        hasUnsavedLowLevelWrites = true
         return true
     }
 
@@ -305,6 +361,423 @@ public final class GCRDisk {
             )
         }
         return true
+    }
+
+    @discardableResult
+    public func writeByte(_ value: UInt8, halfTrack: Int, byteIndex: Int) -> Bool {
+        guard !writeProtected,
+              halfTrack >= 0 && halfTrack < tracks.count,
+              var bytes = tracks[halfTrack],
+              byteIndex >= 0 && byteIndex < bytes.count else {
+            return false
+        }
+
+        bytes[byteIndex] = value
+        tracks[halfTrack] = bytes
+        updateTrackAfterWrite(
+            halfTrack: halfTrack,
+            bytes: bytes,
+            writtenBitRanges: [byteIndex * 8...(byteIndex * 8 + 7)],
+            rebuildImage: true
+        )
+        hasUnsavedLowLevelWrites = true
+        return true
+    }
+
+    @discardableResult
+    public func writeByteAtBitPosition(_ value: UInt8, halfTrack: Int, bitPosition: Int) -> Bool {
+        guard !writeProtected,
+              halfTrack >= 0 && halfTrack < tracks.count,
+              var bytes = tracks[halfTrack],
+              !bytes.isEmpty else {
+            return false
+        }
+
+        let totalBits = (trackInfos[halfTrack]?.bitLength ?? bytes.count * 8)
+        guard totalBits > 0 else { return false }
+        let wrappedBitPosition = ((bitPosition % totalBits) + totalBits) % totalBits
+        let writtenBitRanges = Self.bitRanges(start: wrappedBitPosition, count: 8, totalBits: totalBits)
+
+        for sourceBitOffset in 0..<8 {
+            let targetBit = (wrappedBitPosition + sourceBitOffset) % totalBits
+            let byteIndex = targetBit / 8
+            let bitIndex = 7 - (targetBit % 8)
+            guard byteIndex >= 0 && byteIndex < bytes.count else { return false }
+
+            let mask = UInt8(1 << bitIndex)
+            let sourceBit = (value >> UInt8(7 - sourceBitOffset)) & 0x01
+            if sourceBit == 0 {
+                bytes[byteIndex] &= ~mask
+            } else {
+                bytes[byteIndex] |= mask
+            }
+        }
+
+        tracks[halfTrack] = bytes
+        updateTrackAfterWrite(
+            halfTrack: halfTrack,
+            bytes: bytes,
+            writtenBitRanges: writtenBitRanges,
+            rebuildImage: true
+        )
+        hasUnsavedLowLevelWrites = true
+        return true
+    }
+
+    @discardableResult
+    public func writeBitAtBitPosition(_ bit: Bool, halfTrack: Int, bitPosition: Int) -> Bool {
+        guard !writeProtected,
+              halfTrack >= 0 && halfTrack < tracks.count,
+              var bytes = tracks[halfTrack],
+              !bytes.isEmpty else {
+            return false
+        }
+
+        let totalBits = (trackInfos[halfTrack]?.bitLength ?? bytes.count * 8)
+        guard totalBits > 0 else { return false }
+        let wrappedBitPosition = ((bitPosition % totalBits) + totalBits) % totalBits
+        let byteIndex = wrappedBitPosition / 8
+        let bitIndex = 7 - (wrappedBitPosition % 8)
+        guard byteIndex >= 0 && byteIndex < bytes.count else { return false }
+
+        let mask = UInt8(1 << bitIndex)
+        if bit {
+            bytes[byteIndex] |= mask
+        } else {
+            bytes[byteIndex] &= ~mask
+        }
+
+        tracks[halfTrack] = bytes
+        updateTrackAfterWrite(
+            halfTrack: halfTrack,
+            bytes: bytes,
+            writtenBitRanges: [wrappedBitPosition...wrappedBitPosition],
+            rebuildImage: false
+        )
+        hasUnsavedLowLevelWrites = true
+        return true
+    }
+
+    /// Ensure a native low-level track stream exists for write-head activity.
+    ///
+    /// D64-backed synthetic tracks are pre-populated for full tracks. Creating
+    /// new low-level tracks is reserved for native G64 media because D64 cannot
+    /// represent arbitrary halftracks or raw bitstreams.
+    @discardableResult
+    public func ensureWritableTrack(
+        halfTrack: Int,
+        speedZone: Int,
+        fillByte: UInt8 = 0x55
+    ) -> Bool {
+        guard image?.format == .g64,
+              halfTrack >= 0 && halfTrack < tracks.count else {
+            return false
+        }
+        if let existing = tracks[halfTrack], !existing.isEmpty {
+            return true
+        }
+
+        let zone = max(0, min(3, speedZone))
+        let byteCount = Self.trackLengths[zone]
+        let bytes = [UInt8](repeating: fillByte, count: byteCount)
+        let track = DiskImage.Track(
+            halfTrack: halfTrack,
+            bytes: bytes,
+            speedZone: zone,
+            isNativeLowLevel: true
+        )
+
+        tracks[halfTrack] = bytes
+        trackInfos[halfTrack] = track
+        if let image {
+            let maxTrackSize = image.maxTrackSize.map { max($0, byteCount) } ?? byteCount
+            self.image = DiskImage(
+                format: image.format,
+                tracks: trackInfos,
+                maxTrackSize: maxTrackSize,
+                sectorErrorCodes: image.sectorErrorCodes
+            )
+        }
+        hasUnsavedLowLevelWrites = true
+        return true
+    }
+
+    /// Decode the current whole-track GCR streams back into a D64-shaped image.
+    ///
+    /// This is intentionally conservative: it only patches sectors that decode
+    /// with valid headers, data markers, and checksums. Native protected G64
+    /// features remain in the low-level image; this bridge is for D64-backed
+    /// synthetic tracks whose modified bytes can be represented as sectors.
+    public func decodedD64Image(patching baseImage: Data) -> D64DecodeResult? {
+        guard image?.format == .d64,
+              let geometry = DiskDrive.d64Geometry(forByteCount: baseImage.count) else {
+            return nil
+        }
+
+        var output = [UInt8](baseImage)
+        var decodedSectorCount = 0
+        var changedSectorCount = 0
+        var incompleteTracks: [Int] = []
+
+        for trackNum in 1...geometry.trackCount {
+            let halfTrack = (trackNum - 1) * 2
+            guard halfTrack >= 0 && halfTrack < tracks.count,
+                  let trackBytes = tracks[halfTrack],
+                  !trackBytes.isEmpty else {
+                incompleteTracks.append(trackNum)
+                continue
+            }
+
+            let expectedSectors = geometry.sectorsPerTrack[trackNum]
+            let decodedSectors = G64Parser.decodeSectors(
+                from: trackBytes,
+                track: trackNum,
+                expectedSectors: expectedSectors
+            )
+            if decodedSectors.count < expectedSectors {
+                incompleteTracks.append(trackNum)
+            }
+            decodedSectorCount += decodedSectors.count
+
+            for (sectorNum, sectorData) in decodedSectors {
+                guard sectorNum >= 0,
+                      sectorNum < expectedSectors,
+                      sectorData.count == 256 else {
+                    continue
+                }
+                let offset = geometry.trackOffsets[trackNum] + sectorNum * 256
+                guard offset + 256 <= geometry.dataSize,
+                      offset + 256 <= output.count else {
+                    continue
+                }
+                if !output[offset..<(offset + 256)].elementsEqual(sectorData) {
+                    output.replaceSubrange(offset..<(offset + 256), with: sectorData)
+                    clearSectorErrorCode(track: trackNum, sector: sectorNum, in: &output, geometry: geometry)
+                    changedSectorCount += 1
+                }
+            }
+        }
+
+        guard decodedSectorCount > 0 else { return nil }
+        return D64DecodeResult(
+            image: Data(output),
+            decodedSectorCount: decodedSectorCount,
+            changedSectorCount: changedSectorCount,
+            incompleteTracks: incompleteTracks
+        )
+    }
+
+    public var exportedG64Image: Data? {
+        guard image?.format == .g64 else { return nil }
+        let populatedHalfTrackIndexes = trackInfos.indices.filter { trackInfos[$0] != nil }
+        guard !populatedHalfTrackIndexes.isEmpty else { return nil }
+
+        let numTracks = min(Self.maxHalfTracks, max(Self.maxHalfTracks, (populatedHalfTrackIndexes.max() ?? 0) + 1))
+        var offsetTable = [UInt32](repeating: 0, count: numTracks)
+        var speedEntries = [UInt32](repeating: 0, count: numTracks)
+        var speedBlocks: [(trackIndex: Int, bytes: [UInt8])] = []
+        let maxTrackSize = max(
+            image?.maxTrackSize ?? 0,
+            populatedHalfTrackIndexes.map { trackInfos[$0]?.bytes.count ?? 0 }.max() ?? 0
+        )
+        guard maxTrackSize <= Int(UInt16.max) else { return nil }
+
+        var data: [UInt8] = []
+        data.append(contentsOf: Array("GCR-1541".utf8))
+        data.append(0x00)
+        data.append(UInt8(numTracks))
+        data.append(UInt8(maxTrackSize & 0xFF))
+        data.append(UInt8((maxTrackSize >> 8) & 0xFF))
+
+        let offsetTableStart = data.count
+        data.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+        let speedTableStart = data.count
+        data.append(contentsOf: [UInt8](repeating: 0, count: numTracks * 4))
+
+        for trackIndex in 0..<numTracks {
+            guard let track = trackInfos[trackIndex] else { continue }
+            guard track.bytes.count <= Int(UInt16.max) else { return nil }
+            offsetTable[trackIndex] = UInt32(data.count)
+            data.append(UInt8(track.bytes.count & 0xFF))
+            data.append(UInt8((track.bytes.count >> 8) & 0xFF))
+            data.append(contentsOf: track.bytes)
+
+            if let speedZoneMap = track.speedZoneMap, !speedZoneMap.isEmpty {
+                speedBlocks.append((trackIndex: trackIndex, bytes: Self.packedG64SpeedBlock(speedZoneMap, byteCount: track.bytes.count)))
+            } else {
+                speedEntries[trackIndex] = UInt32(max(0, min(3, track.speedZone)))
+            }
+        }
+
+        for speedBlock in speedBlocks {
+            speedEntries[speedBlock.trackIndex] = UInt32(data.count)
+            data.append(contentsOf: speedBlock.bytes)
+        }
+
+        for trackIndex in 0..<numTracks {
+            Self.writeLittleEndian32(offsetTable[trackIndex], into: &data, at: offsetTableStart + trackIndex * 4)
+            Self.writeLittleEndian32(speedEntries[trackIndex], into: &data, at: speedTableStart + trackIndex * 4)
+        }
+
+        return Data(data)
+    }
+
+    public func markLowLevelWritesSaved() {
+        hasUnsavedLowLevelWrites = false
+    }
+
+    private func updateTrackAfterWrite(
+        halfTrack: Int,
+        bytes: [UInt8],
+        writtenBitRanges: [ClosedRange<Int>],
+        rebuildImage: Bool
+    ) {
+        let existing = trackInfos[halfTrack]
+        let weakBitRanges = writtenBitRanges.reduce(existing?.weakBitRanges ?? []) { ranges, writtenRange in
+            ranges.flatMap { Self.removingBits(writtenRange, from: $0) }
+        }
+        let updated = DiskImage.Track(
+            halfTrack: existing?.halfTrack ?? halfTrack,
+            bytes: bytes,
+            bitLength: existing?.bitLength ?? bytes.count * 8,
+            speedZone: existing?.speedZone ?? Self.speedZone(for: halfTrack / 2 + 1),
+            speedZoneMap: existing?.speedZoneMap,
+            weakBitRanges: weakBitRanges,
+            isNativeLowLevel: existing?.isNativeLowLevel ?? (image?.format == .g64),
+            duplicateSectorHeaderCount: existing?.duplicateSectorHeaderCount ?? 0
+        )
+        trackInfos[halfTrack] = updated
+        guard rebuildImage else { return }
+        rebuildMountedImage(maxTrackSizeFloor: bytes.count)
+    }
+
+    private func rebuildMountedImage(maxTrackSizeFloor: Int? = nil) {
+        guard let image else { return }
+        let maxTrackSize: Int?
+        if let floor = maxTrackSizeFloor {
+            maxTrackSize = image.maxTrackSize.map { max($0, floor) }
+        } else {
+            maxTrackSize = image.maxTrackSize
+        }
+        self.image = DiskImage(
+            format: image.format,
+            tracks: trackInfos,
+            maxTrackSize: maxTrackSize,
+            sectorErrorCodes: image.sectorErrorCodes
+        )
+    }
+
+    private static func bitRanges(start: Int, count: Int, totalBits: Int) -> [ClosedRange<Int>] {
+        guard count > 0, totalBits > 0 else { return [] }
+        let cappedCount = min(count, totalBits)
+        let end = start + cappedCount - 1
+        if end < totalBits {
+            return [start...end]
+        }
+        return [start...(totalBits - 1), 0...(end % totalBits)]
+    }
+
+    private static func removingBits(
+        _ removed: ClosedRange<Int>,
+        from range: DiskImage.Track.WeakBitRange
+    ) -> [DiskImage.Track.WeakBitRange] {
+        if removed.upperBound < range.startBit || removed.lowerBound > range.endBit {
+            return [range]
+        }
+
+        var ranges: [DiskImage.Track.WeakBitRange] = []
+        if range.startBit < removed.lowerBound {
+            ranges.append(DiskImage.Track.WeakBitRange(
+                startBit: range.startBit,
+                endBit: removed.lowerBound - 1
+            ))
+        }
+        if range.endBit > removed.upperBound {
+            ranges.append(DiskImage.Track.WeakBitRange(
+                startBit: removed.upperBound + 1,
+                endBit: range.endBit
+            ))
+        }
+        return ranges
+    }
+
+    private static func mergedWeakBitRanges(
+        _ ranges: [DiskImage.Track.WeakBitRange]
+    ) -> [DiskImage.Track.WeakBitRange] {
+        let sorted = ranges
+            .filter { $0.startBit <= $0.endBit }
+            .sorted { lhs, rhs in
+                lhs.startBit == rhs.startBit ? lhs.endBit < rhs.endBit : lhs.startBit < rhs.startBit
+            }
+        guard var current = sorted.first else { return [] }
+
+        var merged: [DiskImage.Track.WeakBitRange] = []
+        for range in sorted.dropFirst() {
+            if range.startBit <= current.endBit + 1 {
+                current = DiskImage.Track.WeakBitRange(
+                    startBit: current.startBit,
+                    endBit: max(current.endBit, range.endBit)
+                )
+            } else {
+                merged.append(current)
+                current = range
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+
+    private func clearSectorErrorCode(track: Int, sector: Int, in image: inout [UInt8], geometry: DiskDrive.D64Geometry) {
+        guard let errorInfoOffset = geometry.errorInfoOffset,
+              let ordinal = sectorOrdinal(track: track, sector: sector, geometry: geometry) else {
+            return
+        }
+
+        let errorOffset = errorInfoOffset + ordinal
+        if errorOffset < image.count {
+            image[errorOffset] = 0x01
+        }
+    }
+
+    private func sectorOrdinal(track: Int, sector: Int, geometry: DiskDrive.D64Geometry) -> Int? {
+        guard track >= 1 && track <= geometry.trackCount,
+              sector >= 0 && sector < geometry.sectorsPerTrack[track] else {
+            return nil
+        }
+
+        var ordinal = sector
+        if track > 1 {
+            for previousTrack in 1..<track {
+                ordinal += geometry.sectorsPerTrack[previousTrack]
+            }
+        }
+        return ordinal
+    }
+
+    private static func packedG64SpeedBlock(_ speedZoneMap: [UInt8], byteCount: Int) -> [UInt8] {
+        var zones = Array(speedZoneMap.prefix(byteCount))
+        if zones.count < byteCount {
+            zones.append(contentsOf: [UInt8](repeating: zones.last ?? 0, count: byteCount - zones.count))
+        }
+
+        var packed: [UInt8] = []
+        packed.reserveCapacity((byteCount + 3) / 4)
+        for index in stride(from: 0, to: byteCount, by: 4) {
+            let z0 = zones[index] & 0x03
+            let z1 = index + 1 < zones.count ? zones[index + 1] & 0x03 : z0
+            let z2 = index + 2 < zones.count ? zones[index + 2] & 0x03 : z1
+            let z3 = index + 3 < zones.count ? zones[index + 3] & 0x03 : z2
+            packed.append((z0 << 6) | (z1 << 4) | (z2 << 2) | z3)
+        }
+        return packed
+    }
+
+    private static func writeLittleEndian32(_ value: UInt32, into bytes: inout [UInt8], at offset: Int) {
+        guard offset >= 0 && offset + 4 <= bytes.count else { return }
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 
     // MARK: - GCR encoding

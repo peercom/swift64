@@ -48,6 +48,17 @@ struct C64App: App {
                 .keyboardShortcut("s", modifiers: [.command])
                 .disabled(!(emulator.emulationStatus?.canExportModifiedD64 ?? false) || !(emulator.emulationStatus?.diskHasUnsavedChanges ?? false))
 
+                Button("Export Modified G64...") {
+                    saveFile(type: "g64", title: "Export Modified G64", defaultName: emulator.suggestedModifiedG64Name) { url in
+                        do {
+                            try emulator.exportModifiedG64(to: url)
+                        } catch {
+                            print("Could not export modified G64: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .disabled(!(emulator.emulationStatus?.canExportModifiedG64 ?? false) || !(emulator.emulationStatus?.diskHasUnsavedChanges ?? false))
+
                 Button("Export Captured TAP...") {
                     saveFile(type: "tap", title: "Export Captured TAP", defaultName: emulator.suggestedCapturedTAPName) { url in
                         do {

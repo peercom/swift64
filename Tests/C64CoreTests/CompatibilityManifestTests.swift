@@ -41,6 +41,8 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minSyncDetections": 4,
                 "minWeakBitReads": 16,
                 "minVariableSpeedZoneSamples": 32,
+                "minGCRWrites": 7,
+                "minGCRWriteSplices": 2,
                 "requiredVariableSpeedZones": [0, 3],
                 "track": 18,
                 "halfTrack": 34,
@@ -49,11 +51,13 @@ final class CompatibilityManifestTests: XCTestCase {
                 "usingHalfTrackFallback": false,
                 "motorOn": true,
                 "ledOn": true,
+                "gcrWriteModeActive": true,
                 "writeProtected": false,
                 "hasDisk": true,
                 "mediaChanged": true,
                 "minMediaChangeCount": 1,
                 "hasNativeLowLevelImage": true,
+                "d64ExportBlockedByLowLevelWrites": true,
                 "lastIECCommandContains": "28"
               },
               "mediaStatus": {
@@ -67,6 +71,7 @@ final class CompatibilityManifestTests: XCTestCase {
                 "preservesSpeedZones": true,
                 "preservesVariableSpeedZones": true,
                 "preservesSectorErrorInfo": true,
+                "preservesWeakBitRanges": false,
                 "sectorErrorCodeCount": 683,
                 "nonDefaultSectorErrorCodeCount": 2,
                 "weakBitRangeCount": 3,
@@ -76,7 +81,7 @@ final class CompatibilityManifestTests: XCTestCase {
                 "variableSpeedZoneByteCount": 7928,
                 "supportsWraparoundReads": true,
                 "maxTrackSize": 7928,
-                "unsupportedFeaturesContains": ["Weak/random bits", "Write-back"]
+                "unsupportedFeaturesContains": ["Weak/random bits", "Flux-level timing"]
               },
               "weakBitRanges": [
                 { "halfTrack": 34, "startBit": 128, "endBit": 255 },
@@ -225,6 +230,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minSyncDetections, 4)
         XCTAssertEqual(milestone.driveStatus?.minWeakBitReads, 16)
         XCTAssertEqual(milestone.driveStatus?.minVariableSpeedZoneSamples, 32)
+        XCTAssertEqual(milestone.driveStatus?.minGCRWrites, 7)
+        XCTAssertEqual(milestone.driveStatus?.minGCRWriteSplices, 2)
         XCTAssertEqual(milestone.driveStatus?.requiredVariableSpeedZones, [0, 3])
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
@@ -233,11 +240,13 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.usingHalfTrackFallback, false)
         XCTAssertEqual(milestone.driveStatus?.motorOn, true)
         XCTAssertEqual(milestone.driveStatus?.ledOn, true)
+        XCTAssertEqual(milestone.driveStatus?.gcrWriteModeActive, true)
         XCTAssertEqual(milestone.driveStatus?.writeProtected, false)
         XCTAssertEqual(milestone.driveStatus?.hasDisk, true)
         XCTAssertEqual(milestone.driveStatus?.mediaChanged, true)
         XCTAssertEqual(milestone.driveStatus?.minMediaChangeCount, 1)
         XCTAssertEqual(milestone.driveStatus?.hasNativeLowLevelImage, true)
+        XCTAssertEqual(milestone.driveStatus?.d64ExportBlockedByLowLevelWrites, true)
         XCTAssertEqual(milestone.driveStatus?.lastIECCommandContains, "28")
         XCTAssertEqual(milestone.mediaStatus?.populatedHalfTrackCount, 84)
         XCTAssertEqual(milestone.mediaStatus?.nativeLowLevelTrackCount, 84)
@@ -249,6 +258,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.preservesSpeedZones, true)
         XCTAssertEqual(milestone.mediaStatus?.preservesVariableSpeedZones, true)
         XCTAssertEqual(milestone.mediaStatus?.preservesSectorErrorInfo, true)
+        XCTAssertEqual(milestone.mediaStatus?.preservesWeakBitRanges, false)
         XCTAssertEqual(milestone.mediaStatus?.sectorErrorCodeCount, 683)
         XCTAssertEqual(milestone.mediaStatus?.nonDefaultSectorErrorCodeCount, 2)
         XCTAssertEqual(milestone.mediaStatus?.weakBitRangeCount, 3)
@@ -258,7 +268,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.variableSpeedZoneByteCount, 7928)
         XCTAssertEqual(milestone.mediaStatus?.supportsWraparoundReads, true)
         XCTAssertEqual(milestone.mediaStatus?.maxTrackSize, 7928)
-        XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Write-back"])
+        XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Flux-level timing"])
         XCTAssertEqual(milestone.weakBitRanges, [
             CompatibilityWeakBitRange(halfTrack: 34, startBit: 128, endBit: 255),
             CompatibilityWeakBitRange(halfTrack: 35, startBit: 64, endBit: 95)

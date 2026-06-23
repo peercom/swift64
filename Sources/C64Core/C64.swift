@@ -48,6 +48,8 @@ public final class C64 {
         public let diskHasUnsavedChanges: Bool
         public let highLevelDiskWriteProtected: Bool
         public let canExportModifiedD64: Bool
+        public let canExportModifiedG64: Bool
+        public let d64ExportBlockedByLowLevelWrites: Bool
         public let tapeHasCapturedWritePulses: Bool
         public let canExportCapturedTAP: Bool
         public let tapeHasUnsavedChanges: Bool
@@ -337,7 +339,15 @@ public final class C64 {
     }
 
     public var exportedD64Image: Data? {
-        diskDrive.exportedD64Image
+        if drive1541.disk.hasUnsavedLowLevelWrites,
+           !synchronizeLowLevelD64WritesIfPossible() {
+            return nil
+        }
+        return diskDrive.exportedD64Image
+    }
+
+    public var exportedG64Image: Data? {
+        drive1541.disk.exportedG64Image
     }
 
     private func refreshTrueDriveD64Image(afterHighLevelMutation data: Data) {
@@ -346,8 +356,27 @@ public final class C64 {
         drive1541.setWriteProtected(diskDrive.isWriteProtected)
     }
 
+    @discardableResult
+    private func synchronizeLowLevelD64WritesIfPossible() -> Bool {
+        guard diskDrive.mountedFormat == .d64,
+              drive1541.disk.hasUnsavedLowLevelWrites,
+              let baseImage = diskDrive.exportedD64Image,
+              let decoded = drive1541.disk.decodedD64Image(patching: baseImage),
+              decoded.changedSectorCount > 0,
+              diskDrive.replaceMountedD64ImageAfterLowLevelWrite(decoded.image) else {
+            return false
+        }
+
+        drive1541.disk.markLowLevelWritesSaved()
+        return true
+    }
+
     public func markExportedD64ImageSaved() {
         diskDrive.markChangesSaved()
+    }
+
+    public func markExportedG64ImageSaved() {
+        drive1541.disk.markLowLevelWritesSaved()
     }
 
     public func setMountedDiskWriteProtected(_ protected: Bool) {
@@ -372,7 +401,11 @@ public final class C64 {
     }
 
     public var emulationStatus: EmulationStatus {
-        EmulationStatus(
+        let exportableD64Image = exportedD64Image
+        let d64ExportBlockedByLowLevelWrites = diskDrive.mountedFormat == .d64
+            && drive1541.disk.hasUnsavedLowLevelWrites
+            && exportableD64Image == nil
+        return EmulationStatus(
             running: running,
             trueDriveMode: trueDriveEmulationMode,
             cpuPC: cpu.pc,
@@ -383,9 +416,11 @@ public final class C64 {
             mountedCartridgeName: mountedCartridgeName,
             mountedDiskFormat: mountedDiskImage?.format,
             highLevelDiskFormat: diskDrive.mountedFormat,
-            diskHasUnsavedChanges: diskDrive.hasUnsavedChanges,
+            diskHasUnsavedChanges: diskDrive.hasUnsavedChanges || drive1541.disk.hasUnsavedLowLevelWrites,
             highLevelDiskWriteProtected: diskDrive.isWriteProtected,
-            canExportModifiedD64: diskDrive.exportedD64Image != nil,
+            canExportModifiedD64: exportableD64Image != nil,
+            canExportModifiedG64: drive1541.disk.exportedG64Image != nil,
+            d64ExportBlockedByLowLevelWrites: d64ExportBlockedByLowLevelWrites,
             tapeHasCapturedWritePulses: !tapeUnit.writePulses.isEmpty,
             canExportCapturedTAP: tapeUnit.capturedWriteTAP() != nil,
             tapeHasUnsavedChanges: tapeUnit.hasUnsavedChanges,
