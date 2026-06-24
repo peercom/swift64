@@ -33,9 +33,45 @@ public final class SID {
 
     public struct AudioDebugState: Equatable {
         public let accuracyMode: AccuracyMode
+        public let sampleCycleCounter: Double
+        public let cyclesPerSample: Double
         public let audioAccumulator: Double
         public let audioAccumulatorCount: Int
         public let audioOutputState: Double
+        public let directOutput: Int32
+        public let filterInput: Int32
+        public let filterOutput: Int32
+        public let mixedOutput: Int32
+        public let externalAudioInput: Int32
+        public let externalAudioPathInput: Int32
+        public let filterCutoff: UInt16
+        public let filterResonance: UInt8
+        public let filterControl: UInt8
+        public let volumeFilter: UInt8
+        public let volume: UInt8
+        public let normalizedFilterCutoffValue: UInt16
+        public let normalizedFilterCutoff: Double
+        public let filterDamping: Double
+        public let voice1FilterEnabled: Bool
+        public let voice2FilterEnabled: Bool
+        public let voice3FilterEnabled: Bool
+        public let externalInputFiltered: Bool
+        public let filterLowPassEnabled: Bool
+        public let filterBandPassEnabled: Bool
+        public let filterHighPassEnabled: Bool
+        public let voice3Off: Bool
+        public let dataBusLatch: UInt8
+        public let dataBusLatchCyclesRemaining: Int
+        public let oscillator3Readback: UInt8
+        public let oscillator3ReadbackValid: Bool
+        public let envelope3Readback: UInt8
+        public let envelope3ReadbackValid: Bool
+        public let paddleX: UInt8
+        public let paddleY: UInt8
+        public let paddleTargetX: UInt8
+        public let paddleTargetY: UInt8
+        public let paddleScanActive: Bool
+        public let paddleScanCounter: Int?
         public let filterLow: Double
         public let filterBand: Double
         public let filterHigh: Double
@@ -51,12 +87,28 @@ public final class SID {
         public let accumulator: UInt32
         public let shiftRegister: UInt32
         public let envelopeLevel: UInt8
+        public let envelopeOutput: UInt8
+        public let sustainLevel: UInt8
         public let envelopeState: String
         public let exponentialCounter: UInt16
         public let exponentialPeriod: UInt16
         public let holdZero: Bool
         public let gate: Bool
+        public let controlGate: Bool
+        public let sync: Bool
+        public let ringMod: Bool
+        public let testBit: Bool
+        public let waveTriangle: Bool
+        public let waveSawtooth: Bool
+        public let wavePulse: Bool
+        public let waveNoise: Bool
+        public let hasWaveform: Bool
+        public let oscillatorMSBRose: Bool
+        public let noiseClockRose: Bool
         public let rateCounter: UInt16
+        public let selectedRatePeriod: UInt16
+        public let oscillatorOutput: UInt16
+        public let waveformOutput: Int16
         public let waveformDACOutput: UInt16
         public let waveformDACHoldCyclesRemaining: Int
     }
@@ -67,6 +119,7 @@ public final class SID {
         let outputPostDrive: Double
         let filterInputDrive: Double
         let filterInputDCBleed: Double
+        let externalInputGain: Double
         let outputSmoothingCoefficient: Double
     }
 
@@ -157,6 +210,7 @@ public final class SID {
                 outputPostDrive: 1.20,
                 filterInputDrive: 1.35,
                 filterInputDCBleed: 0.10,
+                externalInputGain: 1.12,
                 outputSmoothingCoefficient: 0.90
             )
         case .mos8580:
@@ -166,18 +220,23 @@ public final class SID {
                 outputPostDrive: 1.03,
                 filterInputDrive: 1.05,
                 filterInputDCBleed: 0,
+                externalInputGain: 0.72,
                 outputSmoothingCoefficient: 0.96
             )
         }
     }
     var normalizedFilterCutoff: Double {
-        let normalized = Double(filterCutoff) / 2047.0
+        let normalized = Double(normalizedFilterCutoffValue(filterCutoff)) / 2047.0
         switch model {
         case .mos6581:
             return 0.003 + pow(normalized, 1.7) * 0.18
         case .mos8580:
             return 0.004 + normalized * 0.28
         }
+    }
+
+    func normalizedFilterCutoffValue(_ cutoff: UInt16) -> UInt16 {
+        cutoff & 0x07FF
     }
     var filterDamping: Double {
         let resonance = Double(filterResonance)
@@ -198,6 +257,7 @@ public final class SID {
     var paddleTargetX: UInt8 = 0xFF
     var paddleTargetY: UInt8 = 0xFF
     var paddleScanCounter: Int?
+    public var continuousPaddleScanEnabled = false
     /// Last value observed on the SID-local data bus for direct chip reads.
     var dataBusLatch: UInt8 = 0
     /// Remaining cycles before the floating SID-local data bus decays.
@@ -207,12 +267,20 @@ public final class SID {
     var filterLow: Double = 0
     var filterBand: Double = 0
     var filterHigh: Double = 0
+    var oscillator3Readback: UInt8 = 0
+    var oscillator3ReadbackValid = false
+    var envelope3Readback: UInt8 = 0
+    var envelope3ReadbackValid = false
 
     /// Audio sample accumulator
     var sampleCycleCounter: Double = 0
     var audioAccumulator: Double = 0
     var audioAccumulatorCount: Int = 0
     var audioOutputState: Double = 0
+    var lastDirectOutput: Int32 = 0
+    var lastFilterInput: Int32 = 0
+    var lastFilterOutput: Int32 = 0
+    var lastMixedOutput: Int32 = 0
 
     /// Per-cycle oscillator MSB rising-edge flags used for hard sync.
     var oscillatorMSBRose = [Bool](repeating: false, count: 3)
@@ -243,6 +311,27 @@ public final class SID {
     static let waveformDACLeakStepCycles = 32
     static let paddleScanCycles = 512
 
+    static func loadedExponentialPeriod(at envelopeLevel: UInt8) -> UInt16? {
+        switch envelopeLevel {
+        case 0xFF:
+            return 1
+        case 0x5D:
+            return 2
+        case 0x36:
+            return 4
+        case 0x1A:
+            return 8
+        case 0x0E:
+            return 16
+        case 0x06:
+            return 30
+        case 0x00:
+            return 1
+        default:
+            return nil
+        }
+    }
+
     static let volumeDAC6581: [Int32] = [
         0, 80, 170, 285, 425, 590, 780, 1_000,
         1_245, 1_515, 1_805, 2_115, 2_450, 2_805, 3_175, 3_560
@@ -252,6 +341,21 @@ public final class SID {
         0, 18, 37, 57, 78, 100, 122, 144,
         166, 188, 210, 232, 253, 274, 294, 314
     ]
+
+    func envelopeDACLevel(_ level: UInt8) -> UInt16 {
+        switch model {
+        case .mos6581:
+            guard level != 0 else { return 0 }
+            guard level != 0xFF else { return 0xFF }
+            // The 6581 envelope DAC is not a perfectly terminated linear DAC.
+            // This bounded curve is a deterministic approximation until we
+            // replace it with measured chip tables.
+            let normalized = Double(level) / 255.0
+            return UInt16((pow(normalized, 0.92) * 255.0).rounded().clamped(to: 0...255))
+        case .mos8580:
+            return UInt16(level)
+        }
+    }
 
     static func exponentialPeriod(for envelopeLevel: UInt8) -> UInt16 {
         switch envelopeLevel {
@@ -293,10 +397,18 @@ public final class SID {
         filterLow = 0
         filterBand = 0
         filterHigh = 0
+        oscillator3Readback = 0
+        oscillator3ReadbackValid = false
+        envelope3Readback = 0
+        envelope3ReadbackValid = false
         sampleCycleCounter = 0
         audioAccumulator = 0
         audioAccumulatorCount = 0
         audioOutputState = 0
+        lastDirectOutput = 0
+        lastFilterInput = 0
+        lastFilterOutput = 0
+        lastMixedOutput = 0
         oscillatorMSBRose = [Bool](repeating: false, count: 3)
         noiseClockRose = [Bool](repeating: false, count: 3)
         sampleWritePos = 0
@@ -310,6 +422,7 @@ public final class SID {
     public func tick() {
         ageDataBusLatch()
         tickPaddleScan()
+        sampleVoice3Readbacks()
 
         // Update all oscillators before applying sync so source edges are
         // independent of voice iteration order.
@@ -336,6 +449,13 @@ public final class SID {
                 generateSample()
             }
         }
+    }
+
+    func sampleVoice3Readbacks() {
+        oscillator3Readback = UInt8((oscillatorReadbackOutput(2) >> 4) & 0xFF)
+        oscillator3ReadbackValid = true
+        envelope3Readback = voices[2].envelopeLevel
+        envelope3ReadbackValid = true
     }
 
     public func recentAudioSignature(sampleCount requestedCount: Int) -> AudioSignature {
@@ -395,12 +515,52 @@ public final class SID {
         (0..<0x20).map { debugRegisterValue(UInt16($0)) }
     }
 
+    public func readableRegisterSnapshot() -> [UInt8] {
+        (0..<0x20).map { peekReadableRegisterValue(UInt16($0)) }
+    }
+
     public func debugAudioState() -> AudioDebugState {
         AudioDebugState(
             accuracyMode: accuracyMode,
+            sampleCycleCounter: sampleCycleCounter,
+            cyclesPerSample: cyclesPerSample,
             audioAccumulator: audioAccumulator,
             audioAccumulatorCount: audioAccumulatorCount,
             audioOutputState: audioOutputState,
+            directOutput: lastDirectOutput,
+            filterInput: lastFilterInput,
+            filterOutput: lastFilterOutput,
+            mixedOutput: lastMixedOutput,
+            externalAudioInput: externalAudioInput,
+            externalAudioPathInput: externalAudioPathInput(),
+            filterCutoff: filterCutoff,
+            filterResonance: filterResonance,
+            filterControl: filterControl,
+            volumeFilter: volumeFilter,
+            volume: volume,
+            normalizedFilterCutoffValue: normalizedFilterCutoffValue(filterCutoff),
+            normalizedFilterCutoff: normalizedFilterCutoff,
+            filterDamping: filterDamping,
+            voice1FilterEnabled: filterControl & 0x01 != 0,
+            voice2FilterEnabled: filterControl & 0x02 != 0,
+            voice3FilterEnabled: filterControl & 0x04 != 0,
+            externalInputFiltered: externalInputFiltered,
+            filterLowPassEnabled: filterLP,
+            filterBandPassEnabled: filterBP,
+            filterHighPassEnabled: filterHP,
+            voice3Off: voice3Off,
+            dataBusLatch: dataBusLatch,
+            dataBusLatchCyclesRemaining: dataBusLatchCyclesRemaining,
+            oscillator3Readback: oscillator3Readback,
+            oscillator3ReadbackValid: oscillator3ReadbackValid,
+            envelope3Readback: envelope3Readback,
+            envelope3ReadbackValid: envelope3ReadbackValid,
+            paddleX: paddleX,
+            paddleY: paddleY,
+            paddleTargetX: paddleTargetX,
+            paddleTargetY: paddleTargetY,
+            paddleScanActive: paddleScanCounter != nil,
+            paddleScanCounter: paddleScanCounter,
             filterLow: filterLow,
             filterBand: filterBand,
             filterHigh: filterHigh,
@@ -409,22 +569,39 @@ public final class SID {
     }
 
     public func debugVoiceStates() -> [VoiceDebugState] {
-        voices.map { voice in
-            VoiceDebugState(
+        voices.indices.map { index in
+            let voice = voices[index]
+            return VoiceDebugState(
                 frequency: voice.frequency,
-                pulseWidth: voice.pulseWidth,
+                pulseWidth: normalizedPulseWidth(voice.pulseWidth),
                 control: voice.control,
                 attackDecay: voice.attackDecay,
                 sustainRelease: voice.sustainRelease,
                 accumulator: voice.accumulator,
                 shiftRegister: voice.shiftRegister,
                 envelopeLevel: voice.envelopeLevel,
+                envelopeOutput: UInt8(envelopeDACLevel(voice.envelopeLevel)),
+                sustainLevel: sustainLevel(for: index),
                 envelopeState: String(describing: voice.envelopeState),
                 exponentialCounter: voice.exponentialCounter,
                 exponentialPeriod: voice.exponentialPeriod,
                 holdZero: voice.holdZero,
                 gate: voice.gate,
+                controlGate: voice.control & 0x01 != 0,
+                sync: voice.sync,
+                ringMod: voice.ringMod,
+                testBit: voice.testBit,
+                waveTriangle: voice.waveTriangle,
+                waveSawtooth: voice.waveSawtooth,
+                wavePulse: voice.wavePulse,
+                waveNoise: voice.waveNoise,
+                hasWaveform: voice.hasWaveform,
+                oscillatorMSBRose: oscillatorMSBRose[index],
+                noiseClockRose: noiseClockRose[index],
                 rateCounter: voice.rateCounter,
+                selectedRatePeriod: selectedEnvelopeRatePeriod(for: index),
+                oscillatorOutput: oscillatorOutput(index),
+                waveformOutput: waveformOutput(index),
                 waveformDACOutput: voice.waveformDACOutput,
                 waveformDACHoldCyclesRemaining: voice.waveformDACHoldCyclesRemaining
             )
@@ -522,7 +699,10 @@ public final class SID {
         } else if !gateOn && voices[v].gate {
             voices[v].envelopeState = .release
             voices[v].exponentialCounter = 0
-            voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+            if voices[v].envelopeLevel == 0 {
+                voices[v].holdZero = true
+                voices[v].exponentialPeriod = 1
+            }
         }
         voices[v].gate = gateOn
 
@@ -530,8 +710,9 @@ public final class SID {
             if voices[v].envelopeLevel > sustainLevel(for: v) {
                 voices[v].envelopeState = .decay
                 voices[v].exponentialCounter = 0
-                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+                loadExponentialPeriodIfNeeded(v)
             } else {
+                clockSustainRateCounter(v)
                 return
             }
         }
@@ -555,14 +736,19 @@ public final class SID {
 
         switch voices[v].envelopeState {
         case .attack:
-            if voices[v].envelopeLevel < 0xFF {
-                voices[v].envelopeLevel &+= 1
-                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+            guard !voices[v].holdZero else { break }
+            if voices[v].envelopeLevel == 0xFF {
+                voices[v].envelopeLevel = 0
+                voices[v].holdZero = true
+                voices[v].exponentialCounter = 0
+                voices[v].exponentialPeriod = 1
+                break
             }
+            voices[v].envelopeLevel &+= 1
+            loadExponentialPeriodIfNeeded(v)
             if voices[v].envelopeLevel == 0xFF {
                 voices[v].envelopeState = .decay
                 voices[v].exponentialCounter = 0
-                voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
             }
         case .decay:
             if voices[v].envelopeLevel <= sustainLevel(for: v) {
@@ -584,6 +770,25 @@ public final class SID {
         voices[v].sustain * 17  // 0-15 -> 0-255
     }
 
+    func clockSustainRateCounter(_ v: Int) {
+        voices[v].rateCounter = (voices[v].rateCounter &+ 1) & Self.envelopeRateCounterMask
+        let rate = SID.decayReleaseRates[Int(voices[v].decay)]
+        if voices[v].rateCounter == rate {
+            voices[v].rateCounter = 0
+        }
+    }
+
+    func selectedEnvelopeRatePeriod(for v: Int) -> UInt16 {
+        switch voices[v].envelopeState {
+        case .attack:
+            return SID.attackRates[Int(voices[v].attack)]
+        case .decay, .sustain:
+            return SID.decayReleaseRates[Int(voices[v].decay)]
+        case .release:
+            return SID.decayReleaseRates[Int(voices[v].releaseVal)]
+        }
+    }
+
     func clockExponentialDecayStep(_ v: Int) {
         guard !voices[v].holdZero else { return }
 
@@ -593,12 +798,16 @@ public final class SID {
 
         if voices[v].envelopeLevel > 0 {
             voices[v].envelopeLevel -= 1
-            voices[v].exponentialPeriod = SID.exponentialPeriod(for: voices[v].envelopeLevel)
+            loadExponentialPeriodIfNeeded(v)
         }
         if voices[v].envelopeLevel == 0 {
             voices[v].holdZero = true
-            voices[v].exponentialPeriod = 1
         }
+    }
+
+    func loadExponentialPeriodIfNeeded(_ v: Int) {
+        guard let period = SID.loadedExponentialPeriod(at: voices[v].envelopeLevel) else { return }
+        voices[v].exponentialPeriod = period
     }
 
     // MARK: - Waveform generation
@@ -606,12 +815,43 @@ public final class SID {
     func oscillatorOutput(_ v: Int) -> UInt16 {
         let noiseOutput = voices[v].waveNoise ? noiseWaveformOutput(v) : nil
 
+        if let noiseOutput {
+            guard let nonNoiseOutput = nonNoiseWaveformOutput(v) else {
+                return noiseOutput
+            }
+            return noiseOutput & nonNoiseOutput
+        }
+
+        return nonNoiseWaveformOutput(v) ?? 0
+    }
+
+    func nonNoiseWaveformOutput(_ v: Int) -> UInt16? {
+        if model == .mos6581 &&
+            voices[v].waveTriangle &&
+            voices[v].waveSawtooth &&
+            voices[v].wavePulse {
+            return combined6581TriangleSawtoothPulseOutput(v)
+        }
+
         if model == .mos6581 &&
             voices[v].waveSawtooth &&
             voices[v].wavePulse &&
-            !voices[v].waveTriangle &&
-            !voices[v].waveNoise {
-            return sawtoothWaveformOutput(v) & triangleWaveformOutput(v)
+            !voices[v].waveTriangle {
+            return combined6581SawtoothPulseOutput(v)
+        }
+
+        if model == .mos6581 &&
+            voices[v].waveTriangle &&
+            voices[v].waveSawtooth &&
+            !voices[v].wavePulse {
+            return combined6581TriangleSawtoothOutput(v)
+        }
+
+        if model == .mos6581 &&
+            voices[v].waveTriangle &&
+            voices[v].wavePulse &&
+            !voices[v].waveSawtooth {
+            return combined6581TrianglePulseOutput(v)
         }
 
         var output: UInt16 = 0
@@ -635,14 +875,10 @@ public final class SID {
             hasOutput = true
         }
 
-        if let noiseOutput {
-            return hasOutput ? noiseOutput & output : noiseOutput
-        }
-
-        return output
+        return hasOutput ? output : nil
     }
 
-    func triangleWaveformOutput(_ v: Int) -> UInt16 {
+    func triangleWaveformOutput(_ v: Int, applyRingMod: Bool = true) -> UInt16 {
         let acc = voices[v].accumulator
         let msb = acc >> 23
         var triangle: UInt16
@@ -651,7 +887,7 @@ public final class SID {
         } else {
             triangle = UInt16(acc >> 11) & 0xFFF
         }
-        if voices[v].ringMod {
+        if applyRingMod && voices[v].ringMod {
             let syncSource = (v + 2) % 3
             if voices[syncSource].accumulator & 0x800000 != 0 {
                 triangle ^= 0xFFF
@@ -665,7 +901,7 @@ public final class SID {
     }
 
     func pulseWaveformOutput(_ v: Int) -> UInt16 {
-        let pulseWidth = min(voices[v].pulseWidth, 0x0FFF)
+        let pulseWidth = normalizedPulseWidth(voices[v].pulseWidth)
         if pulseWidth == 0 {
             return 0
         }
@@ -674,6 +910,10 @@ public final class SID {
         }
         let phase = UInt16(voices[v].accumulator >> 12)
         return phase >= pulseWidth ? 0xFFF : 0
+    }
+
+    func normalizedPulseWidth(_ pulseWidth: UInt16) -> UInt16 {
+        pulseWidth & 0x0FFF
     }
 
     func noiseWaveformOutput(_ v: Int) -> UInt16 {
@@ -690,9 +930,53 @@ public final class SID {
         return UInt16(noiseBits)
     }
 
+    func combined6581SawtoothPulseOutput(_ v: Int) -> UInt16 {
+        sawtoothWaveformOutput(v) & triangleWaveformOutput(v, applyRingMod: false)
+    }
+
+    func combined6581TriangleSawtoothOutput(_ v: Int) -> UInt16 {
+        let triangle = triangleWaveformOutput(v)
+        let sawtooth = sawtoothWaveformOutput(v)
+        let digital = triangle & sawtooth
+        let analogPullDownMask = (triangle >> 2) | (sawtooth >> 1)
+        return digital & analogPullDownMask
+    }
+
+    func combined6581TrianglePulseOutput(_ v: Int) -> UInt16 {
+        let triangle = triangleWaveformOutput(v)
+        let pulse = pulseWaveformOutput(v)
+        let digital = triangle & pulse
+        let analogPullDownMask = (triangle >> 1) | 0x010
+        return digital & analogPullDownMask
+    }
+
+    func combined6581TriangleSawtoothPulseOutput(_ v: Int) -> UInt16 {
+        let triangle = triangleWaveformOutput(v)
+        let sawtooth = sawtoothWaveformOutput(v)
+        let pulse = pulseWaveformOutput(v)
+        let digital = triangle & sawtooth & pulse
+        let triangleSaw = combined6581TriangleSawtoothOutput(v)
+        let trianglePulse = combined6581TrianglePulseOutput(v)
+        let analogPullDownMask = (triangleSaw >> 1) | (trianglePulse >> 2) | (sawtooth >> 3)
+        return digital & analogPullDownMask
+    }
+
+    func oscillatorReadbackOutput(_ v: Int) -> UInt16 {
+        if voices[v].testBit {
+            return voices[v].waveformDACOutput
+        }
+        if voices[v].hasWaveform {
+            return oscillatorOutput(v)
+        }
+        return voices[v].waveformDACOutput
+    }
+
     func waveformOutput(_ v: Int) -> Int16 {
         let rawOutput: UInt16
-        if voices[v].hasWaveform {
+        if voices[v].testBit {
+            guard voices[v].waveformDACOutput > 0 else { return 0 }
+            rawOutput = voices[v].waveformDACOutput
+        } else if voices[v].hasWaveform {
             rawOutput = oscillatorOutput(v)
         } else if voices[v].waveformDACOutput > 0 {
             rawOutput = voices[v].waveformDACOutput
@@ -704,7 +988,7 @@ public final class SID {
 
         // Apply envelope after centering the 12-bit waveform. With a zero
         // envelope the voice contributes silence, not a DC offset.
-        let envelope = UInt32(voices[v].envelopeLevel)
+        let envelope = UInt32(envelopeDACLevel(voices[v].envelopeLevel))
         let mixed = centeredOutput * Int32(envelope) * 16 / 255
 
         return Int16(clamping: mixed)
@@ -725,13 +1009,15 @@ public final class SID {
             }
         }
 
+        let externalInput = externalAudioPathInput()
         if externalInputFiltered {
-            filterInput += externalAudioInput
+            filterInput += externalInput
         } else {
-            directOutput += externalAudioInput
+            directOutput += externalInput
         }
 
-        var output = directOutput + applyFilter(input: filterInput)
+        let filterOutput = applyFilter(input: filterInput)
+        var output = directOutput + filterOutput
         output = Int32(Double(output) * voiceOutputScale)
 
         // Apply master volume to the audio path, then add the model-specific
@@ -740,6 +1026,10 @@ public final class SID {
         output = (output * Int32(volume)) / 15
         output += volumeDACOffset
         output = applyOutputStage(input: output)
+        lastDirectOutput = directOutput
+        lastFilterInput = filterInput
+        lastFilterOutput = filterOutput
+        lastMixedOutput = output
         return output
     }
 
@@ -831,6 +1121,7 @@ public final class SID {
 
     func filterInputDrive(_ input: Int32) -> Double {
         let clamped = Double(input).clamped(to: -32768...32767)
+        guard clamped != 0 else { return 0 }
         guard accuracyMode == .compatibility else { return clamped }
 
         let normalized = clamped / 32768.0
@@ -859,6 +1150,12 @@ public final class SID {
         externalAudioInput = Int32(max(-32768, min(32767, value)))
     }
 
+    func externalAudioPathInput() -> Int32 {
+        guard accuracyMode == .compatibility else { return externalAudioInput }
+        let scaled = Double(externalAudioInput) * analogProfile.externalInputGain
+        return Int32(scaled.rounded().clamped(to: -32768...32767))
+    }
+
     public func setPaddle(x: UInt8, y: UInt8) {
         paddleX = x
         paddleY = y
@@ -876,7 +1173,14 @@ public final class SID {
     }
 
     func tickPaddleScan() {
-        guard let counter = paddleScanCounter else { return }
+        guard let counter = paddleScanCounter else {
+            if continuousPaddleScanEnabled {
+                paddleX = 0
+                paddleY = 0
+                paddleScanCounter = 0
+            }
+            return
+        }
         let nextCounter = min(counter + 1, Self.paddleScanCycles)
         paddleScanCounter = nextCounter >= Self.paddleScanCycles ? nil : nextCounter
         paddleX = paddleScanValue(target: paddleTargetX, counter: nextCounter)
@@ -909,22 +1213,27 @@ public final class SID {
     }
 
     public func readRegister(_ reg: UInt16) -> UInt8 {
-        let normalizedReg = reg & 0x1F
-        let value: UInt8
-        switch normalizedReg {
-        case 0x19:
-            value = paddleX
-        case 0x1A:
-            value = paddleY
-        case 0x1B:
-            value = UInt8((oscillatorOutput(2) >> 4) & 0xFF)  // OSC3
-        case 0x1C:
-            value = voices[2].envelopeLevel  // ENV3
-        default:
-            value = dataBusLatch
-        }
+        let value = peekReadableRegisterValue(reg)
         latchDataBus(value)
         return value
+    }
+
+    public func peekReadableRegisterValue(_ reg: UInt16) -> UInt8 {
+        let normalizedReg = reg & 0x1F
+        switch normalizedReg {
+        case 0x19:
+            return paddleX
+        case 0x1A:
+            return paddleY
+        case 0x1B:
+            return oscillator3ReadbackValid
+                ? oscillator3Readback
+                : UInt8((oscillatorReadbackOutput(2) >> 4) & 0xFF)  // OSC3
+        case 0x1C:
+            return envelope3ReadbackValid ? envelope3Readback : voices[2].envelopeLevel  // ENV3
+        default:
+            return dataBusLatch
+        }
     }
 
     public func debugRegisterValue(_ reg: UInt16) -> UInt8 {
@@ -959,7 +1268,7 @@ public final class SID {
         case 0x1A:
             return paddleY
         case 0x1B:
-            return UInt8((oscillatorOutput(2) >> 4) & 0xFF)
+            return UInt8((oscillatorReadbackOutput(2) >> 4) & 0xFF)
         case 0x1C:
             return voices[2].envelopeLevel
         default:
@@ -978,8 +1287,20 @@ public final class SID {
             switch voiceReg {
             case 0: voices[voice].frequency = (voices[voice].frequency & 0xFF00) | UInt16(value)
             case 1: voices[voice].frequency = (voices[voice].frequency & 0x00FF) | (UInt16(value) << 8)
-            case 2: voices[voice].pulseWidth = (voices[voice].pulseWidth & 0xF00) | UInt16(value)
-            case 3: voices[voice].pulseWidth = (voices[voice].pulseWidth & 0x0FF) | (UInt16(value & 0x0F) << 8)
+            case 2:
+                let oldPulseWidth = normalizedPulseWidth(voices[voice].pulseWidth)
+                voices[voice].pulseWidth = (voices[voice].pulseWidth & 0xF00) | UInt16(value)
+                invalidateVoice3OscillatorReadbackIfPulseWidthChanged(
+                    voice: voice,
+                    oldPulseWidth: oldPulseWidth
+                )
+            case 3:
+                let oldPulseWidth = normalizedPulseWidth(voices[voice].pulseWidth)
+                voices[voice].pulseWidth = (voices[voice].pulseWidth & 0x0FF) | (UInt16(value & 0x0F) << 8)
+                invalidateVoice3OscillatorReadbackIfPulseWidthChanged(
+                    voice: voice,
+                    oldPulseWidth: oldPulseWidth
+                )
             case 4: writeControlRegister(voice: voice, value: value)
             case 5: voices[voice].attackDecay = value
             case 6: voices[voice].sustainRelease = value
@@ -998,16 +1319,33 @@ public final class SID {
         }
     }
 
+    func invalidateVoice3OscillatorReadbackIfPulseWidthChanged(voice: Int, oldPulseWidth: UInt16) {
+        guard voice == 2 else { return }
+        guard normalizedPulseWidth(voices[voice].pulseWidth) != oldPulseWidth else { return }
+        guard voices[voice].wavePulse else { return }
+
+        oscillator3ReadbackValid = false
+    }
+
     func writeControlRegister(voice: Int, value: UInt8) {
+        let oldControl = voices[voice].control
         let wasTestSet = voices[voice].testBit
         voices[voice].control = value
         let isTestSet = value & 0x08 != 0
 
+        let oscillatorReadbackAffectingControlMask: UInt8 = 0xFE
+        if voice == 2 && (value ^ oldControl) & oscillatorReadbackAffectingControlMask != 0 {
+            oscillator3ReadbackValid = false
+        }
+
         if isTestSet {
             voices[voice].accumulator = 0
             voices[voice].shiftRegister = 0
+            voices[voice].waveformDACOutput = 0
+            voices[voice].waveformDACHoldCyclesRemaining = 0
             oscillatorMSBRose[voice] = false
             noiseClockRose[voice] = false
+            if voice == 2 { oscillator3Readback = 0 }
         } else if wasTestSet && voices[voice].shiftRegister == 0 {
             voices[voice].shiftRegister = 0x7FFFF8
         }

@@ -131,11 +131,13 @@ public final class GCRDisk {
         let offsetTableStart = 12
         let speedTableStart = offsetTableStart + numTracks * 4
         guard bytes.count >= speedTableStart + numTracks * 4 else { return false }
-        let maxTrackSize = Int(bytes[10]) | (Int(bytes[11]) << 8)
+        var maxTrackSize = Int(bytes[10]) | (Int(bytes[11]) << 8)
 
         var newTracks: [[UInt8]?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         var newTrackInfos: [DiskImage.Track?] = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         var trackLengths = [Int](repeating: 0, count: numTracks)
+        var trackBytesByIndex: [[UInt8]?] = Array(repeating: nil, count: numTracks)
+        var trackBlockRanges: [Range<Int>] = []
         var standardPayloadEnd = speedTableStart + numTracks * 4
 
         for i in 0..<numTracks {
@@ -149,22 +151,34 @@ public final class GCRDisk {
 
             let trackLen = Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8)
             guard trackLen > 0 && offset + 2 + trackLen <= bytes.count else { continue }
+            let trackBlockRange = offset..<(offset + 2 + trackLen)
+            guard !trackBlockRanges.contains(where: { Self.rangesOverlap(trackBlockRange, $0) }) else {
+                return false
+            }
             trackLengths[i] = trackLen
+            maxTrackSize = max(maxTrackSize, trackLen)
+            trackBlockRanges.append(trackBlockRange)
             standardPayloadEnd = max(standardPayloadEnd, offset + 2 + trackLen)
+            trackBytesByIndex[i] = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
+        }
 
-            let trackBytes = Array(bytes[(offset + 2)..<(offset + 2 + trackLen)])
+        for i in 0..<numTracks {
+            guard let trackBytes = trackBytesByIndex[i] else { continue }
+            let trackLen = trackLengths[i]
             let sectorHeaderStats = G64Parser.sectorHeaderStats(from: trackBytes, track: i / 2 + 1)
-            let speedInfo = Self.g64SpeedInfo(
+            guard let speedInfo = Self.g64SpeedInfo(
                 from: bytes,
                 speedTableStart: speedTableStart,
+                speedTableEnd: speedTableStart + numTracks * 4,
                 trackIndex: i,
-                trackLength: trackLen
-            )
+                trackLength: trackLen,
+                reservedRanges: trackBlockRanges
+            ) else { return false }
             let info = DiskImage.Track(
                 halfTrack: i,
                 bytes: trackBytes,
-                speedZone: speedInfo?.dominantZone ?? Self.speedZone(for: i / 2 + 1),
-                speedZoneMap: speedInfo?.speedZoneMap,
+                speedZone: speedInfo.dominantZone,
+                speedZoneMap: speedInfo.speedZoneMap,
                 isNativeLowLevel: true,
                 duplicateSectorHeaderCount: sectorHeaderStats.duplicateSectorHeaderCount
             )
@@ -207,6 +221,7 @@ public final class GCRDisk {
         tracks = newTracks
         trackInfos = newTrackInfos
         image = DiskImage(format: .g64, tracks: newTrackInfos, maxTrackSize: maxTrackSize)
+        writeProtected = true
         hasUnsavedLowLevelWrites = false
         return true
     }
@@ -247,14 +262,19 @@ public final class GCRDisk {
               Array(bytes[0..<8]) == Self.p64Magic,
               Self.littleEndian32(from: bytes, at: 8) == 0,
               let flags = Self.littleEndian32(from: bytes, at: 12),
-              let chunkStreamSizeValue = Self.littleEndian32(from: bytes, at: 16) else {
+              let chunkStreamSizeValue = Self.littleEndian32(from: bytes, at: 16),
+              let expectedStreamCRC = Self.littleEndian32(from: bytes, at: 20) else {
             return false
         }
 
+        guard flags & 0x02 == 0 else { return false }
         let chunkStreamSize = Int(chunkStreamSizeValue)
         let chunkStreamStart = Self.p64HeaderSize
         guard chunkStreamSize >= 0,
-              chunkStreamStart + chunkStreamSize <= bytes.count else {
+              chunkStreamStart + chunkStreamSize == bytes.count else {
+            return false
+        }
+        guard Self.crc32(Array(bytes[chunkStreamStart..<bytes.count])) == expectedStreamCRC else {
             return false
         }
 
@@ -267,13 +287,16 @@ public final class GCRDisk {
         while offset < streamEnd {
             guard offset + Self.p64ChunkHeaderSize <= streamEnd else { return false }
             let signature = Array(bytes[offset..<(offset + 4)])
-            guard let chunkSizeValue = Self.littleEndian32(from: bytes, at: offset + 4) else {
+            guard let chunkSizeValue = Self.littleEndian32(from: bytes, at: offset + 4),
+                  let expectedChunkCRC = Self.littleEndian32(from: bytes, at: offset + 8) else {
                 return false
             }
             let chunkSize = Int(chunkSizeValue)
             let chunkDataStart = offset + Self.p64ChunkHeaderSize
             let chunkDataEnd = chunkDataStart + chunkSize
             guard chunkSize >= 0, chunkDataEnd <= streamEnd else { return false }
+            let chunkData = Array(bytes[chunkDataStart..<chunkDataEnd])
+            guard Self.crc32(chunkData) == expectedChunkCRC else { return false }
 
             if signature == Array("DONE".utf8) {
                 guard chunkSize == 0 else { return false }
@@ -286,9 +309,13 @@ public final class GCRDisk {
                signature[0] == UInt8(ascii: "H"),
                signature[1] == UInt8(ascii: "T"),
                signature[2] == UInt8(ascii: "P") {
+                guard signature[3] & 0x80 == 0 else { return false }
                 let p64HalfTrack = Int(signature[3] & 0x7F)
                 let halfTrack = p64HalfTrack - 2
                 guard halfTrack >= 0 && halfTrack < Self.maxHalfTracks else {
+                    return false
+                }
+                guard newTrackInfos[halfTrack] == nil else {
                     return false
                 }
                 guard chunkSize >= 8 else { return false }
@@ -320,6 +347,7 @@ public final class GCRDisk {
                 let info = DiskImage.Track(
                     halfTrack: halfTrack,
                     bytes: converted.bytes,
+                    bitLength: converted.bitLength,
                     speedZone: speedZone,
                     weakBitRanges: converted.weakBitRanges,
                     isNativeLowLevel: true,
@@ -333,6 +361,7 @@ public final class GCRDisk {
         }
 
         guard sawDone,
+              offset == streamEnd,
               newTracks.contains(where: { $0 != nil }) else {
             return false
         }
@@ -370,6 +399,9 @@ public final class GCRDisk {
             guard halfTrack >= 0 && halfTrack < GCRDisk.maxHalfTracks else {
                 return false
             }
+            guard newTrackInfos[halfTrack] == nil else {
+                return false
+            }
             guard payloadOffset + Self.nibTrackLength <= bytes.count else {
                 return false
             }
@@ -398,6 +430,7 @@ public final class GCRDisk {
         tracks = newTracks
         trackInfos = newTrackInfos
         image = DiskImage(format: format, tracks: newTrackInfos, maxTrackSize: Self.nibTrackLength)
+        writeProtected = true
         hasUnsavedLowLevelWrites = false
         return true
     }
@@ -453,6 +486,7 @@ public final class GCRDisk {
             tracks: trackInfos,
             sectorErrorCodes: sectorErrorCodes
         )
+        writeProtected = false
         hasUnsavedLowLevelWrites = false
         return true
     }
@@ -1046,6 +1080,21 @@ public final class GCRDisk {
             | (UInt32(bytes[offset + 3]) << 24)
     }
 
+    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >>= 1
+                }
+            }
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+
     private static func decodeP64Pulses(_ encoded: [UInt8], pulseCount: Int) -> [P64Pulse]? {
         guard pulseCount >= 0 else { return nil }
         var decoder = P64RangeDecoder(bytes: encoded)
@@ -1138,11 +1187,11 @@ public final class GCRDisk {
         from pulses: [P64Pulse],
         halfTrack: Int,
         speedZone: Int
-    ) -> (bytes: [UInt8], weakBitRanges: [DiskImage.Track.WeakBitRange]) {
+    ) -> (bytes: [UInt8], bitLength: Int, weakBitRanges: [DiskImage.Track.WeakBitRange]) {
         let zone = max(0, min(3, speedZone))
-        let byteCount = trackLengths[zone]
-        let bitCount = byteCount * 8
         let ticksPerBit = max(1, cyclesPerByte[zone] * 2)
+        let bitCount = max(1, (Self.p64RotationTicks + ticksPerBit - 1) / ticksPerBit)
+        let byteCount = max(trackLengths[zone], (bitCount + 7) / 8)
         var bytes = [UInt8](repeating: 0, count: byteCount)
         var weakRanges: [DiskImage.Track.WeakBitRange] = []
 
@@ -1159,7 +1208,7 @@ public final class GCRDisk {
             }
         }
 
-        return (bytes, mergedWeakBitRanges(weakRanges))
+        return (bytes, bitCount, mergedWeakBitRanges(weakRanges))
     }
 
     private struct P64RangeDecoder {
@@ -1366,8 +1415,10 @@ public final class GCRDisk {
     private static func g64SpeedInfo(
         from bytes: [UInt8],
         speedTableStart: Int,
+        speedTableEnd: Int,
         trackIndex: Int,
-        trackLength: Int
+        trackLength: Int,
+        reservedRanges: [Range<Int>] = []
     ) -> (dominantZone: Int, speedZoneMap: [UInt8]?)? {
         let pos = speedTableStart + trackIndex * 4
         guard pos + 4 <= bytes.count else { return nil }
@@ -1379,10 +1430,14 @@ public final class GCRDisk {
             return (value, nil)
         }
 
-        guard value > 0 && value < bytes.count else { return nil }
-
         let speedBlockLength = (trackLength + 3) / 4
-        guard value + speedBlockLength <= bytes.count else { return nil }
+        let speedBlockEnd = value + speedBlockLength
+        guard value >= speedTableEnd,
+              value < bytes.count,
+              speedBlockEnd <= bytes.count,
+              !reservedRanges.contains(where: { Self.rangesOverlap(value..<speedBlockEnd, $0) }) else {
+            return nil
+        }
 
         var speedZoneMap: [UInt8] = []
         speedZoneMap.reserveCapacity(trackLength)
@@ -1402,6 +1457,10 @@ public final class GCRDisk {
         }?.offset ?? 0
 
         return (dominantZone, speedZoneMap)
+    }
+
+    private static func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
+        lhs.lowerBound < rhs.upperBound && rhs.lowerBound < lhs.upperBound
     }
 
     private func d64SectorErrorCodes(from bytes: [UInt8], geometry: DiskDrive.D64Geometry) -> [UInt8]? {

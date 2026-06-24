@@ -1215,21 +1215,34 @@ public struct CompatibilityCPURegisters: Decodable, Equatable {
     }
 }
 
+public enum CompatibilitySIDRegisterReadMode: String, Decodable, Equatable {
+    case debug
+    case chip
+}
+
 public struct CompatibilitySIDRegisterExpectation: Decodable, Equatable {
     public let register: Int
     public let value: UInt8
     public let mask: UInt8
+    public let readMode: CompatibilitySIDRegisterReadMode
 
-    public init(register: Int, value: UInt8, mask: UInt8 = 0xFF) {
+    public init(
+        register: Int,
+        value: UInt8,
+        mask: UInt8 = 0xFF,
+        readMode: CompatibilitySIDRegisterReadMode = .debug
+    ) {
         self.register = register
         self.value = value
         self.mask = mask
+        self.readMode = readMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case register
         case value
         case mask
+        case readMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -1242,6 +1255,7 @@ public struct CompatibilitySIDRegisterExpectation: Decodable, Equatable {
         } else {
             decodedMask = 0xFF
         }
+        readMode = try container.decodeIfPresent(CompatibilitySIDRegisterReadMode.self, forKey: .readMode) ?? .debug
 
         guard (0...0xFFFF).contains(register) else {
             throw DecodingError.dataCorruptedError(
@@ -1393,9 +1407,45 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
 
 public struct CompatibilitySIDAudioState: Decodable, Equatable {
     public let accuracyMode: SID.AccuracyMode?
+    public let sampleCycleCounter: Double?
+    public let cyclesPerSample: Double?
     public let audioAccumulator: Double?
     public let audioAccumulatorCount: Int?
     public let audioOutputState: Double?
+    public let directOutput: Int?
+    public let filterInput: Int?
+    public let filterOutput: Int?
+    public let mixedOutput: Int?
+    public let externalAudioInput: Int?
+    public let externalAudioPathInput: Int?
+    public let filterCutoff: Int?
+    public let filterResonance: Int?
+    public let filterControl: Int?
+    public let volumeFilter: Int?
+    public let volume: Int?
+    public let normalizedFilterCutoffValue: Int?
+    public let normalizedFilterCutoff: Double?
+    public let filterDamping: Double?
+    public let voice1FilterEnabled: Bool?
+    public let voice2FilterEnabled: Bool?
+    public let voice3FilterEnabled: Bool?
+    public let externalInputFiltered: Bool?
+    public let filterLowPassEnabled: Bool?
+    public let filterBandPassEnabled: Bool?
+    public let filterHighPassEnabled: Bool?
+    public let voice3Off: Bool?
+    public let dataBusLatch: Int?
+    public let dataBusLatchCyclesRemaining: Int?
+    public let oscillator3Readback: Int?
+    public let oscillator3ReadbackValid: Bool?
+    public let envelope3Readback: Int?
+    public let envelope3ReadbackValid: Bool?
+    public let paddleX: Int?
+    public let paddleY: Int?
+    public let paddleTargetX: Int?
+    public let paddleTargetY: Int?
+    public let paddleScanActive: Bool?
+    public let paddleScanCounter: Int?
     public let filterLow: Double?
     public let filterBand: Double?
     public let filterHigh: Double?
@@ -1404,9 +1454,45 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
 
     public init(
         accuracyMode: SID.AccuracyMode? = nil,
+        sampleCycleCounter: Double? = nil,
+        cyclesPerSample: Double? = nil,
         audioAccumulator: Double? = nil,
         audioAccumulatorCount: Int? = nil,
         audioOutputState: Double? = nil,
+        directOutput: Int? = nil,
+        filterInput: Int? = nil,
+        filterOutput: Int? = nil,
+        mixedOutput: Int? = nil,
+        externalAudioInput: Int? = nil,
+        externalAudioPathInput: Int? = nil,
+        filterCutoff: Int? = nil,
+        filterResonance: Int? = nil,
+        filterControl: Int? = nil,
+        volumeFilter: Int? = nil,
+        volume: Int? = nil,
+        normalizedFilterCutoffValue: Int? = nil,
+        normalizedFilterCutoff: Double? = nil,
+        filterDamping: Double? = nil,
+        voice1FilterEnabled: Bool? = nil,
+        voice2FilterEnabled: Bool? = nil,
+        voice3FilterEnabled: Bool? = nil,
+        externalInputFiltered: Bool? = nil,
+        filterLowPassEnabled: Bool? = nil,
+        filterBandPassEnabled: Bool? = nil,
+        filterHighPassEnabled: Bool? = nil,
+        voice3Off: Bool? = nil,
+        dataBusLatch: Int? = nil,
+        dataBusLatchCyclesRemaining: Int? = nil,
+        oscillator3Readback: Int? = nil,
+        oscillator3ReadbackValid: Bool? = nil,
+        envelope3Readback: Int? = nil,
+        envelope3ReadbackValid: Bool? = nil,
+        paddleX: Int? = nil,
+        paddleY: Int? = nil,
+        paddleTargetX: Int? = nil,
+        paddleTargetY: Int? = nil,
+        paddleScanActive: Bool? = nil,
+        paddleScanCounter: Int? = nil,
         filterLow: Double? = nil,
         filterBand: Double? = nil,
         filterHigh: Double? = nil,
@@ -1414,9 +1500,45 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
         tolerance: Double = 0.000_001
     ) {
         self.accuracyMode = accuracyMode
+        self.sampleCycleCounter = sampleCycleCounter
+        self.cyclesPerSample = cyclesPerSample
         self.audioAccumulator = audioAccumulator
         self.audioAccumulatorCount = audioAccumulatorCount
         self.audioOutputState = audioOutputState
+        self.directOutput = directOutput
+        self.filterInput = filterInput
+        self.filterOutput = filterOutput
+        self.mixedOutput = mixedOutput
+        self.externalAudioInput = externalAudioInput
+        self.externalAudioPathInput = externalAudioPathInput
+        self.filterCutoff = filterCutoff
+        self.filterResonance = filterResonance
+        self.filterControl = filterControl
+        self.volumeFilter = volumeFilter
+        self.volume = volume
+        self.normalizedFilterCutoffValue = normalizedFilterCutoffValue
+        self.normalizedFilterCutoff = normalizedFilterCutoff
+        self.filterDamping = filterDamping
+        self.voice1FilterEnabled = voice1FilterEnabled
+        self.voice2FilterEnabled = voice2FilterEnabled
+        self.voice3FilterEnabled = voice3FilterEnabled
+        self.externalInputFiltered = externalInputFiltered
+        self.filterLowPassEnabled = filterLowPassEnabled
+        self.filterBandPassEnabled = filterBandPassEnabled
+        self.filterHighPassEnabled = filterHighPassEnabled
+        self.voice3Off = voice3Off
+        self.dataBusLatch = dataBusLatch
+        self.dataBusLatchCyclesRemaining = dataBusLatchCyclesRemaining
+        self.oscillator3Readback = oscillator3Readback
+        self.oscillator3ReadbackValid = oscillator3ReadbackValid
+        self.envelope3Readback = envelope3Readback
+        self.envelope3ReadbackValid = envelope3ReadbackValid
+        self.paddleX = paddleX
+        self.paddleY = paddleY
+        self.paddleTargetX = paddleTargetX
+        self.paddleTargetY = paddleTargetY
+        self.paddleScanActive = paddleScanActive
+        self.paddleScanCounter = paddleScanCounter
         self.filterLow = filterLow
         self.filterBand = filterBand
         self.filterHigh = filterHigh
@@ -1426,9 +1548,45 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case accuracyMode
+        case sampleCycleCounter
+        case cyclesPerSample
         case audioAccumulator
         case audioAccumulatorCount
         case audioOutputState
+        case directOutput
+        case filterInput
+        case filterOutput
+        case mixedOutput
+        case externalAudioInput
+        case externalAudioPathInput
+        case filterCutoff
+        case filterResonance
+        case filterControl
+        case volumeFilter
+        case volume
+        case normalizedFilterCutoffValue
+        case normalizedFilterCutoff
+        case filterDamping
+        case voice1FilterEnabled
+        case voice2FilterEnabled
+        case voice3FilterEnabled
+        case externalInputFiltered
+        case filterLowPassEnabled
+        case filterBandPassEnabled
+        case filterHighPassEnabled
+        case voice3Off
+        case dataBusLatch
+        case dataBusLatchCyclesRemaining
+        case oscillator3Readback
+        case oscillator3ReadbackValid
+        case envelope3Readback
+        case envelope3ReadbackValid
+        case paddleX
+        case paddleY
+        case paddleTargetX
+        case paddleTargetY
+        case paddleScanActive
+        case paddleScanCounter
         case filterLow
         case filterBand
         case filterHigh
@@ -1439,9 +1597,45 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         accuracyMode = try container.decodeIfPresent(SID.AccuracyMode.self, forKey: .accuracyMode)
+        sampleCycleCounter = try container.decodeIfPresent(Double.self, forKey: .sampleCycleCounter)
+        cyclesPerSample = try container.decodeIfPresent(Double.self, forKey: .cyclesPerSample)
         audioAccumulator = try container.decodeIfPresent(Double.self, forKey: .audioAccumulator)
         audioAccumulatorCount = try container.decodeIfPresent(Int.self, forKey: .audioAccumulatorCount)
         audioOutputState = try container.decodeIfPresent(Double.self, forKey: .audioOutputState)
+        directOutput = try container.decodeIfPresent(Int.self, forKey: .directOutput)
+        filterInput = try container.decodeIfPresent(Int.self, forKey: .filterInput)
+        filterOutput = try container.decodeIfPresent(Int.self, forKey: .filterOutput)
+        mixedOutput = try container.decodeIfPresent(Int.self, forKey: .mixedOutput)
+        externalAudioInput = try container.decodeIfPresent(Int.self, forKey: .externalAudioInput)
+        externalAudioPathInput = try container.decodeIfPresent(Int.self, forKey: .externalAudioPathInput)
+        filterCutoff = try Self.decodeOptionalInteger(container, forKey: .filterCutoff)
+        filterResonance = try Self.decodeOptionalInteger(container, forKey: .filterResonance)
+        filterControl = try Self.decodeOptionalInteger(container, forKey: .filterControl)
+        volumeFilter = try Self.decodeOptionalInteger(container, forKey: .volumeFilter)
+        volume = try Self.decodeOptionalInteger(container, forKey: .volume)
+        normalizedFilterCutoffValue = try Self.decodeOptionalInteger(container, forKey: .normalizedFilterCutoffValue)
+        normalizedFilterCutoff = try container.decodeIfPresent(Double.self, forKey: .normalizedFilterCutoff)
+        filterDamping = try container.decodeIfPresent(Double.self, forKey: .filterDamping)
+        voice1FilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .voice1FilterEnabled)
+        voice2FilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .voice2FilterEnabled)
+        voice3FilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .voice3FilterEnabled)
+        externalInputFiltered = try container.decodeIfPresent(Bool.self, forKey: .externalInputFiltered)
+        filterLowPassEnabled = try container.decodeIfPresent(Bool.self, forKey: .filterLowPassEnabled)
+        filterBandPassEnabled = try container.decodeIfPresent(Bool.self, forKey: .filterBandPassEnabled)
+        filterHighPassEnabled = try container.decodeIfPresent(Bool.self, forKey: .filterHighPassEnabled)
+        voice3Off = try container.decodeIfPresent(Bool.self, forKey: .voice3Off)
+        dataBusLatch = try Self.decodeOptionalInteger(container, forKey: .dataBusLatch)
+        dataBusLatchCyclesRemaining = try container.decodeIfPresent(Int.self, forKey: .dataBusLatchCyclesRemaining)
+        oscillator3Readback = try Self.decodeOptionalInteger(container, forKey: .oscillator3Readback)
+        oscillator3ReadbackValid = try container.decodeIfPresent(Bool.self, forKey: .oscillator3ReadbackValid)
+        envelope3Readback = try Self.decodeOptionalInteger(container, forKey: .envelope3Readback)
+        envelope3ReadbackValid = try container.decodeIfPresent(Bool.self, forKey: .envelope3ReadbackValid)
+        paddleX = try Self.decodeOptionalInteger(container, forKey: .paddleX)
+        paddleY = try Self.decodeOptionalInteger(container, forKey: .paddleY)
+        paddleTargetX = try Self.decodeOptionalInteger(container, forKey: .paddleTargetX)
+        paddleTargetY = try Self.decodeOptionalInteger(container, forKey: .paddleTargetY)
+        paddleScanActive = try container.decodeIfPresent(Bool.self, forKey: .paddleScanActive)
+        paddleScanCounter = try container.decodeIfPresent(Int.self, forKey: .paddleScanCounter)
         filterLow = try container.decodeIfPresent(Double.self, forKey: .filterLow)
         filterBand = try container.decodeIfPresent(Double.self, forKey: .filterBand)
         filterHigh = try container.decodeIfPresent(Double.self, forKey: .filterHigh)
@@ -1455,11 +1649,67 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
                 debugDescription: "SID audio state accumulator count must be non-negative"
             )
         }
+        if let sampleCycleCounter, sampleCycleCounter < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sampleCycleCounter,
+                in: container,
+                debugDescription: "SID audio state sample cycle counter must be non-negative"
+            )
+        }
+        if let cyclesPerSample, cyclesPerSample <= 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .cyclesPerSample,
+                in: container,
+                debugDescription: "SID audio state cycles per sample must be positive"
+            )
+        }
         if let sampleWritePosition, sampleWritePosition < 0 {
             throw DecodingError.dataCorruptedError(
                 forKey: .sampleWritePosition,
                 in: container,
                 debugDescription: "SID audio state sample write position must be non-negative"
+            )
+        }
+        let outputRange = Int(Int32.min)...Int(Int32.max)
+        for (key, value) in [
+            (CodingKeys.directOutput, directOutput),
+            (CodingKeys.filterInput, filterInput),
+            (CodingKeys.filterOutput, filterOutput),
+            (CodingKeys.mixedOutput, mixedOutput),
+            (CodingKeys.externalAudioInput, externalAudioInput),
+            (CodingKeys.externalAudioPathInput, externalAudioPathInput)
+        ] where value.map({ !outputRange.contains($0) }) == true {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "SID audio state output must fit in 32 bits"
+            )
+        }
+        if let filterCutoff, !(0...0xFFFF).contains(filterCutoff) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .filterCutoff,
+                in: container,
+                debugDescription: "SID audio state filter cutoff must fit in 16 bits"
+            )
+        }
+        try Self.validateOptional(filterResonance, forKey: .filterResonance, in: container, range: 0...0x0F, debugDescription: "SID audio state filter resonance must fit in 4 bits")
+        try Self.validateOptional(filterControl, forKey: .filterControl, in: container, range: 0...0x0F, debugDescription: "SID audio state filter control must fit in 4 bits")
+        try Self.validateOptional(volumeFilter, forKey: .volumeFilter, in: container, range: 0...0xFF, debugDescription: "SID audio state volume/filter register must fit in 8 bits")
+        try Self.validateOptional(volume, forKey: .volume, in: container, range: 0...0x0F, debugDescription: "SID audio state volume must fit in 4 bits")
+        try Self.validateOptional(dataBusLatch, forKey: .dataBusLatch, in: container, range: 0...0xFF, debugDescription: "SID audio state data bus latch must fit in 8 bits")
+        try Self.validateOptional(dataBusLatchCyclesRemaining, forKey: .dataBusLatchCyclesRemaining, in: container, range: 0...Int.max, debugDescription: "SID audio state data bus latch cycles must be non-negative")
+        try Self.validateOptional(oscillator3Readback, forKey: .oscillator3Readback, in: container, range: 0...0xFF, debugDescription: "SID audio state oscillator 3 readback must fit in 8 bits")
+        try Self.validateOptional(envelope3Readback, forKey: .envelope3Readback, in: container, range: 0...0xFF, debugDescription: "SID audio state envelope 3 readback must fit in 8 bits")
+        try Self.validateOptional(paddleX, forKey: .paddleX, in: container, range: 0...0xFF, debugDescription: "SID audio state paddle X must fit in 8 bits")
+        try Self.validateOptional(paddleY, forKey: .paddleY, in: container, range: 0...0xFF, debugDescription: "SID audio state paddle Y must fit in 8 bits")
+        try Self.validateOptional(paddleTargetX, forKey: .paddleTargetX, in: container, range: 0...0xFF, debugDescription: "SID audio state paddle target X must fit in 8 bits")
+        try Self.validateOptional(paddleTargetY, forKey: .paddleTargetY, in: container, range: 0...0xFF, debugDescription: "SID audio state paddle target Y must fit in 8 bits")
+        try Self.validateOptional(paddleScanCounter, forKey: .paddleScanCounter, in: container, range: 0...Int.max, debugDescription: "SID audio state paddle scan counter must be non-negative")
+        if let normalizedFilterCutoffValue, !(0...0x07FF).contains(normalizedFilterCutoffValue) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .normalizedFilterCutoffValue,
+                in: container,
+                debugDescription: "SID audio state normalized filter cutoff must fit in 11 bits"
             )
         }
         guard tolerance >= 0 else {
@@ -1469,6 +1719,46 @@ public struct CompatibilitySIDAudioState: Decodable, Equatable {
                 debugDescription: "SID audio state tolerance must be non-negative"
             )
         }
+    }
+
+    private static func validateOptional(
+        _ value: Int?,
+        forKey key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>,
+        range: ClosedRange<Int>,
+        debugDescription: String
+    ) throws {
+        guard let value, !range.contains(value) else { return }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: debugDescription
+        )
+    }
+
+    private static func decodeOptionalInteger(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        guard let rawValue = try container.decodeIfPresent(String.self, forKey: key) else {
+            return nil
+        }
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let radix = normalized.hasPrefix("$") || normalized.lowercased().hasPrefix("0x") ? 16 : 10
+        let digits = normalized
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: "0x", with: "", options: [.caseInsensitive])
+        guard let value = Int(digits, radix: radix) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "Expected decimal integer or hexadecimal string"
+            )
+        }
+        return value
     }
 }
 
@@ -1482,12 +1772,28 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
     public let accumulator: Int?
     public let shiftRegister: Int?
     public let envelopeLevel: Int?
+    public let envelopeOutput: Int?
+    public let sustainLevel: Int?
     public let envelopeState: String?
     public let exponentialCounter: Int?
     public let exponentialPeriod: Int?
     public let holdZero: Bool?
     public let gate: Bool?
+    public let controlGate: Bool?
+    public let sync: Bool?
+    public let ringMod: Bool?
+    public let testBit: Bool?
+    public let waveTriangle: Bool?
+    public let waveSawtooth: Bool?
+    public let wavePulse: Bool?
+    public let waveNoise: Bool?
+    public let hasWaveform: Bool?
+    public let oscillatorMSBRose: Bool?
+    public let noiseClockRose: Bool?
     public let rateCounter: Int?
+    public let selectedRatePeriod: Int?
+    public let oscillatorOutput: Int?
+    public let waveformOutput: Int?
     public let waveformDACOutput: Int?
     public let waveformDACHoldCyclesRemaining: Int?
 
@@ -1501,12 +1807,28 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
         accumulator: Int? = nil,
         shiftRegister: Int? = nil,
         envelopeLevel: Int? = nil,
+        envelopeOutput: Int? = nil,
+        sustainLevel: Int? = nil,
         envelopeState: String? = nil,
         exponentialCounter: Int? = nil,
         exponentialPeriod: Int? = nil,
         holdZero: Bool? = nil,
         gate: Bool? = nil,
+        controlGate: Bool? = nil,
+        sync: Bool? = nil,
+        ringMod: Bool? = nil,
+        testBit: Bool? = nil,
+        waveTriangle: Bool? = nil,
+        waveSawtooth: Bool? = nil,
+        wavePulse: Bool? = nil,
+        waveNoise: Bool? = nil,
+        hasWaveform: Bool? = nil,
+        oscillatorMSBRose: Bool? = nil,
+        noiseClockRose: Bool? = nil,
         rateCounter: Int? = nil,
+        selectedRatePeriod: Int? = nil,
+        oscillatorOutput: Int? = nil,
+        waveformOutput: Int? = nil,
         waveformDACOutput: Int? = nil,
         waveformDACHoldCyclesRemaining: Int? = nil
     ) {
@@ -1519,12 +1841,28 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
         self.accumulator = accumulator
         self.shiftRegister = shiftRegister
         self.envelopeLevel = envelopeLevel
+        self.envelopeOutput = envelopeOutput
+        self.sustainLevel = sustainLevel
         self.envelopeState = envelopeState
         self.exponentialCounter = exponentialCounter
         self.exponentialPeriod = exponentialPeriod
         self.holdZero = holdZero
         self.gate = gate
+        self.controlGate = controlGate
+        self.sync = sync
+        self.ringMod = ringMod
+        self.testBit = testBit
+        self.waveTriangle = waveTriangle
+        self.waveSawtooth = waveSawtooth
+        self.wavePulse = wavePulse
+        self.waveNoise = waveNoise
+        self.hasWaveform = hasWaveform
+        self.oscillatorMSBRose = oscillatorMSBRose
+        self.noiseClockRose = noiseClockRose
         self.rateCounter = rateCounter
+        self.selectedRatePeriod = selectedRatePeriod
+        self.oscillatorOutput = oscillatorOutput
+        self.waveformOutput = waveformOutput
         self.waveformDACOutput = waveformDACOutput
         self.waveformDACHoldCyclesRemaining = waveformDACHoldCyclesRemaining
     }
@@ -1539,12 +1877,28 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
         case accumulator
         case shiftRegister
         case envelopeLevel
+        case envelopeOutput
+        case sustainLevel
         case envelopeState
         case exponentialCounter
         case exponentialPeriod
         case holdZero
         case gate
+        case controlGate
+        case sync
+        case ringMod
+        case testBit
+        case waveTriangle
+        case waveSawtooth
+        case wavePulse
+        case waveNoise
+        case hasWaveform
+        case oscillatorMSBRose
+        case noiseClockRose
         case rateCounter
+        case selectedRatePeriod
+        case oscillatorOutput
+        case waveformOutput
         case waveformDACOutput
         case waveformDACHoldCyclesRemaining
     }
@@ -1560,12 +1914,28 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
         accumulator = try Self.decodeOptionalInteger(forKey: .accumulator, in: container)
         shiftRegister = try Self.decodeOptionalInteger(forKey: .shiftRegister, in: container)
         envelopeLevel = try Self.decodeOptionalInteger(forKey: .envelopeLevel, in: container)
+        envelopeOutput = try Self.decodeOptionalInteger(forKey: .envelopeOutput, in: container)
+        sustainLevel = try Self.decodeOptionalInteger(forKey: .sustainLevel, in: container)
         envelopeState = try container.decodeIfPresent(String.self, forKey: .envelopeState)
         exponentialCounter = try Self.decodeOptionalInteger(forKey: .exponentialCounter, in: container)
         exponentialPeriod = try Self.decodeOptionalInteger(forKey: .exponentialPeriod, in: container)
         holdZero = try container.decodeIfPresent(Bool.self, forKey: .holdZero)
         gate = try container.decodeIfPresent(Bool.self, forKey: .gate)
+        controlGate = try container.decodeIfPresent(Bool.self, forKey: .controlGate)
+        sync = try container.decodeIfPresent(Bool.self, forKey: .sync)
+        ringMod = try container.decodeIfPresent(Bool.self, forKey: .ringMod)
+        testBit = try container.decodeIfPresent(Bool.self, forKey: .testBit)
+        waveTriangle = try container.decodeIfPresent(Bool.self, forKey: .waveTriangle)
+        waveSawtooth = try container.decodeIfPresent(Bool.self, forKey: .waveSawtooth)
+        wavePulse = try container.decodeIfPresent(Bool.self, forKey: .wavePulse)
+        waveNoise = try container.decodeIfPresent(Bool.self, forKey: .waveNoise)
+        hasWaveform = try container.decodeIfPresent(Bool.self, forKey: .hasWaveform)
+        oscillatorMSBRose = try container.decodeIfPresent(Bool.self, forKey: .oscillatorMSBRose)
+        noiseClockRose = try container.decodeIfPresent(Bool.self, forKey: .noiseClockRose)
         rateCounter = try Self.decodeOptionalInteger(forKey: .rateCounter, in: container)
+        selectedRatePeriod = try Self.decodeOptionalInteger(forKey: .selectedRatePeriod, in: container)
+        oscillatorOutput = try Self.decodeOptionalInteger(forKey: .oscillatorOutput, in: container)
+        waveformOutput = try Self.decodeOptionalInteger(forKey: .waveformOutput, in: container)
         waveformDACOutput = try Self.decodeOptionalInteger(forKey: .waveformDACOutput, in: container)
         waveformDACHoldCyclesRemaining = try Self.decodeOptionalInteger(forKey: .waveformDACHoldCyclesRemaining, in: container)
 
@@ -1578,9 +1948,14 @@ public struct CompatibilitySIDVoiceState: Decodable, Equatable {
         try Self.validateOptional(accumulator, forKey: .accumulator, in: container, range: 0...0xFFFFFF)
         try Self.validateOptional(shiftRegister, forKey: .shiftRegister, in: container, range: 0...0x7FFFFF)
         try Self.validateOptional(envelopeLevel, forKey: .envelopeLevel, in: container, range: 0...0xFF)
+        try Self.validateOptional(envelopeOutput, forKey: .envelopeOutput, in: container, range: 0...0xFF)
+        try Self.validateOptional(sustainLevel, forKey: .sustainLevel, in: container, range: 0...0xFF)
         try Self.validateOptional(exponentialCounter, forKey: .exponentialCounter, in: container, range: 0...0xFFFF)
         try Self.validateOptional(exponentialPeriod, forKey: .exponentialPeriod, in: container, range: 0...0xFFFF)
         try Self.validateOptional(rateCounter, forKey: .rateCounter, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(selectedRatePeriod, forKey: .selectedRatePeriod, in: container, range: 0...0xFFFF)
+        try Self.validateOptional(oscillatorOutput, forKey: .oscillatorOutput, in: container, range: 0...0x0FFF)
+        try Self.validateOptional(waveformOutput, forKey: .waveformOutput, in: container, range: Int(Int16.min)...Int(Int16.max))
         try Self.validateOptional(waveformDACOutput, forKey: .waveformDACOutput, in: container, range: 0...0x0FFF)
         try Self.validateOptional(waveformDACHoldCyclesRemaining, forKey: .waveformDACHoldCyclesRemaining, in: container, range: 0...Int.max)
     }

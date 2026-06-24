@@ -791,6 +791,15 @@ final class LocalDiskMatrixTests: XCTestCase {
         tapeC64.sid.audioAccumulator = 12.5
         tapeC64.sid.audioAccumulatorCount = 2
         tapeC64.sid.audioOutputState = 34.5
+        tapeC64.sid.lastDirectOutput = -1024
+        tapeC64.sid.lastFilterInput = 2048
+        tapeC64.sid.lastFilterOutput = 512
+        tapeC64.sid.lastMixedOutput = 1536
+        tapeC64.sid.setExternalAudioInput(12_000)
+        tapeC64.sid.writeRegister(0x15, value: 0x07)
+        tapeC64.sid.writeRegister(0x16, value: 0xFF)
+        tapeC64.sid.writeRegister(0x17, value: 0xF0)
+        tapeC64.sid.writeRegister(0x18, value: 0x8F)
         tapeC64.sid.filterLow = 1.25
         tapeC64.sid.filterBand = -2.5
         tapeC64.sid.filterHigh = 3.75
@@ -810,6 +819,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         tapeC64.sid.voices[0].rateCounter = 456
         tapeC64.sid.voices[0].waveformDACOutput = 0x0FED
         tapeC64.sid.voices[0].waveformDACHoldCyclesRemaining = 64
+        tapeC64.sid.voices[2].control = 0x20
+        tapeC64.sid.voices[2].accumulator = 0xAB_CDEF
+        tapeC64.sid.voices[2].envelopeLevel = 0x7F
+        tapeC64.sid.sampleVoice3Readbacks()
         XCTAssertTrue(tapeC64.mountTape(makeTinyTAP(pulses: [0x01, 0x02]), fileName: "loader.tap"))
         XCTAssertTrue(tapeC64.mountDisk(makeResultLogD64WithErrorTable(), fileName: "result-log.d64"))
         writeScreenText("READY.", into: tapeC64, row: 4, column: 2)
@@ -842,6 +855,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""finalSIDAudioSignature":"#))
         XCTAssertTrue(log.contains(#""finalSIDAudioState":"#))
         XCTAssertTrue(log.contains(#""finalSIDRegisterSnapshot":"#))
+        XCTAssertTrue(log.contains(#""finalSIDReadableRegisterSnapshot":"#))
         XCTAssertTrue(log.contains(#""finalSIDVoiceStates":"#))
         XCTAssertTrue(log.contains(#""finalScreenText":"#))
         XCTAssertTrue(log.contains(#""screenRAMHash":"#))
@@ -891,9 +905,45 @@ final class LocalDiskMatrixTests: XCTestCase {
         )))
         XCTAssertEqual(records.last?.finalSIDAudioState, SIDAudioStateRecord(SID.AudioDebugState(
             accuracyMode: .compatibility,
+            sampleCycleCounter: 0,
+            cyclesPerSample: tapeC64.sid.cyclesPerSample,
             audioAccumulator: 12.5,
             audioAccumulatorCount: 2,
             audioOutputState: 34.5,
+            directOutput: -1024,
+            filterInput: 2048,
+            filterOutput: 512,
+            mixedOutput: 1536,
+            externalAudioInput: 12_000,
+            externalAudioPathInput: 13_440,
+            filterCutoff: 0x07FF,
+            filterResonance: 0x0F,
+            filterControl: 0,
+            volumeFilter: 0x8F,
+            volume: 0x0F,
+            normalizedFilterCutoffValue: 0x07FF,
+            normalizedFilterCutoff: 0.183,
+            filterDamping: 0.775,
+            voice1FilterEnabled: false,
+            voice2FilterEnabled: false,
+            voice3FilterEnabled: false,
+            externalInputFiltered: false,
+            filterLowPassEnabled: false,
+            filterBandPassEnabled: false,
+            filterHighPassEnabled: false,
+            voice3Off: true,
+            dataBusLatch: 0x8F,
+            dataBusLatchCyclesRemaining: SID.dataBusLatchHoldCycles,
+            oscillator3Readback: 0xAB,
+            oscillator3ReadbackValid: true,
+            envelope3Readback: 0x7F,
+            envelope3ReadbackValid: true,
+            paddleX: 0xFF,
+            paddleY: 0xFF,
+            paddleTargetX: 0xFF,
+            paddleTargetY: 0xFF,
+            paddleScanActive: false,
+            paddleScanCounter: nil,
             filterLow: 1.25,
             filterBand: -2.5,
             filterHigh: 3.75,
@@ -902,6 +952,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalSIDRegisterSnapshot?.count, 0x20)
         XCTAssertEqual(records.last?.finalSIDRegisterSnapshot?[0x04], "21")
         XCTAssertEqual(records.last?.finalSIDRegisterSnapshot?[0x18], "8F")
+        XCTAssertEqual(records.last?.finalSIDReadableRegisterSnapshot?.count, 0x20)
+        XCTAssertEqual(records.last?.finalSIDReadableRegisterSnapshot?[0x18], "8F")
+        XCTAssertEqual(records.last?.finalSIDReadableRegisterSnapshot?[0x1B], "AB")
+        XCTAssertEqual(records.last?.finalSIDReadableRegisterSnapshot?[0x1C], "7F")
         XCTAssertEqual(records.last?.finalSIDVoiceStates?.count, 3)
         XCTAssertEqual(records.last?.finalSIDVoiceStates?.first, SIDVoiceStateRecord(SID.VoiceDebugState(
             frequency: 0x1234,
@@ -912,12 +966,28 @@ final class LocalDiskMatrixTests: XCTestCase {
             accumulator: 0xABCDEF,
             shiftRegister: 0x123456,
             envelopeLevel: 0x7F,
+            envelopeOutput: 0x86,
+            sustainLevel: 0xFF,
             envelopeState: "decay",
             exponentialCounter: 12,
             exponentialPeriod: 30,
             holdZero: true,
             gate: true,
+            controlGate: true,
+            sync: false,
+            ringMod: false,
+            testBit: false,
+            waveTriangle: false,
+            waveSawtooth: true,
+            wavePulse: false,
+            waveNoise: false,
+            hasWaveform: true,
+            oscillatorMSBRose: false,
+            noiseClockRose: false,
             rateCounter: 456,
+            selectedRatePeriod: SID.decayReleaseRates[0x0D],
+            oscillatorOutput: 0x0ABC,
+            waveformOutput: 5885,
             waveformDACOutput: 0x0FED,
             waveformDACHoldCyclesRemaining: 64
         )))
@@ -1002,6 +1072,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalSIDAudioSignature)
         XCTAssertNil(legacyRecord.finalSIDAudioState)
         XCTAssertNil(legacyRecord.finalSIDRegisterSnapshot)
+        XCTAssertNil(legacyRecord.finalSIDReadableRegisterSnapshot)
         XCTAssertNil(legacyRecord.finalSIDVoiceStates)
         XCTAssertNil(legacyRecord.finalHeadBitPosition)
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
@@ -1459,6 +1530,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         let c64 = C64()
         c64.sid.writeRegister(0x04, value: 0x21)
         c64.sid.writeRegister(0x18, value: 0x8F)
+        c64.sid.voices[2].control = 0x20
+        c64.sid.voices[2].accumulator = 0xA1_0000
+        c64.sid.oscillator3Readback = 0xA0
+        c64.sid.oscillator3ReadbackValid = true
         let milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/demo.prg"),
             mediaType: .prg,
@@ -1475,7 +1550,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             colorRAMSignatures: [],
             sidRegisters: [
                 CompatibilitySIDRegisterExpectation(register: 0x04, value: 0x21),
-                CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x0F, mask: 0x0F)
+                CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x0F, mask: 0x0F),
+                CompatibilitySIDRegisterExpectation(register: 0xD41B, value: 0xA1, readMode: .chip),
+                CompatibilitySIDRegisterExpectation(register: 0xD41B, value: 0xA1)
             ],
             screenRAMHash: nil,
             colorRAMHash: nil,
@@ -1490,6 +1567,8 @@ final class LocalDiskMatrixTests: XCTestCase {
     func testNamedMilestoneRequiresSIDRegisters() {
         let c64 = C64()
         c64.sid.writeRegister(0x18, value: 0x0F)
+        c64.sid.oscillator3Readback = 0xA0
+        c64.sid.oscillator3ReadbackValid = true
         let milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/demo.prg"),
             mediaType: .prg,
@@ -1504,7 +1583,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             mediaStatus: nil,
             ramSignatures: [],
             colorRAMSignatures: [],
-            sidRegisters: [CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x10, mask: 0x1F)],
+            sidRegisters: [
+                CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x10, mask: 0x1F),
+                CompatibilitySIDRegisterExpectation(register: 0xD41B, value: 0xA1, readMode: .chip)
+            ],
             screenRAMHash: nil,
             colorRAMHash: nil,
             screenshotName: nil
@@ -1513,8 +1595,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
-        XCTAssertTrue(result.reason.contains("SID $D418"))
+        XCTAssertEqual(result.category, .timeout)
+        XCTAssertTrue(result.reason.contains("SID debug $D418"))
+        XCTAssertTrue(result.reason.contains("SID chip $D41B"))
     }
 
     func testNamedMilestoneCanMatchSIDAudioSignature() {
@@ -1649,9 +1732,21 @@ final class LocalDiskMatrixTests: XCTestCase {
             colorRAMSignatures: [],
             sidAudioState: CompatibilitySIDAudioState(
                 accuracyMode: .compatibility,
+                sampleCycleCounter: 1,
+                cyclesPerSample: c64.sid.cyclesPerSample,
                 audioAccumulator: 12.5,
                 audioAccumulatorCount: 3,
                 audioOutputState: 34.5,
+                directOutput: 0,
+                filterInput: 0,
+                filterOutput: 0,
+                mixedOutput: 0,
+                externalAudioInput: 0,
+                externalAudioPathInput: 0,
+                oscillator3Readback: 0,
+                oscillator3ReadbackValid: true,
+                envelope3Readback: 0,
+                envelope3ReadbackValid: true,
                 filterLow: 1.25,
                 filterBand: -2.5,
                 filterHigh: 3.75,
@@ -1687,7 +1782,19 @@ final class LocalDiskMatrixTests: XCTestCase {
             colorRAMSignatures: [],
             sidAudioState: CompatibilitySIDAudioState(
                 accuracyMode: .fast,
+                sampleCycleCounter: 123,
+                cyclesPerSample: 1,
                 audioOutputState: 35.0,
+                directOutput: 1,
+                filterInput: 2,
+                filterOutput: 3,
+                mixedOutput: 4,
+                externalAudioInput: 5,
+                externalAudioPathInput: 6,
+                oscillator3Readback: 7,
+                oscillator3ReadbackValid: false,
+                envelope3Readback: 8,
+                envelope3ReadbackValid: false,
                 tolerance: 0.1
             ),
             screenRAMHash: nil,
@@ -1700,7 +1807,19 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.category, .audio)
         XCTAssertTrue(result.reason.contains("SID audio.state.accuracyMode"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.sampleCycleCounter"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.cyclesPerSample"))
         XCTAssertTrue(result.reason.contains("SID audio.state.audioOutputState"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.directOutput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.filterInput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.filterOutput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.mixedOutput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.externalAudioInput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.externalAudioPathInput"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.oscillator3Readback"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.oscillator3ReadbackValid"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.envelope3Readback"))
+        XCTAssertTrue(result.reason.contains("SID audio.state.envelope3ReadbackValid"))
     }
 
     func testNamedMilestoneCanMatchSIDVoiceState() {
@@ -1746,12 +1865,15 @@ final class LocalDiskMatrixTests: XCTestCase {
                     accumulator: 0xABE023,
                     shiftRegister: 0x123456,
                     envelopeLevel: 0x7F,
+                    envelopeOutput: 0x86,
+                    sustainLevel: 0xFF,
                     envelopeState: "decay",
                     exponentialCounter: 12,
                     exponentialPeriod: 30,
                     holdZero: true,
                     gate: true,
                     rateCounter: 457,
+                    selectedRatePeriod: Int(SID.decayReleaseRates[0x0D]),
                     waveformDACOutput: 0x0ABE,
                     waveformDACHoldCyclesRemaining: 128
                 )
@@ -1788,7 +1910,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 CompatibilitySIDVoiceState(
                     voice: 1,
                     frequency: 0x2345,
-                    envelopeState: "release"
+                    envelopeOutput: 1,
+                    envelopeState: "release",
+                    oscillatorOutput: 0x123,
+                    waveformOutput: 12
                 )
             ],
             screenRAMHash: nil,
@@ -1801,7 +1926,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.category, .audio)
         XCTAssertTrue(result.reason.contains("SID voice1.frequency"))
+        XCTAssertTrue(result.reason.contains("SID voice1.envelopeOutput"))
         XCTAssertTrue(result.reason.contains("SID voice1.envelopeState"))
+        XCTAssertTrue(result.reason.contains("SID voice1.oscillatorOutput"))
+        XCTAssertTrue(result.reason.contains("SID voice1.waveformOutput"))
     }
 
     func testNamedMilestoneAppliesSIDAccuracyMode() {
@@ -2618,10 +2746,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 return actual == expected
             }
             let cpuMatches = cpuRegisterMismatches(milestone.cpuRegisters, c64: c64).isEmpty
-            let sidMatches = milestone.sidRegisters.allSatisfy { expectation in
-                let actual = c64.sid.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
-                return (actual & expectation.mask) == (expectation.value & expectation.mask)
-            }
+            let sidMatches = sidRegisterMismatches(milestone.sidRegisters, sid: c64.sid).isEmpty
             let sidAudioMatches = milestone.sidAudioSignature.map {
                 sidAudioSignatureMismatches($0, sid: c64.sid).isEmpty
             } ?? true
@@ -3335,11 +3460,21 @@ final class LocalDiskMatrixTests: XCTestCase {
     ) -> [String] {
         expectations.compactMap { expectation in
             let register = UInt16(truncatingIfNeeded: expectation.register)
-            let actual = sid.debugRegisterValue(register)
+            let actual = sidRegisterValue(expectation, sid: sid)
             let maskedActual = actual & expectation.mask
             let maskedExpected = expectation.value & expectation.mask
             guard maskedActual != maskedExpected else { return nil }
-            return "SID $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
+            return "SID \(expectation.readMode.rawValue) $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
+        }
+    }
+
+    private func sidRegisterValue(_ expectation: CompatibilitySIDRegisterExpectation, sid: SID) -> UInt8 {
+        let register = UInt16(truncatingIfNeeded: expectation.register)
+        switch expectation.readMode {
+        case .debug:
+            return sid.debugRegisterValue(register)
+        case .chip:
+            return sid.peekReadableRegisterValue(register)
         }
     }
 
@@ -3394,6 +3529,14 @@ final class LocalDiskMatrixTests: XCTestCase {
            actual.accuracyMode != accuracyMode {
             mismatches.append("SID audio.state.accuracyMode \(actual.accuracyMode.rawValue) != \(accuracyMode.rawValue)")
         }
+        if let sampleCycleCounter = expectation.sampleCycleCounter,
+           abs(actual.sampleCycleCounter - sampleCycleCounter) > expectation.tolerance {
+            mismatches.append("SID audio.state.sampleCycleCounter \(formatDouble(actual.sampleCycleCounter)) != \(formatDouble(sampleCycleCounter)) tolerance \(formatDouble(expectation.tolerance))")
+        }
+        if let cyclesPerSample = expectation.cyclesPerSample,
+           abs(actual.cyclesPerSample - cyclesPerSample) > expectation.tolerance {
+            mismatches.append("SID audio.state.cyclesPerSample \(formatDouble(actual.cyclesPerSample)) != \(formatDouble(cyclesPerSample)) tolerance \(formatDouble(expectation.tolerance))")
+        }
         if let audioAccumulator = expectation.audioAccumulator,
            abs(actual.audioAccumulator - audioAccumulator) > expectation.tolerance {
             mismatches.append("SID audio.state.audioAccumulator \(formatDouble(actual.audioAccumulator)) != \(formatDouble(audioAccumulator)) tolerance \(formatDouble(expectation.tolerance))")
@@ -3405,6 +3548,110 @@ final class LocalDiskMatrixTests: XCTestCase {
         if let audioOutputState = expectation.audioOutputState,
            abs(actual.audioOutputState - audioOutputState) > expectation.tolerance {
             mismatches.append("SID audio.state.audioOutputState \(formatDouble(actual.audioOutputState)) != \(formatDouble(audioOutputState)) tolerance \(formatDouble(expectation.tolerance))")
+        }
+        if let directOutput = expectation.directOutput,
+           actual.directOutput != directOutput {
+            mismatches.append("SID audio.state.directOutput \(actual.directOutput) != \(directOutput)")
+        }
+        if let filterInput = expectation.filterInput,
+           actual.filterInput != filterInput {
+            mismatches.append("SID audio.state.filterInput \(actual.filterInput) != \(filterInput)")
+        }
+        if let filterOutput = expectation.filterOutput,
+           actual.filterOutput != filterOutput {
+            mismatches.append("SID audio.state.filterOutput \(actual.filterOutput) != \(filterOutput)")
+        }
+        if let mixedOutput = expectation.mixedOutput,
+           actual.mixedOutput != mixedOutput {
+            mismatches.append("SID audio.state.mixedOutput \(actual.mixedOutput) != \(mixedOutput)")
+        }
+        if let externalAudioInput = expectation.externalAudioInput,
+           actual.externalAudioInput != externalAudioInput {
+            mismatches.append("SID audio.state.externalAudioInput \(actual.externalAudioInput) != \(externalAudioInput)")
+        }
+        if let externalAudioPathInput = expectation.externalAudioPathInput,
+           actual.externalAudioPathInput != externalAudioPathInput {
+            mismatches.append("SID audio.state.externalAudioPathInput \(actual.externalAudioPathInput) != \(externalAudioPathInput)")
+        }
+        if let filterCutoff = expectation.filterCutoff,
+           Int(actual.filterCutoff) != filterCutoff {
+            mismatches.append("SID audio.state.filterCutoff $\(hex(Int(actual.filterCutoff), width: 4)) != $\(hex(filterCutoff, width: 4))")
+        }
+        if let filterResonance = expectation.filterResonance,
+           Int(actual.filterResonance) != filterResonance {
+            mismatches.append("SID audio.state.filterResonance $\(hex(Int(actual.filterResonance), width: 1)) != $\(hex(filterResonance, width: 1))")
+        }
+        if let filterControl = expectation.filterControl,
+           Int(actual.filterControl) != filterControl {
+            mismatches.append("SID audio.state.filterControl $\(hex(Int(actual.filterControl), width: 1)) != $\(hex(filterControl, width: 1))")
+        }
+        if let volumeFilter = expectation.volumeFilter,
+           Int(actual.volumeFilter) != volumeFilter {
+            mismatches.append("SID audio.state.volumeFilter $\(hex(Int(actual.volumeFilter), width: 2)) != $\(hex(volumeFilter, width: 2))")
+        }
+        if let volume = expectation.volume,
+           Int(actual.volume) != volume {
+            mismatches.append("SID audio.state.volume $\(hex(Int(actual.volume), width: 1)) != $\(hex(volume, width: 1))")
+        }
+        if let normalizedFilterCutoffValue = expectation.normalizedFilterCutoffValue,
+           Int(actual.normalizedFilterCutoffValue) != normalizedFilterCutoffValue {
+            mismatches.append("SID audio.state.normalizedFilterCutoffValue $\(hex(Int(actual.normalizedFilterCutoffValue), width: 3)) != $\(hex(normalizedFilterCutoffValue, width: 3))")
+        }
+        if let normalizedFilterCutoff = expectation.normalizedFilterCutoff,
+           abs(actual.normalizedFilterCutoff - normalizedFilterCutoff) > expectation.tolerance {
+            mismatches.append("SID audio.state.normalizedFilterCutoff \(formatDouble(actual.normalizedFilterCutoff)) != \(formatDouble(normalizedFilterCutoff)) tolerance \(formatDouble(expectation.tolerance))")
+        }
+        if let filterDamping = expectation.filterDamping,
+           abs(actual.filterDamping - filterDamping) > expectation.tolerance {
+            mismatches.append("SID audio.state.filterDamping \(formatDouble(actual.filterDamping)) != \(formatDouble(filterDamping)) tolerance \(formatDouble(expectation.tolerance))")
+        }
+        appendSIDAudioBoolMismatch(&mismatches, field: "voice1FilterEnabled", actual: actual.voice1FilterEnabled, expected: expectation.voice1FilterEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "voice2FilterEnabled", actual: actual.voice2FilterEnabled, expected: expectation.voice2FilterEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "voice3FilterEnabled", actual: actual.voice3FilterEnabled, expected: expectation.voice3FilterEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "externalInputFiltered", actual: actual.externalInputFiltered, expected: expectation.externalInputFiltered)
+        appendSIDAudioBoolMismatch(&mismatches, field: "filterLowPassEnabled", actual: actual.filterLowPassEnabled, expected: expectation.filterLowPassEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "filterBandPassEnabled", actual: actual.filterBandPassEnabled, expected: expectation.filterBandPassEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "filterHighPassEnabled", actual: actual.filterHighPassEnabled, expected: expectation.filterHighPassEnabled)
+        appendSIDAudioBoolMismatch(&mismatches, field: "voice3Off", actual: actual.voice3Off, expected: expectation.voice3Off)
+        if let dataBusLatch = expectation.dataBusLatch,
+           Int(actual.dataBusLatch) != dataBusLatch {
+            mismatches.append("SID audio.state.dataBusLatch $\(hex(Int(actual.dataBusLatch), width: 2)) != $\(hex(dataBusLatch, width: 2))")
+        }
+        if let dataBusLatchCyclesRemaining = expectation.dataBusLatchCyclesRemaining,
+           actual.dataBusLatchCyclesRemaining != dataBusLatchCyclesRemaining {
+            mismatches.append("SID audio.state.dataBusLatchCyclesRemaining \(actual.dataBusLatchCyclesRemaining) != \(dataBusLatchCyclesRemaining)")
+        }
+        if let oscillator3Readback = expectation.oscillator3Readback,
+           Int(actual.oscillator3Readback) != oscillator3Readback {
+            mismatches.append("SID audio.state.oscillator3Readback $\(hex(Int(actual.oscillator3Readback), width: 2)) != $\(hex(oscillator3Readback, width: 2))")
+        }
+        appendSIDAudioBoolMismatch(&mismatches, field: "oscillator3ReadbackValid", actual: actual.oscillator3ReadbackValid, expected: expectation.oscillator3ReadbackValid)
+        if let envelope3Readback = expectation.envelope3Readback,
+           Int(actual.envelope3Readback) != envelope3Readback {
+            mismatches.append("SID audio.state.envelope3Readback $\(hex(Int(actual.envelope3Readback), width: 2)) != $\(hex(envelope3Readback, width: 2))")
+        }
+        appendSIDAudioBoolMismatch(&mismatches, field: "envelope3ReadbackValid", actual: actual.envelope3ReadbackValid, expected: expectation.envelope3ReadbackValid)
+        if let paddleX = expectation.paddleX,
+           Int(actual.paddleX) != paddleX {
+            mismatches.append("SID audio.state.paddleX $\(hex(Int(actual.paddleX), width: 2)) != $\(hex(paddleX, width: 2))")
+        }
+        if let paddleY = expectation.paddleY,
+           Int(actual.paddleY) != paddleY {
+            mismatches.append("SID audio.state.paddleY $\(hex(Int(actual.paddleY), width: 2)) != $\(hex(paddleY, width: 2))")
+        }
+        if let paddleTargetX = expectation.paddleTargetX,
+           Int(actual.paddleTargetX) != paddleTargetX {
+            mismatches.append("SID audio.state.paddleTargetX $\(hex(Int(actual.paddleTargetX), width: 2)) != $\(hex(paddleTargetX, width: 2))")
+        }
+        if let paddleTargetY = expectation.paddleTargetY,
+           Int(actual.paddleTargetY) != paddleTargetY {
+            mismatches.append("SID audio.state.paddleTargetY $\(hex(Int(actual.paddleTargetY), width: 2)) != $\(hex(paddleTargetY, width: 2))")
+        }
+        appendSIDAudioBoolMismatch(&mismatches, field: "paddleScanActive", actual: actual.paddleScanActive, expected: expectation.paddleScanActive)
+        if let paddleScanCounter = expectation.paddleScanCounter,
+           actual.paddleScanCounter != paddleScanCounter {
+            let actualCounter = actual.paddleScanCounter.map { "\($0)" } ?? "nil"
+            mismatches.append("SID audio.state.paddleScanCounter \(actualCounter) != \(paddleScanCounter)")
         }
         if let filterLow = expectation.filterLow,
            abs(actual.filterLow - filterLow) > expectation.tolerance {
@@ -3424,6 +3671,16 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         return mismatches
+    }
+
+    private func appendSIDAudioBoolMismatch(
+        _ mismatches: inout [String],
+        field: String,
+        actual: Bool,
+        expected: Bool?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("SID audio.state.\(field) \(actual) != \(expected)")
     }
 
     private func sidVoiceStateMismatches(
@@ -3447,12 +3704,28 @@ final class LocalDiskMatrixTests: XCTestCase {
             appendSIDVoiceMismatch(&mismatches, label: label, field: "accumulator", actual: Int(voice.accumulator), expected: expectation.accumulator, width: 6)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "shiftRegister", actual: Int(voice.shiftRegister), expected: expectation.shiftRegister, width: 6)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "envelopeLevel", actual: Int(voice.envelopeLevel), expected: expectation.envelopeLevel, width: 2)
+            appendSIDVoiceMismatch(&mismatches, label: label, field: "envelopeOutput", actual: Int(voice.envelopeOutput), expected: expectation.envelopeOutput, width: 2)
+            appendSIDVoiceMismatch(&mismatches, label: label, field: "sustainLevel", actual: Int(voice.sustainLevel), expected: expectation.sustainLevel, width: 2)
             appendSIDVoiceStringMismatch(&mismatches, label: label, field: "envelopeState", actual: voice.envelopeState, expected: expectation.envelopeState)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "exponentialCounter", actual: Int(voice.exponentialCounter), expected: expectation.exponentialCounter)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "exponentialPeriod", actual: Int(voice.exponentialPeriod), expected: expectation.exponentialPeriod)
             appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "holdZero", actual: voice.holdZero, expected: expectation.holdZero)
             appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "gate", actual: voice.gate, expected: expectation.gate)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "controlGate", actual: voice.controlGate, expected: expectation.controlGate)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "sync", actual: voice.sync, expected: expectation.sync)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "ringMod", actual: voice.ringMod, expected: expectation.ringMod)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "testBit", actual: voice.testBit, expected: expectation.testBit)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "waveTriangle", actual: voice.waveTriangle, expected: expectation.waveTriangle)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "waveSawtooth", actual: voice.waveSawtooth, expected: expectation.waveSawtooth)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "wavePulse", actual: voice.wavePulse, expected: expectation.wavePulse)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "waveNoise", actual: voice.waveNoise, expected: expectation.waveNoise)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "hasWaveform", actual: voice.hasWaveform, expected: expectation.hasWaveform)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "oscillatorMSBRose", actual: voice.oscillatorMSBRose, expected: expectation.oscillatorMSBRose)
+            appendSIDVoiceBoolMismatch(&mismatches, label: label, field: "noiseClockRose", actual: voice.noiseClockRose, expected: expectation.noiseClockRose)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "rateCounter", actual: Int(voice.rateCounter), expected: expectation.rateCounter)
+            appendSIDVoiceMismatch(&mismatches, label: label, field: "selectedRatePeriod", actual: Int(voice.selectedRatePeriod), expected: expectation.selectedRatePeriod)
+            appendSIDVoiceMismatch(&mismatches, label: label, field: "oscillatorOutput", actual: Int(voice.oscillatorOutput), expected: expectation.oscillatorOutput, width: 3)
+            appendSIDVoiceMismatch(&mismatches, label: label, field: "waveformOutput", actual: Int(voice.waveformOutput), expected: expectation.waveformOutput)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "waveformDACOutput", actual: Int(voice.waveformDACOutput), expected: expectation.waveformDACOutput, width: 3)
             appendSIDVoiceMismatch(&mismatches, label: label, field: "waveformDACHoldCyclesRemaining", actual: voice.waveformDACHoldCyclesRemaining, expected: expectation.waveformDACHoldCyclesRemaining)
 
@@ -3876,6 +4149,7 @@ private struct MatrixRunResult {
             ),
             finalSIDAudioState: SIDAudioStateRecord(c64.sid.debugAudioState()),
             finalSIDRegisterSnapshot: c64.sid.debugRegisterSnapshot().map(hex8),
+            finalSIDReadableRegisterSnapshot: c64.sid.readableRegisterSnapshot().map(hex8),
             finalSIDVoiceStates: c64.sid.debugVoiceStates().map(SIDVoiceStateRecord.init),
             finalDrivePC: hex16(drive.cpuPC),
             finalTrack: drive.track,
@@ -4375,7 +4649,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 24
+    static let currentFormatVersion = 25
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -4415,6 +4689,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalSIDAudioSignature: SIDAudioSignatureRecord?
     let finalSIDAudioState: SIDAudioStateRecord?
     let finalSIDRegisterSnapshot: [String]?
+    let finalSIDReadableRegisterSnapshot: [String]?
     let finalSIDVoiceStates: [SIDVoiceStateRecord]?
     let finalDrivePC: String?
     let finalTrack: Int?
@@ -4516,6 +4791,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalSIDAudioSignature: SIDAudioSignatureRecord? = nil,
         finalSIDAudioState: SIDAudioStateRecord? = nil,
         finalSIDRegisterSnapshot: [String]? = nil,
+        finalSIDReadableRegisterSnapshot: [String]? = nil,
         finalSIDVoiceStates: [SIDVoiceStateRecord]? = nil,
         finalDrivePC: String? = nil,
         finalTrack: Int? = nil,
@@ -4616,6 +4892,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalSIDAudioSignature = finalSIDAudioSignature
         self.finalSIDAudioState = finalSIDAudioState
         self.finalSIDRegisterSnapshot = finalSIDRegisterSnapshot
+        self.finalSIDReadableRegisterSnapshot = finalSIDReadableRegisterSnapshot
         self.finalSIDVoiceStates = finalSIDVoiceStates
         self.finalDrivePC = finalDrivePC
         self.finalTrack = finalTrack
@@ -4960,9 +5237,45 @@ private struct SIDAudioSignatureRecord: Codable, Equatable {
 
 private struct SIDAudioStateRecord: Codable, Equatable {
     let accuracyMode: String
+    let sampleCycleCounter: Double
+    let cyclesPerSample: Double
     let audioAccumulator: Double
     let audioAccumulatorCount: Int
     let audioOutputState: Double
+    let directOutput: Int32
+    let filterInput: Int32
+    let filterOutput: Int32
+    let mixedOutput: Int32
+    let externalAudioInput: Int32
+    let externalAudioPathInput: Int32
+    let filterCutoff: String
+    let filterResonance: String
+    let filterControl: String
+    let volumeFilter: String
+    let volume: String
+    let normalizedFilterCutoffValue: String
+    let normalizedFilterCutoff: Double
+    let filterDamping: Double
+    let voice1FilterEnabled: Bool
+    let voice2FilterEnabled: Bool
+    let voice3FilterEnabled: Bool
+    let externalInputFiltered: Bool
+    let filterLowPassEnabled: Bool
+    let filterBandPassEnabled: Bool
+    let filterHighPassEnabled: Bool
+    let voice3Off: Bool
+    let dataBusLatch: String
+    let dataBusLatchCyclesRemaining: Int
+    let oscillator3Readback: String
+    let oscillator3ReadbackValid: Bool
+    let envelope3Readback: String
+    let envelope3ReadbackValid: Bool
+    let paddleX: String
+    let paddleY: String
+    let paddleTargetX: String
+    let paddleTargetY: String
+    let paddleScanActive: Bool
+    let paddleScanCounter: Int?
     let filterLow: Double
     let filterBand: Double
     let filterHigh: Double
@@ -4970,9 +5283,45 @@ private struct SIDAudioStateRecord: Codable, Equatable {
 
     init(_ state: SID.AudioDebugState) {
         accuracyMode = state.accuracyMode.rawValue
+        sampleCycleCounter = state.sampleCycleCounter
+        cyclesPerSample = state.cyclesPerSample
         audioAccumulator = state.audioAccumulator
         audioAccumulatorCount = state.audioAccumulatorCount
         audioOutputState = state.audioOutputState
+        directOutput = state.directOutput
+        filterInput = state.filterInput
+        filterOutput = state.filterOutput
+        mixedOutput = state.mixedOutput
+        externalAudioInput = state.externalAudioInput
+        externalAudioPathInput = state.externalAudioPathInput
+        filterCutoff = String(format: "%04X", state.filterCutoff)
+        filterResonance = String(format: "%01X", state.filterResonance)
+        filterControl = String(format: "%01X", state.filterControl)
+        volumeFilter = String(format: "%02X", state.volumeFilter)
+        volume = String(format: "%01X", state.volume)
+        normalizedFilterCutoffValue = String(format: "%03X", state.normalizedFilterCutoffValue)
+        normalizedFilterCutoff = state.normalizedFilterCutoff
+        filterDamping = state.filterDamping
+        voice1FilterEnabled = state.voice1FilterEnabled
+        voice2FilterEnabled = state.voice2FilterEnabled
+        voice3FilterEnabled = state.voice3FilterEnabled
+        externalInputFiltered = state.externalInputFiltered
+        filterLowPassEnabled = state.filterLowPassEnabled
+        filterBandPassEnabled = state.filterBandPassEnabled
+        filterHighPassEnabled = state.filterHighPassEnabled
+        voice3Off = state.voice3Off
+        dataBusLatch = String(format: "%02X", state.dataBusLatch)
+        dataBusLatchCyclesRemaining = state.dataBusLatchCyclesRemaining
+        oscillator3Readback = String(format: "%02X", state.oscillator3Readback)
+        oscillator3ReadbackValid = state.oscillator3ReadbackValid
+        envelope3Readback = String(format: "%02X", state.envelope3Readback)
+        envelope3ReadbackValid = state.envelope3ReadbackValid
+        paddleX = String(format: "%02X", state.paddleX)
+        paddleY = String(format: "%02X", state.paddleY)
+        paddleTargetX = String(format: "%02X", state.paddleTargetX)
+        paddleTargetY = String(format: "%02X", state.paddleTargetY)
+        paddleScanActive = state.paddleScanActive
+        paddleScanCounter = state.paddleScanCounter
         filterLow = state.filterLow
         filterBand = state.filterBand
         filterHigh = state.filterHigh
@@ -4989,12 +5338,28 @@ private struct SIDVoiceStateRecord: Codable, Equatable {
     let accumulator: String
     let shiftRegister: String
     let envelopeLevel: String
+    let envelopeOutput: String
+    let sustainLevel: String
     let envelopeState: String
     let exponentialCounter: UInt16
     let exponentialPeriod: UInt16
     let holdZero: Bool
     let gate: Bool
+    let controlGate: Bool
+    let sync: Bool
+    let ringMod: Bool
+    let testBit: Bool
+    let waveTriangle: Bool
+    let waveSawtooth: Bool
+    let wavePulse: Bool
+    let waveNoise: Bool
+    let hasWaveform: Bool
+    let oscillatorMSBRose: Bool
+    let noiseClockRose: Bool
     let rateCounter: UInt16
+    let selectedRatePeriod: UInt16
+    let oscillatorOutput: String
+    let waveformOutput: Int16
     let waveformDACOutput: String
     let waveformDACHoldCyclesRemaining: Int
 
@@ -5007,12 +5372,28 @@ private struct SIDVoiceStateRecord: Codable, Equatable {
         accumulator = String(format: "%06X", state.accumulator)
         shiftRegister = String(format: "%06X", state.shiftRegister)
         envelopeLevel = String(format: "%02X", state.envelopeLevel)
+        envelopeOutput = String(format: "%02X", state.envelopeOutput)
+        sustainLevel = String(format: "%02X", state.sustainLevel)
         envelopeState = state.envelopeState
         exponentialCounter = state.exponentialCounter
         exponentialPeriod = state.exponentialPeriod
         holdZero = state.holdZero
         gate = state.gate
+        controlGate = state.controlGate
+        sync = state.sync
+        ringMod = state.ringMod
+        testBit = state.testBit
+        waveTriangle = state.waveTriangle
+        waveSawtooth = state.waveSawtooth
+        wavePulse = state.wavePulse
+        waveNoise = state.waveNoise
+        hasWaveform = state.hasWaveform
+        oscillatorMSBRose = state.oscillatorMSBRose
+        noiseClockRose = state.noiseClockRose
         rateCounter = state.rateCounter
+        selectedRatePeriod = state.selectedRatePeriod
+        oscillatorOutput = String(format: "%03X", state.oscillatorOutput)
+        waveformOutput = state.waveformOutput
         waveformDACOutput = String(format: "%03X", state.waveformDACOutput)
         waveformDACHoldCyclesRemaining = state.waveformDACHoldCyclesRemaining
     }

@@ -152,6 +152,7 @@ public final class C64 {
         cpu = CPU6502(bus: memory)
         vic = VIC()
         sid = SID()
+        sid.continuousPaddleScanEnabled = true
         cia1 = CIA(isCIA1: true)
         cia2 = CIA(isCIA1: false)
         keyboard = Keyboard()
@@ -479,7 +480,7 @@ public final class C64 {
         // Also load into the 1541's GCR disk for true drive emulation.
         lowLevelResult = drive1541.insertDisk(data, format: format)
         if lowLevelResult {
-            drive1541.setWriteProtected(highLevelResult ? diskDrive.isWriteProtected : format != .d64)
+            drive1541.setWriteProtected(highLevelResult ? diskDrive.isWriteProtected : drive1541.disk.writeProtected)
         }
 
         if highLevelResult && !lowLevelResult {

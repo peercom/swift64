@@ -130,7 +130,8 @@ final class CompatibilityManifestTests: XCTestCase {
               "sidAccuracyMode": "compatibility",
               "sidRegisters": [
                 { "register": "$D418", "value": "$0f" },
-                { "register": 54276, "value": 33, "mask": "$f1" }
+                { "register": 54276, "value": 33, "mask": "$f1" },
+                { "register": "$D41B", "value": "$a0", "readMode": "chip" }
               ],
               "sidAudioSignature": {
                 "sampleCount": 128,
@@ -145,10 +146,46 @@ final class CompatibilityManifestTests: XCTestCase {
               },
               "sidAudioState": {
                 "accuracyMode": "compatibility",
+                "sampleCycleCounter": 3.5,
+                "cyclesPerSample": 22.34,
                 "audioAccumulator": 12.5,
                 "audioAccumulatorCount": 2,
                 "audioOutputState": 34.5,
-                "filterLow": 1.25,
+                "directOutput": -1024,
+                "filterInput": 2048,
+                "filterOutput": 512,
+                "mixedOutput": 1536,
+                "externalAudioInput": 12000,
+                "externalAudioPathInput": 13440,
+                "filterCutoff": "$07ff",
+                "filterResonance": "$f",
+                "filterControl": "$8",
+                "volumeFilter": "$9f",
+                "volume": "$f",
+                "normalizedFilterCutoffValue": "$7ff",
+                "normalizedFilterCutoff": 0.284,
+                "filterDamping": 0.275,
+                "voice1FilterEnabled": false,
+                "voice2FilterEnabled": false,
+                "voice3FilterEnabled": false,
+                "externalInputFiltered": true,
+                "filterLowPassEnabled": true,
+                "filterBandPassEnabled": false,
+              "filterHighPassEnabled": false,
+              "voice3Off": true,
+              "dataBusLatch": "$a5",
+              "dataBusLatchCyclesRemaining": 7,
+              "oscillator3Readback": "$a0",
+              "oscillator3ReadbackValid": true,
+              "envelope3Readback": "$5a",
+              "envelope3ReadbackValid": true,
+              "paddleX": "$20",
+              "paddleY": "$40",
+              "paddleTargetX": "$40",
+              "paddleTargetY": "$c0",
+              "paddleScanActive": true,
+              "paddleScanCounter": 128,
+              "filterLow": 1.25,
                 "filterBand": -2.5,
                 "filterHigh": 3.75,
                 "sampleWritePosition": 4,
@@ -165,12 +202,28 @@ final class CompatibilityManifestTests: XCTestCase {
                   "accumulator": "$abcdef",
                   "shiftRegister": "$123456",
                   "envelopeLevel": "$7f",
+                  "envelopeOutput": "$86",
+                  "sustainLevel": "$ff",
                   "envelopeState": "decay",
                   "exponentialCounter": 12,
                   "exponentialPeriod": 30,
                   "holdZero": true,
                   "gate": true,
+                  "controlGate": true,
+                  "sync": false,
+                  "ringMod": false,
+                  "testBit": false,
+                  "waveTriangle": false,
+                  "waveSawtooth": true,
+                  "wavePulse": false,
+                  "waveNoise": false,
+                  "hasWaveform": true,
+                  "oscillatorMSBRose": false,
+                  "noiseClockRose": false,
                   "rateCounter": 456,
+                  "selectedRatePeriod": 11720,
+                  "oscillatorOutput": "$0abc",
+                  "waveformOutput": 5885,
                   "waveformDACOutput": "$0fed",
                   "waveformDACHoldCyclesRemaining": 64
                 }
@@ -316,7 +369,8 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.sidAccuracyMode, .compatibility)
         XCTAssertEqual(milestone.sidRegisters, [
             CompatibilitySIDRegisterExpectation(register: 0xD418, value: 0x0F),
-            CompatibilitySIDRegisterExpectation(register: 0xD404, value: 0x21, mask: 0xF1)
+            CompatibilitySIDRegisterExpectation(register: 0xD404, value: 0x21, mask: 0xF1),
+            CompatibilitySIDRegisterExpectation(register: 0xD41B, value: 0xA0, readMode: .chip)
         ])
         XCTAssertEqual(milestone.sidAudioSignature, CompatibilitySIDAudioSignature(
             sampleCount: 128,
@@ -331,9 +385,45 @@ final class CompatibilityManifestTests: XCTestCase {
         ))
         XCTAssertEqual(milestone.sidAudioState, CompatibilitySIDAudioState(
             accuracyMode: .compatibility,
+            sampleCycleCounter: 3.5,
+            cyclesPerSample: 22.34,
             audioAccumulator: 12.5,
             audioAccumulatorCount: 2,
             audioOutputState: 34.5,
+            directOutput: -1024,
+            filterInput: 2048,
+            filterOutput: 512,
+            mixedOutput: 1536,
+            externalAudioInput: 12_000,
+            externalAudioPathInput: 13_440,
+            filterCutoff: 0x07FF,
+            filterResonance: 0x0F,
+            filterControl: 0x08,
+            volumeFilter: 0x9F,
+            volume: 0x0F,
+            normalizedFilterCutoffValue: 0x07FF,
+            normalizedFilterCutoff: 0.284,
+            filterDamping: 0.275,
+            voice1FilterEnabled: false,
+            voice2FilterEnabled: false,
+            voice3FilterEnabled: false,
+            externalInputFiltered: true,
+            filterLowPassEnabled: true,
+            filterBandPassEnabled: false,
+            filterHighPassEnabled: false,
+            voice3Off: true,
+            dataBusLatch: 0xA5,
+            dataBusLatchCyclesRemaining: 7,
+            oscillator3Readback: 0xA0,
+            oscillator3ReadbackValid: true,
+            envelope3Readback: 0x5A,
+            envelope3ReadbackValid: true,
+            paddleX: 0x20,
+            paddleY: 0x40,
+            paddleTargetX: 0x40,
+            paddleTargetY: 0xC0,
+            paddleScanActive: true,
+            paddleScanCounter: 128,
             filterLow: 1.25,
             filterBand: -2.5,
             filterHigh: 3.75,
@@ -351,12 +441,28 @@ final class CompatibilityManifestTests: XCTestCase {
                 accumulator: 0xABCDEF,
                 shiftRegister: 0x123456,
                 envelopeLevel: 0x7F,
+                envelopeOutput: 0x86,
+                sustainLevel: 0xFF,
                 envelopeState: "decay",
                 exponentialCounter: 12,
                 exponentialPeriod: 30,
                 holdZero: true,
                 gate: true,
+                controlGate: true,
+                sync: false,
+                ringMod: false,
+                testBit: false,
+                waveTriangle: false,
+                waveSawtooth: true,
+                wavePulse: false,
+                waveNoise: false,
+                hasWaveform: true,
+                oscillatorMSBRose: false,
+                noiseClockRose: false,
                 rateCounter: 456,
+                selectedRatePeriod: 11720,
+                oscillatorOutput: 0x0ABC,
+                waveformOutput: 5885,
                 waveformDACOutput: 0x0FED,
                 waveformDACHoldCyclesRemaining: 64
             )
@@ -710,6 +816,71 @@ final class CompatibilityManifestTests: XCTestCase {
         }
     }
 
+    func testManifestRejectsInvalidSIDRegisterReadMode() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "demo.prg",
+              "sidRegisters": [
+                { "register": "$D41B", "value": "$a0", "readMode": "live" }
+              ]
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+            "Expected invalid SID register read mode to be rejected"
+        )
+    }
+
+    func testManifestRejectsInvalidSIDAudioState() {
+        let invalidStates = [
+            #""sampleCycleCounter": -0.1"#,
+            #""cyclesPerSample": 0"#,
+            #""externalAudioInput": 2147483648"#,
+            #""externalAudioPathInput": -2147483649"#,
+            #""filterCutoff": "$10000""#,
+            #""filterResonance": "$10""#,
+            #""filterControl": "$10""#,
+            #""volumeFilter": "$100""#,
+            #""volume": "$10""#,
+            #""normalizedFilterCutoffValue": "$0800""#,
+            #""dataBusLatch": "$100""#,
+            #""dataBusLatchCyclesRemaining": -1"#,
+            #""oscillator3Readback": "$100""#,
+            #""envelope3Readback": "$100""#,
+            #""paddleX": "$100""#,
+            #""paddleY": "$100""#,
+            #""paddleTargetX": "$100""#,
+            #""paddleTargetY": "$100""#,
+            #""paddleScanCounter": -1"#,
+            #""audioAccumulatorCount": -1"#,
+            #""sampleWritePosition": -1"#,
+            #""tolerance": -0.1"#
+        ]
+
+        for state in invalidStates {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "demo.prg",
+                  "sidAudioState": { \(state) }
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected invalid SID audio state to be rejected: \(state)"
+            )
+        }
+    }
+
     func testManifestRejectsInvalidSIDVoiceState() {
         let invalidVoiceStates = [
             #""voice": -1"#,
@@ -719,6 +890,12 @@ final class CompatibilityManifestTests: XCTestCase {
             #""voice": 0, "control": "$100""#,
             #""voice": 0, "accumulator": "$1000000""#,
             #""voice": 0, "shiftRegister": "$800000""#,
+            #""voice": 0, "envelopeOutput": "$100""#,
+            #""voice": 0, "sustainLevel": "$100""#,
+            #""voice": 0, "selectedRatePeriod": "$10000""#,
+            #""voice": 0, "oscillatorOutput": "$1000""#,
+            #""voice": 0, "waveformOutput": 32768"#,
+            #""voice": 0, "waveformOutput": -32769"#,
             #""voice": 0, "waveformDACHoldCyclesRemaining": -1"#
         ]
 

@@ -103,6 +103,18 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
     }
 
+    func testG64LoadFloorsMaxTrackSizeToActualTrackPayload() {
+        var g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: [0xDE, 0xAD, 0xBE, 0xEF])
+        g64[10] = 0x01
+        g64[11] = 0x00
+        let disk = GCRDisk()
+
+        XCTAssertTrue(disk.loadG64(Data(g64)))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes.count, 4)
+        XCTAssertEqual(disk.image?.capabilities.maxTrackSize, 4)
+    }
+
     func testNIBLoadPreservesNativeHalfTracksAndSpeedZones() {
         let firstTrack = [UInt8](repeating: 0xAA, count: 0x2000)
         let halfTrack = [UInt8](repeating: 0x55, count: 0x2000)
@@ -157,6 +169,17 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(disk.hasDisk)
     }
 
+    func testNIBLoadRejectsDuplicateHalfTrackEntries() {
+        let disk = GCRDisk()
+        let duplicate = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
+            (nibHalfTrack: 2, density: 0x02, bytes: [UInt8](repeating: 0x55, count: 0x2000)),
+        ])
+
+        XCTAssertFalse(disk.loadNIB(Data(duplicate)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
     func testNBZLoadDecompressesNIBPayloadAndPreservesFormat() {
         var firstTrack = [UInt8](repeating: 0xAA, count: 0x2000)
         firstTrack[123] = 0xFE
@@ -185,6 +208,18 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(disk.hasDisk)
     }
 
+    func testNBZLoadRejectsDuplicateHalfTrackEntries() {
+        let duplicate = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
+            (nibHalfTrack: 2, density: 0x02, bytes: [UInt8](repeating: 0x55, count: 0x2000)),
+        ])
+        let nbz = makeLiteralNBZ(from: duplicate, marker: 0xFE)
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.loadNBZ(Data(nbz)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
     func testP64LoadDecodesFluxPulsesIntoNativeGCRTrack() {
         let sourcePrefix: [UInt8] = [0x00, 0xA5, 0x3C, 0x7E]
         let p64 = makeP64(halfTrack: 0, gcrPrefix: sourcePrefix)
@@ -196,9 +231,10 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.format, .p64)
         XCTAssertEqual(info?.bytes.prefix(sourcePrefix.count), sourcePrefix[...])
         XCTAssertEqual(info?.speedZone, 3)
+        XCTAssertEqual(info?.bitLength, 61_539)
         XCTAssertEqual(info?.isNativeLowLevel, true)
         XCTAssertEqual(disk.image?.capabilities.nativeLowLevelTrackCount, 1)
-        XCTAssertEqual(disk.image?.capabilities.maxTrackSize, 7_692)
+        XCTAssertEqual(disk.image?.capabilities.maxTrackSize, 7_693)
         XCTAssertEqual(disk.image?.capabilities.preservesRawTrackLengths, true)
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Flux timing quantized to GCR bit cells") == true)
     }
@@ -232,6 +268,50 @@ final class GCRDiskTests: XCTestCase {
         missingDone[16] = UInt8((missingDone.count - 24) & 0xFF)
         missingDone[17] = UInt8(((missingDone.count - 24) >> 8) & 0xFF)
         XCTAssertFalse(disk.loadP64(Data(missingDone)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
+    func testP64LoadRejectsCRCAndUnsupportedSideMismatches() {
+        let disk = GCRDisk()
+
+        var badStreamCRC = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+        badStreamCRC[20] ^= 0x01
+        XCTAssertFalse(disk.loadP64(Data(badStreamCRC)))
+
+        var badChunkCRC = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+        badChunkCRC[32] ^= 0x01
+        XCTAssertFalse(disk.loadP64(Data(badChunkCRC)))
+
+        var doubleSided = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+        doubleSided[12] |= 0x02
+        XCTAssertFalse(disk.loadP64(Data(doubleSided)))
+
+        var sideBChunk = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+        sideBChunk[27] |= 0x80
+        recomputeP64CRCs(&sideBChunk)
+        XCTAssertFalse(disk.loadP64(Data(sideBChunk)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
+    func testP64LoadRejectsDuplicateHalfTrackChunks() {
+        let disk = GCRDisk()
+        let duplicate = makeP64WithDuplicatedFirstTrackChunk(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+
+        XCTAssertFalse(disk.loadP64(Data(duplicate)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
+    func testP64LoadRejectsChunksAfterDone() {
+        let disk = GCRDisk()
+        var trailing = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0x80])
+        trailing.append(contentsOf: Array("JUNK".utf8))
+        appendLittleEndian32(0, to: &trailing)
+        appendLittleEndian32(0, to: &trailing)
+        let streamSize = littleEndian32(from: trailing, at: 16) + 12
+        writeLittleEndian32(streamSize, into: &trailing, at: 16)
+        recomputeP64CRCs(&trailing)
+
+        XCTAssertFalse(disk.loadP64(Data(trailing)))
         XCTAssertFalse(disk.hasDisk)
     }
 
@@ -334,6 +414,53 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.capabilities.preservesSpeedZones, true)
         XCTAssertEqual(disk.image?.capabilities.preservesVariableSpeedZones, true)
         XCTAssertEqual(disk.image?.capabilities.variableSpeedZoneByteCount, 8)
+    }
+
+    func testG64LoadRejectsMalformedPerByteSpeedZoneBlock() {
+        var g64 = makeSingleTrackG64(
+            halfTrack: 34,
+            rawTrack: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]
+        )
+        let speedTableStart = 12 + 84 * 4
+        let malformedSpeedBlockOffset = UInt32(g64.count - 1)
+        writeLittleEndian32(malformedSpeedBlockOffset, into: &g64, at: speedTableStart + 34 * 4)
+
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.loadG64(Data(g64)))
+        XCTAssertFalse(disk.hasDisk)
+    }
+
+    func testG64LoadRejectsPerByteSpeedZoneBlockOverlaps() {
+        var headerOverlap = makeSingleTrackG64(
+            halfTrack: 34,
+            rawTrack: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]
+        )
+        let speedTableStart = 12 + 84 * 4
+        writeLittleEndian32(4, into: &headerOverlap, at: speedTableStart + 34 * 4)
+        XCTAssertFalse(GCRDisk().loadG64(Data(headerOverlap)))
+
+        var trackOverlap = makeSingleTrackG64(
+            halfTrack: 34,
+            rawTrack: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]
+        )
+        let trackOffset = Int(littleEndian32(from: trackOverlap, at: 12 + 34 * 4))
+        writeLittleEndian32(UInt32(trackOffset + 2), into: &trackOverlap, at: speedTableStart + 34 * 4)
+        XCTAssertFalse(GCRDisk().loadG64(Data(trackOverlap)))
+    }
+
+    func testG64LoadRejectsOverlappingTrackPayloads() {
+        var g64 = makeSingleTrackG64(
+            halfTrack: 34,
+            rawTrack: [0x10, 0x20, 0x30, 0x40]
+        )
+        let trackOffset = littleEndian32(from: g64, at: 12 + 34 * 4)
+        writeLittleEndian32(trackOffset, into: &g64, at: 12 + 35 * 4)
+
+        let disk = GCRDisk()
+
+        XCTAssertFalse(disk.loadG64(Data(g64)))
+        XCTAssertFalse(disk.hasDisk)
     }
 
     func testExportedG64ImagePreservesModifiedNativeTrackBytesAndSpeedMap() throws {
@@ -717,7 +844,7 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(created.isNativeLowLevel)
         XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
         XCTAssertEqual(disk.image?.format, .p64)
-        XCTAssertEqual(disk.image?.maxTrackSize, GCRDisk.trackLengths[3])
+        XCTAssertEqual(disk.image?.maxTrackSize, 7_693)
     }
 
     func testEnsureWritableTrackRejectsD64AndOutOfRangeHalfTracks() {
@@ -842,6 +969,25 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(disk.image?.capabilities.preservesVariableSpeedZones == true)
         XCTAssertFalse(disk.image?.capabilities.preservesSectorErrorInfo == true)
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Native copy-protection bitstream") == true)
+    }
+
+    func testLowLevelLoadsSetWriteProtectDefaultsByMediaFormat() {
+        let disk = GCRDisk()
+
+        XCTAssertTrue(disk.loadD64(makeBlankD64()))
+        XCTAssertFalse(disk.writeProtected)
+
+        let g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: [0x55, 0xAA])
+        XCTAssertTrue(disk.loadG64(Data(g64)))
+        XCTAssertTrue(disk.writeProtected)
+
+        let writableP64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5], flags: 0)
+        XCTAssertTrue(disk.loadP64(Data(writableP64)))
+        XCTAssertFalse(disk.writeProtected)
+
+        let protectedP64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5], flags: 1)
+        XCTAssertTrue(disk.loadP64(Data(protectedP64)))
+        XCTAssertTrue(disk.writeProtected)
     }
 
     func testD64LoadPreservesSectorErrorTableMetadata() throws {
@@ -1101,6 +1247,19 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .p64)
     }
 
+    func testC64DataMountPreservesWritableP64Flag() {
+        let p64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5], flags: 0)
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(p64), fileName: "writable.p64"))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .p64)
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+        XCTAssertEqual(c64.emulationStatus.drive.writeProtected, false)
+        XCTAssertTrue(c64.emulationStatus.canExportModifiedG64)
+    }
+
     func testC64NativeG64LowLevelWritesExportModifiedG64() throws {
         let rawTrack: [UInt8] = [0xFF, 0xFF, 0x52, 0xA5]
         let g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: rawTrack)
@@ -1344,7 +1503,8 @@ final class GCRDiskTests: XCTestCase {
     private func makeP64(
         halfTrack: Int,
         gcrPrefix: [UInt8],
-        weakBitIndexes: Set<Int> = []
+        weakBitIndexes: Set<Int> = [],
+        flags: UInt32 = 1
     ) -> [UInt8] {
         let ticksPerBit = 52 // Speed zone 3, 26 drive cycles per byte at 16 MHz.
         let p64HalfTrack = UInt8(halfTrack + 2)
@@ -1366,7 +1526,7 @@ final class GCRDiskTests: XCTestCase {
         var chunks: [UInt8] = []
         chunks.append(contentsOf: [UInt8(ascii: "H"), UInt8(ascii: "T"), UInt8(ascii: "P"), p64HalfTrack])
         appendLittleEndian32(UInt32(chunkData.count), to: &chunks)
-        appendLittleEndian32(0, to: &chunks)
+        appendLittleEndian32(crc32(chunkData), to: &chunks)
         chunks.append(contentsOf: chunkData)
         chunks.append(contentsOf: Array("DONE".utf8))
         appendLittleEndian32(0, to: &chunks)
@@ -1375,10 +1535,23 @@ final class GCRDiskTests: XCTestCase {
         var p64: [UInt8] = []
         p64.append(contentsOf: Array("P64-1541".utf8))
         appendLittleEndian32(0, to: &p64)
-        appendLittleEndian32(1, to: &p64)
+        appendLittleEndian32(flags, to: &p64)
         appendLittleEndian32(UInt32(chunks.count), to: &p64)
-        appendLittleEndian32(0, to: &p64)
+        appendLittleEndian32(crc32(chunks), to: &p64)
         p64.append(contentsOf: chunks)
+        return p64
+    }
+
+    private func makeP64WithDuplicatedFirstTrackChunk(halfTrack: Int, gcrPrefix: [UInt8]) -> [UInt8] {
+        var p64 = makeP64(halfTrack: halfTrack, gcrPrefix: gcrPrefix)
+        let firstChunkOffset = 24
+        let firstChunkSize = Int(littleEndian32(from: p64, at: firstChunkOffset + 4))
+        let firstChunkEnd = firstChunkOffset + 12 + firstChunkSize
+        let duplicateChunk = Array(p64[firstChunkOffset..<firstChunkEnd])
+        p64.insert(contentsOf: duplicateChunk, at: firstChunkEnd)
+        let streamSize = littleEndian32(from: p64, at: 16) + UInt32(duplicateChunk.count)
+        writeLittleEndian32(streamSize, into: &p64, at: 16)
+        recomputeP64CRCs(&p64)
         return p64
     }
 
@@ -1387,6 +1560,51 @@ final class GCRDiskTests: XCTestCase {
         bytes.append(UInt8((value >> 8) & 0xFF))
         bytes.append(UInt8((value >> 16) & 0xFF))
         bytes.append(UInt8((value >> 24) & 0xFF))
+    }
+
+    private func writeLittleEndian32(_ value: UInt32, into bytes: inout [UInt8], at offset: Int) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
+    }
+
+    private func littleEndian32(from bytes: [UInt8], at offset: Int) -> UInt32 {
+        UInt32(bytes[offset])
+            | (UInt32(bytes[offset + 1]) << 8)
+            | (UInt32(bytes[offset + 2]) << 16)
+            | (UInt32(bytes[offset + 3]) << 24)
+    }
+
+    private func recomputeP64CRCs(_ p64: inout [UInt8]) {
+        let streamStart = 24
+        let streamSize = Int(littleEndian32(from: p64, at: 16))
+        let streamEnd = streamStart + streamSize
+        var offset = streamStart
+        while offset + 12 <= streamEnd {
+            let chunkSize = Int(littleEndian32(from: p64, at: offset + 4))
+            let chunkDataStart = offset + 12
+            let chunkDataEnd = chunkDataStart + chunkSize
+            guard chunkDataEnd <= streamEnd else { break }
+            writeLittleEndian32(crc32(Array(p64[chunkDataStart..<chunkDataEnd])), into: &p64, at: offset + 8)
+            offset = chunkDataEnd
+        }
+        writeLittleEndian32(crc32(Array(p64[streamStart..<streamEnd])), into: &p64, at: 20)
+    }
+
+    private func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >>= 1
+                }
+            }
+        }
+        return crc ^ 0xFFFF_FFFF
     }
 
     private struct P64FixtureRangeEncoder {
