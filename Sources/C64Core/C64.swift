@@ -441,8 +441,18 @@ public final class C64 {
         return true
     }
 
-    public func markExportedD64ImageSaved() {
+    @discardableResult
+    public func markExportedD64ImageSaved() -> Bool {
+        guard diskDrive.mountedFormat == .d64,
+              !drive1541.hasPendingGCRWriteGateSplice else {
+            return false
+        }
+        if drive1541.disk.hasUnsavedLowLevelWrites,
+           !synchronizeLowLevelD64WritesIfPossible() {
+            return false
+        }
         diskDrive.markChangesSaved()
+        return true
     }
 
     public func markExportedG64ImageSaved() {

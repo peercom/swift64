@@ -1164,6 +1164,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(c64.emulationStatus.d64ExportBlockedByLowLevelWrites)
         XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertNil(c64.exportedD64Image)
+        XCTAssertFalse(c64.markExportedD64ImageSaved())
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
     }
@@ -1190,6 +1191,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(c64.emulationStatus.d64ExportBlockedByLowLevelWrites)
         XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertNil(c64.exportedD64Image)
+        XCTAssertFalse(c64.markExportedD64ImageSaved())
         XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
         XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration)
     }
