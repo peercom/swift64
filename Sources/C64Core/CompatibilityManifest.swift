@@ -1018,6 +1018,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let motorOn: Bool?
     public let ledOn: Bool?
     public let gcrWriteModeActive: Bool?
+    public let gcrWriteGateActive: Bool?
     public let writeProtected: Bool?
     public let hasDisk: Bool?
     public let mediaChanged: Bool?
@@ -1052,6 +1053,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case motorOn
         case ledOn
         case gcrWriteModeActive
+        case gcrWriteGateActive
         case writeProtected
         case hasDisk
         case mediaChanged
@@ -1087,6 +1089,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         motorOn: Bool? = nil,
         ledOn: Bool? = nil,
         gcrWriteModeActive: Bool? = nil,
+        gcrWriteGateActive: Bool? = nil,
         writeProtected: Bool? = nil,
         hasDisk: Bool? = nil,
         mediaChanged: Bool? = nil,
@@ -1120,6 +1123,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.motorOn = motorOn
         self.ledOn = ledOn
         self.gcrWriteModeActive = gcrWriteModeActive
+        self.gcrWriteGateActive = gcrWriteGateActive
         self.writeProtected = writeProtected
         self.hasDisk = hasDisk
         self.mediaChanged = mediaChanged
@@ -1177,6 +1181,7 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         motorOn = try container.decodeIfPresent(Bool.self, forKey: .motorOn)
         ledOn = try container.decodeIfPresent(Bool.self, forKey: .ledOn)
         gcrWriteModeActive = try container.decodeIfPresent(Bool.self, forKey: .gcrWriteModeActive)
+        gcrWriteGateActive = try container.decodeIfPresent(Bool.self, forKey: .gcrWriteGateActive)
         writeProtected = try container.decodeIfPresent(Bool.self, forKey: .writeProtected)
         hasDisk = try container.decodeIfPresent(Bool.self, forKey: .hasDisk)
         mediaChanged = try container.decodeIfPresent(Bool.self, forKey: .mediaChanged)

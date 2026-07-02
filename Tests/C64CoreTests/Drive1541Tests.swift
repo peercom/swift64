@@ -375,6 +375,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(drive.disk.hasUnsavedLowLevelWrites)
         XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 1)
         XCTAssertTrue(drive.statusSnapshot.gcrWriteModeActive)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
     }
 
     func testVIA2PortAWriteSplicesUnalignedGCRByteAtHeadPosition() {
@@ -620,6 +621,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(drive.disk.hasUnsavedLowLevelWrites)
         XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 0)
         XCTAssertTrue(drive.statusSnapshot.gcrWriteModeActive)
+        XCTAssertFalse(drive.statusSnapshot.gcrWriteGateActive)
     }
 
     func testMotorSpinsDownAfterVIACommandTurnsOff() {

@@ -40,6 +40,7 @@ public final class Drive1541 {
         public let gcrWriteByteCount: UInt64
         public let gcrWriteEraseBitCount: UInt64
         public let gcrWriteModeActive: Bool
+        public let gcrWriteGateActive: Bool
         public let gcrWriteSpliceCount: UInt64
         public let writeProtected: Bool
         public let hasDisk: Bool
@@ -395,6 +396,7 @@ public final class Drive1541 {
             gcrWriteByteCount: gcrWriteByteCount,
             gcrWriteEraseBitCount: gcrWriteEraseBitCount,
             gcrWriteModeActive: gcrWriteModeActive,
+            gcrWriteGateActive: gcrWriteGateActive,
             gcrWriteSpliceCount: gcrWriteSpliceCount,
             writeProtected: disk.writeProtected,
             hasDisk: disk.hasDisk,
@@ -423,6 +425,7 @@ public final class Drive1541 {
         value = value &* 1099511628211 &+ gcrWriteSpliceCount
         value = value &* 1099511628211 &+ UInt64(decodedIECCommandBytes.count)
         value = value &* 1099511628211 &+ UInt64(decodedIECDataBytes.count)
+        if gcrWriteGateActive { value &+= 0x0800_0000 }
         if motorOn { value &+= 0x1000_0000 }
         if ledOn { value &+= 0x2000_0000 }
         if let iec = iecBus?.snapshot {
@@ -900,7 +903,7 @@ public final class Drive1541 {
     }
 
     private func updateGCRWriteGateSpliceState() {
-        let writeGateActive = motorOn && gcrWriteModeActive && !disk.writeProtected && disk.hasDisk
+        let writeGateActive = gcrWriteGateActive
         if writeGateActive != previousGCRWriteGateActive {
             if writeGateActive {
                 markGCRWriteSplice(startBitOffset: -Self.writeSpliceBitCount)
@@ -1097,6 +1100,10 @@ public final class Drive1541 {
 
     private var gcrWriteModeActive: Bool {
         via2.ddra == 0xFF
+    }
+
+    private var gcrWriteGateActive: Bool {
+        motorOn && gcrWriteModeActive && !disk.writeProtected && disk.hasDisk
     }
 
     // MARK: - IRQ management

@@ -61,6 +61,7 @@ final class CompatibilityManifestTests: XCTestCase {
                 "motorOn": true,
                 "ledOn": true,
                 "gcrWriteModeActive": true,
+                "gcrWriteGateActive": true,
                 "writeProtected": false,
                 "hasDisk": true,
                 "mediaChanged": true,
@@ -329,6 +330,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.motorOn, true)
         XCTAssertEqual(milestone.driveStatus?.ledOn, true)
         XCTAssertEqual(milestone.driveStatus?.gcrWriteModeActive, true)
+        XCTAssertEqual(milestone.driveStatus?.gcrWriteGateActive, true)
         XCTAssertEqual(milestone.driveStatus?.writeProtected, false)
         XCTAssertEqual(milestone.driveStatus?.hasDisk, true)
         XCTAssertEqual(milestone.driveStatus?.mediaChanged, true)

@@ -1020,6 +1020,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 track: 17,
                 headBitPosition: 123,
                 gcrWriteModeActive: true,
+                gcrWriteGateActive: true,
                 hasDisk: true
             ),
             mediaStatus: CompatibilityMediaStatus(isNativeLowLevel: true),
@@ -1058,6 +1059,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("drive.track"))
         XCTAssertTrue(reason.contains("drive.headBitPosition"))
         XCTAssertTrue(reason.contains("drive.gcrWriteModeActive"))
+        XCTAssertTrue(reason.contains("drive.gcrWriteGateActive"))
         XCTAssertTrue(reason.contains("drive.hasDisk"))
         XCTAssertTrue(reason.contains("media capabilities unavailable"))
         XCTAssertTrue(reason.contains("media.lowLevelTrack[34] missing"))
@@ -1347,6 +1349,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(records.last?.finalLastVariableSpeedZone)
         XCTAssertEqual(records.last?.finalGCRWriteByteCount, 0)
         XCTAssertEqual(records.last?.finalGCRWriteModeActive, false)
+        XCTAssertEqual(records.last?.finalGCRWriteGateActive, false)
         XCTAssertEqual(records.last?.finalGCRWriteSpliceCount, 0)
         XCTAssertEqual(records.last?.finalGCRWriteEraseBitCount, 0)
         XCTAssertEqual(records.last?.finalD64ExportBlockedByLowLevelWrites, false)
@@ -1438,6 +1441,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalLastVariableSpeedZone)
         XCTAssertNil(legacyRecord.finalGCRWriteByteCount)
         XCTAssertNil(legacyRecord.finalGCRWriteModeActive)
+        XCTAssertNil(legacyRecord.finalGCRWriteGateActive)
         XCTAssertNil(legacyRecord.finalGCRWriteSpliceCount)
         XCTAssertNil(legacyRecord.finalGCRWriteEraseBitCount)
         XCTAssertNil(legacyRecord.finalDriveNoProgressCycleCount)
@@ -3738,6 +3742,10 @@ final class LocalDiskMatrixTests: XCTestCase {
            snapshot.gcrWriteModeActive != gcrWriteModeActive {
             mismatches.append("drive.gcrWriteModeActive \(snapshot.gcrWriteModeActive) != \(gcrWriteModeActive)")
         }
+        if let gcrWriteGateActive = expectation.gcrWriteGateActive,
+           snapshot.gcrWriteGateActive != gcrWriteGateActive {
+            mismatches.append("drive.gcrWriteGateActive \(snapshot.gcrWriteGateActive) != \(gcrWriteGateActive)")
+        }
         if let writeProtected = expectation.writeProtected, snapshot.writeProtected != writeProtected {
             mismatches.append("drive.writeProtected \(snapshot.writeProtected) != \(writeProtected)")
         }
@@ -4679,7 +4687,7 @@ private struct MatrixRunResult {
         } ?? "none"
         let readText = drive.readHalfTrack.map { "readHalf=\($0)\(drive.usingHalfTrackFallback ? ",fallback" : "")" } ?? "readHalf=none"
         let verdict = passed ? "PASS" : "FAIL"
-        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) gcrWrites=\(drive.gcrWriteByteCount) gcrSplices=\(drive.gcrWriteSpliceCount) gcrEraseBits=\(drive.gcrWriteEraseBitCount) weakBits=\(drive.weakBitReadCount) speedSamples=\(drive.variableSpeedZoneSampleCount) speedZones=$\(hex8(drive.variableSpeedZoneMask)) reason=\(reason)"
+        return "\(verdict) \(name) category=\(category.rawValue) command=\(command) driveMode=\(c64.trueDriveEmulationMode.displayName) cycles=\(elapsedCycles) pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(drive.cpuPC)) track=\(drive.track) half=\(drive.halfTrack) \(readText) media=[\(mediaText)] iec=[\(drive.lastIECCommandSummary)] byteReady=\(drive.byteReadyCount) paReads=\(drive.via2PortAReadCount) gcrWrites=\(drive.gcrWriteByteCount) gcrWriteGate=\(drive.gcrWriteGateActive) gcrSplices=\(drive.gcrWriteSpliceCount) gcrEraseBits=\(drive.gcrWriteEraseBitCount) weakBits=\(drive.weakBitReadCount) speedSamples=\(drive.variableSpeedZoneSampleCount) speedZones=$\(hex8(drive.variableSpeedZoneMask)) reason=\(reason)"
     }
 
     var category: MilestoneResultCategory {
@@ -4769,6 +4777,7 @@ private struct MatrixRunResult {
             finalLastVariableSpeedZone: drive.lastVariableSpeedZone,
             finalGCRWriteByteCount: drive.gcrWriteByteCount,
             finalGCRWriteModeActive: drive.gcrWriteModeActive,
+            finalGCRWriteGateActive: drive.gcrWriteGateActive,
             finalGCRWriteSpliceCount: drive.gcrWriteSpliceCount,
             finalGCRWriteEraseBitCount: drive.gcrWriteEraseBitCount,
             finalD64ExportBlockedByLowLevelWrites: c64.emulationStatus.d64ExportBlockedByLowLevelWrites,
@@ -5299,7 +5308,7 @@ private struct LowLevelTrackRecord: Codable, Equatable {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 29
+    static let currentFormatVersion = 30
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5360,6 +5369,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalLastVariableSpeedZone: Int?
     let finalGCRWriteByteCount: UInt64?
     let finalGCRWriteModeActive: Bool?
+    let finalGCRWriteGateActive: Bool?
     let finalGCRWriteSpliceCount: UInt64?
     let finalGCRWriteEraseBitCount: UInt64?
     let finalD64ExportBlockedByLowLevelWrites: Bool?
@@ -5469,6 +5479,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalLastVariableSpeedZone: Int? = nil,
         finalGCRWriteByteCount: UInt64? = nil,
         finalGCRWriteModeActive: Bool? = nil,
+        finalGCRWriteGateActive: Bool? = nil,
         finalGCRWriteSpliceCount: UInt64? = nil,
         finalGCRWriteEraseBitCount: UInt64? = nil,
         finalD64ExportBlockedByLowLevelWrites: Bool? = nil,
@@ -5577,6 +5588,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalLastVariableSpeedZone = finalLastVariableSpeedZone
         self.finalGCRWriteByteCount = finalGCRWriteByteCount
         self.finalGCRWriteModeActive = finalGCRWriteModeActive
+        self.finalGCRWriteGateActive = finalGCRWriteGateActive
         self.finalGCRWriteSpliceCount = finalGCRWriteSpliceCount
         self.finalGCRWriteEraseBitCount = finalGCRWriteEraseBitCount
         self.finalD64ExportBlockedByLowLevelWrites = finalD64ExportBlockedByLowLevelWrites
