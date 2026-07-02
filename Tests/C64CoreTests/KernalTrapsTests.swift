@@ -799,6 +799,24 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertEqual(readKernalChannelLine(c64), "66, ILLEGAL TRACK OR SECTOR,99,00\r")
     }
 
+    func testOpenCommandChannelBlockReadReportsExtendedD64SectorError() throws {
+        let c64 = C64()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200_704 - image.count))
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset + 783] = 23
+        XCTAssertTrue(c64.mountDisk(Data(image), fileName: "extended-errors.d64"))
+
+        prepareKernalOpenTrap(c64, filename: "B-R:2,0,41,15", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "23, READ ERROR,41,15\r")
+    }
+
     func testBufferedCommandChannelBinaryU1FeedsTargetChannel() {
         let c64 = C64()
         var image = [UInt8](makeBlankWritableD64())
@@ -910,6 +928,38 @@ final class KernalTrapsTests: XCTestCase {
         let sector = try XCTUnwrap(c64.diskDrive.readSector(track: 1, sector: 2))
         XCTAssertEqual(Array(sector.prefix(8)), [0, 0, 0, 0, 0xDE, 0xAD, 0xBE, 0])
         XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 2), 0x01)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "00, OK,00,00\r")
+    }
+
+    func testOpenCommandChannelBlockWriteClearsExtendedD64SectorError() throws {
+        let c64 = C64()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200_704 - image.count))
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset + 783] = 23
+        XCTAssertTrue(c64.mountDisk(Data(image), fileName: "extended-write.d64"))
+
+        prepareKernalOpenTrap(c64, filename: "#", logicalFile: 2, secondary: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        prepareKernalCHKOUTTrap(c64, channel: 2)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        for byte in [UInt8(0x4C), 0x00, 0xC0] {
+            prepareKernalCHROUTTrap(c64, byte: byte)
+            XCTAssertTrue(c64.kernalTraps.checkTrap())
+        }
+
+        prepareKernalOpenTrap(c64, filename: "B-W:2,0,41,15", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        let sector = try XCTUnwrap(c64.diskDrive.readSector(track: 41, sector: 15))
+        XCTAssertEqual(Array(sector.prefix(3)), [0x4C, 0x00, 0xC0])
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 41, sector: 15), 0x01)
         XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
 
         prepareKernalCHKINTrap(c64, channel: 15)

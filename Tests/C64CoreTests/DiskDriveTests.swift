@@ -1234,6 +1234,22 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.readByte(channel: 2).eof)
     }
 
+    func testCommandChannelBlockReadReportsExtendedD64SectorReadErrors() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200_704 - image.count))
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset + 783] = 23
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,41,15"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "23, READ ERROR,41,15\r")
+        XCTAssertTrue(drive.readByte(channel: 2).eof)
+    }
+
     func testCommandChannelBlockExecuteLoadsTargetBlockBuffer() {
         let drive = DiskDrive()
         var image = [UInt8](makeBlankWritableD64())
@@ -1299,6 +1315,30 @@ final class DiskDriveTests: XCTestCase {
         let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
         XCTAssertEqual(Array(sector.prefix(4)), [0xDE, 0xAD, 0xBE, 0x00])
         XCTAssertEqual(drive.readSectorErrorCode(track: 1, sector: 2), 0x01)
+        XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelBlockWriteClearsExtendedD64SectorError() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 200_704 - image.count))
+        image.append(contentsOf: [UInt8](repeating: 0x01, count: 784))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: image.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        image[errorOffset + 783] = 23
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0x4C))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0x00))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xC0))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,41,15"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.readSectorErrorCode(track: 41, sector: 15), 0x01)
+        let sector = try XCTUnwrap(drive.readSector(track: 41, sector: 15))
+        XCTAssertEqual(Array(sector.prefix(3)), [0x4C, 0x00, 0xC0])
         XCTAssertTrue(drive.hasUnsavedChanges)
     }
 

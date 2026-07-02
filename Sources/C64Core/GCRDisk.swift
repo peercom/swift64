@@ -700,6 +700,11 @@ public final class GCRDisk {
 
     @discardableResult
     public func writeBitAtBitPosition(_ bit: Bool, halfTrack: Int, bitPosition: Int) -> Bool {
+        writeBitAtBitPosition(bit, halfTrack: halfTrack, bitPosition: bitPosition, speedZone: nil)
+    }
+
+    @discardableResult
+    public func writeBitAtBitPosition(_ bit: Bool, halfTrack: Int, bitPosition: Int, speedZone: Int?) -> Bool {
         guard !writeProtected,
               halfTrack >= 0 && halfTrack < tracks.count,
               var bytes = tracks[halfTrack],
@@ -726,6 +731,7 @@ public final class GCRDisk {
             halfTrack: halfTrack,
             bytes: bytes,
             writtenBitRanges: [wrappedBitPosition...wrappedBitPosition],
+            writtenSpeedZone: speedZone,
             rebuildImage: false
         )
         hasUnsavedLowLevelWrites = true
@@ -905,18 +911,27 @@ public final class GCRDisk {
         halfTrack: Int,
         bytes: [UInt8],
         writtenBitRanges: [ClosedRange<Int>],
+        writtenSpeedZone: Int? = nil,
         rebuildImage: Bool
     ) {
         let existing = trackInfos[halfTrack]
         let weakBitRanges = writtenBitRanges.reduce(existing?.weakBitRanges ?? []) { ranges, writtenRange in
             ranges.flatMap { Self.removingBits(writtenRange, from: $0) }
         }
+        let baseSpeedZone = existing?.speedZone ?? Self.speedZone(for: halfTrack / 2 + 1)
+        let updatedSpeedZone = Self.updatedSpeedZoneState(
+            existingMap: existing?.speedZoneMap,
+            baseSpeedZone: baseSpeedZone,
+            byteCount: bytes.count,
+            writtenBitRanges: writtenBitRanges,
+            writtenSpeedZone: writtenSpeedZone
+        )
         let updated = DiskImage.Track(
             halfTrack: existing?.halfTrack ?? halfTrack,
             bytes: bytes,
             bitLength: existing?.bitLength ?? bytes.count * 8,
-            speedZone: existing?.speedZone ?? Self.speedZone(for: halfTrack / 2 + 1),
-            speedZoneMap: existing?.speedZoneMap,
+            speedZone: updatedSpeedZone.zone,
+            speedZoneMap: updatedSpeedZone.map,
             weakBitRanges: weakBitRanges,
             isNativeLowLevel: existing?.isNativeLowLevel ?? (image?.format == .g64),
             duplicateSectorHeaderCount: existing?.duplicateSectorHeaderCount ?? 0
@@ -950,6 +965,50 @@ public final class GCRDisk {
             return [start...end]
         }
         return [start...(totalBits - 1), 0...(end % totalBits)]
+    }
+
+    private static func updatedSpeedZoneState(
+        existingMap: [UInt8]?,
+        baseSpeedZone: Int,
+        byteCount: Int,
+        writtenBitRanges: [ClosedRange<Int>],
+        writtenSpeedZone: Int?
+    ) -> (zone: Int, map: [UInt8]?) {
+        let baseZone = max(0, min(3, baseSpeedZone))
+        guard byteCount > 0,
+              let writtenSpeedZone else {
+            return (baseZone, existingMap)
+        }
+
+        let zone = UInt8(max(0, min(3, writtenSpeedZone)))
+        guard existingMap != nil || Int(zone) != baseZone else {
+            return (baseZone, nil)
+        }
+
+        var speedZoneMap = existingMap ?? [UInt8](repeating: UInt8(baseZone), count: byteCount)
+        if speedZoneMap.count < byteCount {
+            speedZoneMap.append(contentsOf: [UInt8](repeating: UInt8(baseZone), count: byteCount - speedZoneMap.count))
+        } else if speedZoneMap.count > byteCount {
+            speedZoneMap = Array(speedZoneMap.prefix(byteCount))
+        }
+
+        for range in writtenBitRanges {
+            let startByte = max(0, range.lowerBound / 8)
+            let endByte = min(byteCount - 1, range.upperBound / 8)
+            guard startByte <= endByte else { continue }
+            for byteIndex in startByte...endByte {
+                speedZoneMap[byteIndex] = zone
+            }
+        }
+
+        var counts = [Int](repeating: 0, count: 4)
+        for zone in speedZoneMap {
+            counts[Int(min(zone, 3))] += 1
+        }
+        let dominantZone = counts.enumerated().max { lhs, rhs in
+            lhs.element == rhs.element ? lhs.offset > rhs.offset : lhs.element < rhs.element
+        }?.offset ?? baseZone
+        return (dominantZone, speedZoneMap)
     }
 
     private static func removingBits(

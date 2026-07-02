@@ -431,6 +431,36 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(reloaded.trackInfo(halfTrack: 35)?.speedZone, 3)
     }
 
+    func testVIA2PortAWriteAnnotatesWrittenBytesWithActiveSpeedZone() throws {
+        let drive = Drive1541()
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[36] = DiskImage.Track(
+            halfTrack: 36,
+            bytes: [0x00, 0x00, 0x00, 0x00],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: 4)))
+        drive.setWriteProtected(false)
+        drive.via2.writeRegister(0x03, value: 0xFF)
+        drive.via2.portB = 0x60
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.bytes, [0x00, 0x00, 0xA5, 0x00])
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.speedZoneMap, [2, 2, 3, 2])
+
+        let exported = try XCTUnwrap(drive.disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 36)?.bytes, [0x00, 0x00, 0xA5, 0x00])
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 36)?.speedZoneMap, [2, 2, 3, 2])
+    }
+
     func testGCRWriteGateAddsEntryAndExitSpliceWeakRanges() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
@@ -452,6 +482,60 @@ final class Drive1541Tests: XCTestCase {
         drive.tickGCRHead()
 
         XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 2)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+            DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
+        ])
+    }
+
+    func testWriteProtectTransitionImmediatelyClosesActiveGCRWriteGate() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 1)
+
+        drive.setWriteProtected(true)
+        runWriteHeadCycles(drive)
+
+        XCTAssertEqual(drive.via2.readRegister(0x00) & 0x10, 0x00)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 2)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 1)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+            DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
+        ])
+    }
+
+    func testResetClosesActiveGCRWriteGateBeforeClearingHardwareState() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+
+        drive.reset()
+
+        XCTAssertTrue(drive.statusSnapshot.hasDisk)
+        XCTAssertEqual(drive.statusSnapshot.halfTrack, 34)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 0)
         XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
             DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
             DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),

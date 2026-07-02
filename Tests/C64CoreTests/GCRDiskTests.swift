@@ -757,6 +757,32 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
     }
 
+    func testSingleBitWriteAnnotatesWrittenByteWithActiveSpeedZone() throws {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x00, 0x00, 0x00, 0x00],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 4)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeBitAtBitPosition(true, halfTrack: 34, bitPosition: 19, speedZone: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZoneMap, [2, 2, 3, 2])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZone, 2)
+
+        let exported = try XCTUnwrap(disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.speedZoneMap, [2, 2, 3, 2])
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.bytes[2], 0x10)
+    }
+
     func testAddWeakBitRangeMergesAndWrapsAroundTrackEnd() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
         tracks[2] = DiskImage.Track(

@@ -344,6 +344,7 @@ public final class Drive1541 {
     }
 
     public func ejectDisk() {
+        closeGCRWriteGateIfActive()
         let hadDisk = disk.hasDisk || disk.image != nil
         disk.tracks = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
         disk.trackInfos = Array(repeating: nil, count: GCRDisk.maxHalfTracks)
@@ -357,6 +358,7 @@ public final class Drive1541 {
 
     public func setWriteProtected(_ protected: Bool) {
         disk.writeProtected = protected
+        updateGCRWriteGateSpliceState()
         updateVIA2Inputs()
     }
 
@@ -509,6 +511,7 @@ public final class Drive1541 {
     }
 
     private func resetHardwareState(resetCPU: Bool) {
+        closeGCRWriteGateIfActive()
         via1.reset()
         via2.reset()
 
@@ -908,6 +911,12 @@ public final class Drive1541 {
         }
     }
 
+    private func closeGCRWriteGateIfActive() {
+        guard previousGCRWriteGateActive else { return }
+        markGCRWriteSplice(startBitOffset: 0)
+        previousGCRWriteGateActive = false
+    }
+
     private func markGCRWriteSplice(startBitOffset: Int) {
         guard let target = resolvedWritableTrack(forHalfTrack: halfTrack) else { return }
         let totalBits = target.info?.bitLength ?? target.bytes.count * 8
@@ -955,7 +964,8 @@ public final class Drive1541 {
                     if disk.writeBitAtBitPosition(
                         bit,
                         halfTrack: target.halfTrack,
-                        bitPosition: headBitPosition
+                        bitPosition: headBitPosition,
+                        speedZone: viaSpeedZone
                     ) {
                         headBitPosition += 1
                         if hasFreshDataBit {
