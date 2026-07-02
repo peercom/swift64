@@ -1069,6 +1069,19 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("color RAM hash"))
         XCTAssertTrue(reason.contains("timeout state pc=$"))
         XCTAssertTrue(reason.contains("drivePC=$"))
+        XCTAssertTrue(reason.contains("track="))
+        XCTAssertTrue(reason.contains("headBit="))
+        XCTAssertTrue(reason.contains("readHalf="))
+        XCTAssertTrue(reason.contains("byteReady="))
+        XCTAssertTrue(reason.contains("paReads="))
+        XCTAssertTrue(reason.contains("gcrWrites="))
+        XCTAssertTrue(reason.contains("gcrWriteMode="))
+        XCTAssertTrue(reason.contains("gcrWriteGate="))
+        XCTAssertTrue(reason.contains("gcrSplices="))
+        XCTAssertTrue(reason.contains("gcrEraseBits="))
+        XCTAssertTrue(reason.contains("writeProtected="))
+        XCTAssertTrue(reason.contains("mediaChanged="))
+        XCTAssertTrue(reason.contains("mediaChangeCount="))
         XCTAssertTrue(reason.contains("driveNoProgress="))
     }
 
@@ -3619,7 +3632,20 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private func timeoutStateSummary(_ c64: C64) -> String {
         let driveStatus = c64.drive1541.statusSnapshot
-        return "timeout state pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(driveStatus.cpuPC)) driveNoProgress=\(driveStatus.noProgressCycleCount)"
+        let readText = driveStatus.readHalfTrack.map {
+            "readHalf=\($0)\(driveStatus.usingHalfTrackFallback ? ",fallback" : "")"
+        } ?? "readHalf=none"
+        return "timeout state pc=$\(hex16(c64.cpu.pc)) drivePC=$\(hex16(driveStatus.cpuPC)) " +
+            "track=\(driveStatus.track) half=\(driveStatus.halfTrack) headBit=\(driveStatus.headBitPosition) " +
+            "\(readText) motor=\(driveStatus.motorOn) led=\(driveStatus.ledOn) " +
+            "byteReady=\(driveStatus.byteReadyCount) paReads=\(driveStatus.via2PortAReadCount) " +
+            "sync=\(driveStatus.syncDetectionCount) weakBits=\(driveStatus.weakBitReadCount) " +
+            "speedSamples=\(driveStatus.variableSpeedZoneSampleCount) speedZones=$\(hex8(driveStatus.variableSpeedZoneMask)) " +
+            "gcrWrites=\(driveStatus.gcrWriteByteCount) gcrWriteMode=\(driveStatus.gcrWriteModeActive) " +
+            "gcrWriteGate=\(driveStatus.gcrWriteGateActive) gcrSplices=\(driveStatus.gcrWriteSpliceCount) " +
+            "gcrEraseBits=\(driveStatus.gcrWriteEraseBitCount) writeProtected=\(driveStatus.writeProtected) " +
+            "hasDisk=\(driveStatus.hasDisk) mediaChanged=\(driveStatus.mediaChanged) " +
+            "mediaChangeCount=\(driveStatus.mediaChangeCount) driveNoProgress=\(driveStatus.noProgressCycleCount)"
     }
 
     private func driveStatusMismatches(
