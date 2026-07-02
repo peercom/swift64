@@ -309,39 +309,44 @@ public final class Drive1541 {
     }
 
     public func insertDisk(_ data: Data, format: DiskImage.Format) -> Bool {
+        let loadedDisk = GCRDisk()
         let mounted: Bool
         switch format {
         case .d64:
-            mounted = disk.loadD64(data)
+            mounted = loadedDisk.loadD64(data)
         case .g64:
-            mounted = disk.loadG64(data)
+            mounted = loadedDisk.loadG64(data)
         case .nib:
-            mounted = disk.loadNIB(data)
+            mounted = loadedDisk.loadNIB(data)
         case .nbz:
-            mounted = disk.loadNBZ(data)
+            mounted = loadedDisk.loadNBZ(data)
         case .p64:
-            mounted = disk.loadP64(data)
+            mounted = loadedDisk.loadP64(data)
         }
-        if mounted {
-            markMediaChanged()
-            resetGCRReadPipeline()
-            updateVIA2Inputs()
-        }
-        return mounted
+        guard mounted else { return false }
+
+        closeGCRWriteGateIfActive()
+        replaceMountedDisk(with: loadedDisk)
+        markMediaChanged()
+        resetGCRReadPipeline()
+        updateVIA2Inputs()
+        return true
     }
 
     public func insertDiskImage(_ image: DiskImage) -> Bool {
+        let mounted = image.tracks.contains { $0 != nil }
+        guard mounted else { return false }
+
+        closeGCRWriteGateIfActive()
         disk.tracks = image.tracks.map { $0?.bytes }
         disk.trackInfos = image.tracks
         disk.image = image
         disk.hasUnsavedLowLevelWrites = false
-        let mounted = image.tracks.contains { $0 != nil }
-        if mounted {
-            markMediaChanged()
-            resetGCRReadPipeline()
-            updateVIA2Inputs()
-        }
-        return mounted
+        disk.writeProtected = true
+        markMediaChanged()
+        resetGCRReadPipeline()
+        updateVIA2Inputs()
+        return true
     }
 
     public func ejectDisk() {
@@ -445,6 +450,14 @@ public final class Drive1541 {
     private func markMediaChanged() {
         mediaChanged = true
         mediaChangeCount &+= 1
+    }
+
+    private func replaceMountedDisk(with source: GCRDisk) {
+        disk.tracks = source.tracks
+        disk.trackInfos = source.trackInfos
+        disk.image = source.image
+        disk.writeProtected = source.writeProtected
+        disk.hasUnsavedLowLevelWrites = source.hasUnsavedLowLevelWrites
     }
 
     private static func hexSummary<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {

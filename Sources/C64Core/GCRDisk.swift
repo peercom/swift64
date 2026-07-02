@@ -639,6 +639,11 @@ public final class GCRDisk {
 
     @discardableResult
     public func writeByte(_ value: UInt8, halfTrack: Int, byteIndex: Int) -> Bool {
+        writeByte(value, halfTrack: halfTrack, byteIndex: byteIndex, speedZone: nil)
+    }
+
+    @discardableResult
+    public func writeByte(_ value: UInt8, halfTrack: Int, byteIndex: Int, speedZone: Int?) -> Bool {
         guard !writeProtected,
               halfTrack >= 0 && halfTrack < tracks.count,
               var bytes = tracks[halfTrack],
@@ -652,6 +657,7 @@ public final class GCRDisk {
             halfTrack: halfTrack,
             bytes: bytes,
             writtenBitRanges: [byteIndex * 8...(byteIndex * 8 + 7)],
+            writtenSpeedZone: speedZone,
             rebuildImage: true
         )
         hasUnsavedLowLevelWrites = true
@@ -660,6 +666,11 @@ public final class GCRDisk {
 
     @discardableResult
     public func writeByteAtBitPosition(_ value: UInt8, halfTrack: Int, bitPosition: Int) -> Bool {
+        writeByteAtBitPosition(value, halfTrack: halfTrack, bitPosition: bitPosition, speedZone: nil)
+    }
+
+    @discardableResult
+    public func writeByteAtBitPosition(_ value: UInt8, halfTrack: Int, bitPosition: Int, speedZone: Int?) -> Bool {
         guard !writeProtected,
               halfTrack >= 0 && halfTrack < tracks.count,
               var bytes = tracks[halfTrack],
@@ -692,6 +703,7 @@ public final class GCRDisk {
             halfTrack: halfTrack,
             bytes: bytes,
             writtenBitRanges: writtenBitRanges,
+            writtenSpeedZone: speedZone,
             rebuildImage: true
         )
         hasUnsavedLowLevelWrites = true

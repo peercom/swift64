@@ -298,6 +298,58 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.statusSnapshot.mediaChangeCount, 0)
     }
 
+    func testFailedDiskInsertLeavesActiveGCRWriteGateUnchanged() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
+
+        XCTAssertFalse(drive.insertDisk(Data([0x00, 0x01, 0x02]), isG64: true))
+
+        XCTAssertTrue(drive.statusSnapshot.hasDisk)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+    }
+
+    func testInsertDiskImageClosesActiveGCRWriteGateAndResetsWriteProtect() {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
+        XCTAssertFalse(drive.statusSnapshot.writeProtected)
+
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x55, 0xAA])))
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 2)
+        XCTAssertFalse(drive.statusSnapshot.gcrWriteGateActive)
+        XCTAssertTrue(drive.statusSnapshot.writeProtected)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.bytes, [0x55, 0xAA])
+
+        drive.tickGCRHead()
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 2)
+    }
+
     func testInsertDiskClearsStaleGCRReadPipelineState() {
         let drive = Drive1541()
         drive.headBitPosition = 1234
