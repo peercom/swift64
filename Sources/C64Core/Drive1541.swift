@@ -34,6 +34,9 @@ public final class Drive1541 {
         public let lastWeakBitPosition: Int?
         public let variableSpeedZoneSampleCount: UInt64
         public let variableSpeedZoneMask: UInt8
+        public let lastVariableSpeedZoneHalfTrack: Int?
+        public let lastVariableSpeedZoneByteIndex: Int?
+        public let lastVariableSpeedZone: Int?
         public let gcrWriteByteCount: UInt64
         public let gcrWriteEraseBitCount: UInt64
         public let gcrWriteModeActive: Bool
@@ -149,6 +152,9 @@ public final class Drive1541 {
 
     /// Bit mask of variable speed zones sampled from per-byte G64 speed maps.
     public private(set) var variableSpeedZoneMask: UInt8 = 0
+    public private(set) var lastVariableSpeedZoneHalfTrack: Int?
+    public private(set) var lastVariableSpeedZoneByteIndex: Int?
+    public private(set) var lastVariableSpeedZone: Int?
 
     /// Total low-level GCR bytes written through the emulated drive head.
     public private(set) var gcrWriteByteCount: UInt64 = 0
@@ -381,6 +387,9 @@ public final class Drive1541 {
             lastWeakBitPosition: lastWeakBitPosition,
             variableSpeedZoneSampleCount: variableSpeedZoneSampleCount,
             variableSpeedZoneMask: variableSpeedZoneMask,
+            lastVariableSpeedZoneHalfTrack: lastVariableSpeedZoneHalfTrack,
+            lastVariableSpeedZoneByteIndex: lastVariableSpeedZoneByteIndex,
+            lastVariableSpeedZone: lastVariableSpeedZone,
             gcrWriteByteCount: gcrWriteByteCount,
             gcrWriteEraseBitCount: gcrWriteEraseBitCount,
             gcrWriteModeActive: gcrWriteModeActive,
@@ -531,6 +540,9 @@ public final class Drive1541 {
         lastWeakBitPosition = nil
         variableSpeedZoneSampleCount = 0
         variableSpeedZoneMask = 0
+        lastVariableSpeedZoneHalfTrack = nil
+        lastVariableSpeedZoneByteIndex = nil
+        lastVariableSpeedZone = nil
         gcrWriteByteCount = 0
         gcrWriteEraseBitCount = 0
         gcrWriteBitOffset = 0
@@ -822,6 +834,7 @@ public final class Drive1541 {
             if ue7Counter >= 16 {
                 let zone = speedZoneForCurrentHeadPosition(
                     trackInfo: trackInfo,
+                    halfTrack: resolvedTrack.halfTrack,
                     fallbackZone: viaSpeedZone,
                     totalBits: totalBits
                 )
@@ -1010,6 +1023,7 @@ public final class Drive1541 {
 
     private func speedZoneForCurrentHeadPosition(
         trackInfo: DiskImage.Track?,
+        halfTrack: Int,
         fallbackZone: Int,
         totalBits: Int
     ) -> Int {
@@ -1025,6 +1039,9 @@ public final class Drive1541 {
         variableSpeedZoneSampleCount += 1
         let zone = Int(speedZoneMap[byteIndex])
         variableSpeedZoneMask |= UInt8(1 << zone)
+        lastVariableSpeedZoneHalfTrack = halfTrack
+        lastVariableSpeedZoneByteIndex = byteIndex
+        lastVariableSpeedZone = zone
         return zone
     }
 

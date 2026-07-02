@@ -49,6 +49,9 @@ final class CompatibilityManifestTests: XCTestCase {
                 "lastWeakBitPosition": 4096,
                 "lastWeakBitPositionStart": 4000,
                 "lastWeakBitPositionEnd": 4200,
+                "lastVariableSpeedZoneHalfTrack": 34,
+                "lastVariableSpeedZoneByteIndex": 128,
+                "lastVariableSpeedZone": 3,
                 "track": 18,
                 "halfTrack": 34,
                 "headBitPosition": 12345,
@@ -303,6 +306,9 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.lastWeakBitPosition, 4096)
         XCTAssertEqual(milestone.driveStatus?.lastWeakBitPositionStart, 4000)
         XCTAssertEqual(milestone.driveStatus?.lastWeakBitPositionEnd, 4200)
+        XCTAssertEqual(milestone.driveStatus?.lastVariableSpeedZoneHalfTrack, 34)
+        XCTAssertEqual(milestone.driveStatus?.lastVariableSpeedZoneByteIndex, 128)
+        XCTAssertEqual(milestone.driveStatus?.lastVariableSpeedZone, 3)
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
         XCTAssertEqual(milestone.driveStatus?.headBitPosition, 12345)
@@ -818,6 +824,24 @@ final class CompatibilityManifestTests: XCTestCase {
               "driveStatus": {
                 "lastWeakBitPositionStart": 200,
                 "lastWeakBitPositionEnd": 100
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidLastVariableSpeedZone() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-speed-zone.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "driveStatus": {
+                "lastVariableSpeedZone": 4
               }
             }
           ]

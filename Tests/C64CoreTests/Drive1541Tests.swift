@@ -96,6 +96,15 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(fastDrive.statusSnapshot.variableSpeedZoneMask, 1 << 3)
         XCTAssertEqual(slowDrive.statusSnapshot.variableSpeedZoneMask, 1 << 0)
         XCTAssertEqual(fixedDrive.statusSnapshot.variableSpeedZoneMask, 0)
+        XCTAssertEqual(fastDrive.statusSnapshot.lastVariableSpeedZoneHalfTrack, 36)
+        XCTAssertEqual(fastDrive.statusSnapshot.lastVariableSpeedZone, 3)
+        XCTAssertNotNil(fastDrive.statusSnapshot.lastVariableSpeedZoneByteIndex)
+        XCTAssertEqual(slowDrive.statusSnapshot.lastVariableSpeedZoneHalfTrack, 36)
+        XCTAssertEqual(slowDrive.statusSnapshot.lastVariableSpeedZone, 0)
+        XCTAssertNotNil(slowDrive.statusSnapshot.lastVariableSpeedZoneByteIndex)
+        XCTAssertNil(fixedDrive.statusSnapshot.lastVariableSpeedZoneHalfTrack)
+        XCTAssertNil(fixedDrive.statusSnapshot.lastVariableSpeedZoneByteIndex)
+        XCTAssertNil(fixedDrive.statusSnapshot.lastVariableSpeedZone)
     }
 
     func testGCRHeadReadsWeakBitRangesAsUnstableBits() {

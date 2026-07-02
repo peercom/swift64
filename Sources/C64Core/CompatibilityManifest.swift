@@ -910,6 +910,9 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let lastWeakBitPosition: Int?
     public let lastWeakBitPositionStart: Int?
     public let lastWeakBitPositionEnd: Int?
+    public let lastVariableSpeedZoneHalfTrack: Int?
+    public let lastVariableSpeedZoneByteIndex: Int?
+    public let lastVariableSpeedZone: Int?
     public let track: Int?
     public let halfTrack: Int?
     public let headBitPosition: Int?
@@ -941,6 +944,9 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case lastWeakBitPosition
         case lastWeakBitPositionStart
         case lastWeakBitPositionEnd
+        case lastVariableSpeedZoneHalfTrack
+        case lastVariableSpeedZoneByteIndex
+        case lastVariableSpeedZone
         case track
         case halfTrack
         case headBitPosition
@@ -973,6 +979,9 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         lastWeakBitPosition: Int? = nil,
         lastWeakBitPositionStart: Int? = nil,
         lastWeakBitPositionEnd: Int? = nil,
+        lastVariableSpeedZoneHalfTrack: Int? = nil,
+        lastVariableSpeedZoneByteIndex: Int? = nil,
+        lastVariableSpeedZone: Int? = nil,
         track: Int? = nil,
         halfTrack: Int? = nil,
         headBitPosition: Int? = nil,
@@ -1003,6 +1012,9 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.lastWeakBitPosition = lastWeakBitPosition
         self.lastWeakBitPositionStart = lastWeakBitPositionStart
         self.lastWeakBitPositionEnd = lastWeakBitPositionEnd
+        self.lastVariableSpeedZoneHalfTrack = lastVariableSpeedZoneHalfTrack
+        self.lastVariableSpeedZoneByteIndex = lastVariableSpeedZoneByteIndex
+        self.lastVariableSpeedZone = lastVariableSpeedZone
         self.track = track
         self.halfTrack = halfTrack
         self.headBitPosition = headBitPosition
@@ -1048,6 +1060,16 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
                 forKey: .lastWeakBitPositionEnd,
                 in: container,
                 debugDescription: "lastWeakBitPositionStart must be <= lastWeakBitPositionEnd"
+            )
+        }
+        lastVariableSpeedZoneHalfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .lastVariableSpeedZoneHalfTrack)
+        lastVariableSpeedZoneByteIndex = try Self.decodeNonNegativeIfPresent(container, forKey: .lastVariableSpeedZoneByteIndex)
+        lastVariableSpeedZone = try Self.decodeNonNegativeIfPresent(container, forKey: .lastVariableSpeedZone)
+        if let zone = lastVariableSpeedZone, !(0...3).contains(zone) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .lastVariableSpeedZone,
+                in: container,
+                debugDescription: "lastVariableSpeedZone must be 0...3"
             )
         }
         track = try Self.decodeNonNegativeIfPresent(container, forKey: .track)

@@ -965,6 +965,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                 lastWeakBitPosition: 12,
                 lastWeakBitPositionStart: 10,
                 lastWeakBitPositionEnd: 20,
+                lastVariableSpeedZoneHalfTrack: 36,
+                lastVariableSpeedZoneByteIndex: 4,
+                lastVariableSpeedZone: 3,
                 track: 17,
                 headBitPosition: 123,
                 gcrWriteModeActive: true,
@@ -997,6 +1000,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("drive.lastWeakBitHalfTrack"))
         XCTAssertTrue(reason.contains("drive.lastWeakBitPosition"))
         XCTAssertTrue(reason.contains("drive.lastWeakBitPosition nil < 10"))
+        XCTAssertTrue(reason.contains("drive.lastVariableSpeedZoneHalfTrack"))
+        XCTAssertTrue(reason.contains("drive.lastVariableSpeedZoneByteIndex"))
+        XCTAssertTrue(reason.contains("drive.lastVariableSpeedZone"))
         XCTAssertTrue(reason.contains("drive.track"))
         XCTAssertTrue(reason.contains("drive.headBitPosition"))
         XCTAssertTrue(reason.contains("drive.gcrWriteModeActive"))
@@ -1279,6 +1285,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(records.last?.finalLastWeakBitPosition)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneSampleCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneMask, 0)
+        XCTAssertNil(records.last?.finalLastVariableSpeedZoneHalfTrack)
+        XCTAssertNil(records.last?.finalLastVariableSpeedZoneByteIndex)
+        XCTAssertNil(records.last?.finalLastVariableSpeedZone)
         XCTAssertEqual(records.last?.finalGCRWriteByteCount, 0)
         XCTAssertEqual(records.last?.finalGCRWriteModeActive, false)
         XCTAssertEqual(records.last?.finalGCRWriteSpliceCount, 0)
@@ -1361,6 +1370,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalLastWeakBitPosition)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
+        XCTAssertNil(legacyRecord.finalLastVariableSpeedZoneHalfTrack)
+        XCTAssertNil(legacyRecord.finalLastVariableSpeedZoneByteIndex)
+        XCTAssertNil(legacyRecord.finalLastVariableSpeedZone)
         XCTAssertNil(legacyRecord.finalGCRWriteByteCount)
         XCTAssertNil(legacyRecord.finalGCRWriteModeActive)
         XCTAssertNil(legacyRecord.finalGCRWriteSpliceCount)
@@ -3610,6 +3622,18 @@ final class LocalDiskMatrixTests: XCTestCase {
                 mismatches.append("drive.lastWeakBitPosition nil > \(lastWeakBitPositionEnd)")
             }
         }
+        if let lastVariableSpeedZoneHalfTrack = expectation.lastVariableSpeedZoneHalfTrack,
+           snapshot.lastVariableSpeedZoneHalfTrack != lastVariableSpeedZoneHalfTrack {
+            mismatches.append("drive.lastVariableSpeedZoneHalfTrack \(snapshot.lastVariableSpeedZoneHalfTrack.map(String.init) ?? "nil") != \(lastVariableSpeedZoneHalfTrack)")
+        }
+        if let lastVariableSpeedZoneByteIndex = expectation.lastVariableSpeedZoneByteIndex,
+           snapshot.lastVariableSpeedZoneByteIndex != lastVariableSpeedZoneByteIndex {
+            mismatches.append("drive.lastVariableSpeedZoneByteIndex \(snapshot.lastVariableSpeedZoneByteIndex.map(String.init) ?? "nil") != \(lastVariableSpeedZoneByteIndex)")
+        }
+        if let lastVariableSpeedZone = expectation.lastVariableSpeedZone,
+           snapshot.lastVariableSpeedZone != lastVariableSpeedZone {
+            mismatches.append("drive.lastVariableSpeedZone \(snapshot.lastVariableSpeedZone.map(String.init) ?? "nil") != \(lastVariableSpeedZone)")
+        }
         if let track = expectation.track, snapshot.track != track {
             mismatches.append("drive.track \(snapshot.track) != \(track)")
         }
@@ -4622,6 +4646,9 @@ private struct MatrixRunResult {
             finalLastWeakBitPosition: drive.lastWeakBitPosition,
             finalVariableSpeedZoneSampleCount: drive.variableSpeedZoneSampleCount,
             finalVariableSpeedZoneMask: drive.variableSpeedZoneMask,
+            finalLastVariableSpeedZoneHalfTrack: drive.lastVariableSpeedZoneHalfTrack,
+            finalLastVariableSpeedZoneByteIndex: drive.lastVariableSpeedZoneByteIndex,
+            finalLastVariableSpeedZone: drive.lastVariableSpeedZone,
             finalGCRWriteByteCount: drive.gcrWriteByteCount,
             finalGCRWriteModeActive: drive.gcrWriteModeActive,
             finalGCRWriteSpliceCount: drive.gcrWriteSpliceCount,
@@ -5115,7 +5142,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 27
+    static let currentFormatVersion = 28
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5171,6 +5198,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalLastWeakBitPosition: Int?
     let finalVariableSpeedZoneSampleCount: UInt64?
     let finalVariableSpeedZoneMask: UInt8?
+    let finalLastVariableSpeedZoneHalfTrack: Int?
+    let finalLastVariableSpeedZoneByteIndex: Int?
+    let finalLastVariableSpeedZone: Int?
     let finalGCRWriteByteCount: UInt64?
     let finalGCRWriteModeActive: Bool?
     let finalGCRWriteSpliceCount: UInt64?
@@ -5276,6 +5306,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalLastWeakBitPosition: Int? = nil,
         finalVariableSpeedZoneSampleCount: UInt64? = nil,
         finalVariableSpeedZoneMask: UInt8? = nil,
+        finalLastVariableSpeedZoneHalfTrack: Int? = nil,
+        finalLastVariableSpeedZoneByteIndex: Int? = nil,
+        finalLastVariableSpeedZone: Int? = nil,
         finalGCRWriteByteCount: UInt64? = nil,
         finalGCRWriteModeActive: Bool? = nil,
         finalGCRWriteSpliceCount: UInt64? = nil,
@@ -5380,6 +5413,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalLastWeakBitPosition = finalLastWeakBitPosition
         self.finalVariableSpeedZoneSampleCount = finalVariableSpeedZoneSampleCount
         self.finalVariableSpeedZoneMask = finalVariableSpeedZoneMask
+        self.finalLastVariableSpeedZoneHalfTrack = finalLastVariableSpeedZoneHalfTrack
+        self.finalLastVariableSpeedZoneByteIndex = finalLastVariableSpeedZoneByteIndex
+        self.finalLastVariableSpeedZone = finalLastVariableSpeedZone
         self.finalGCRWriteByteCount = finalGCRWriteByteCount
         self.finalGCRWriteModeActive = finalGCRWriteModeActive
         self.finalGCRWriteSpliceCount = finalGCRWriteSpliceCount
