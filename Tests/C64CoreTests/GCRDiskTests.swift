@@ -963,6 +963,43 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
     }
 
+    func testDecodedD64ImageClearsStaleSectorErrorForCleanLowLevelRepair() throws {
+        var base = [UInt8](makeBlankD64())
+        base.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: base.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        base[errorOffset] = 23
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadD64(Data(base)))
+        XCTAssertFalse(
+            G64Parser.decodeSectors(
+                from: try XCTUnwrap(disk.trackInfo(halfTrack: 0)?.bytes),
+                track: 1,
+                expectedSectors: geometry.sectorsPerTrack[1]
+            ).contains { $0.0 == 0 }
+        )
+
+        let cleanTrack = disk.encodeTrack(
+            trackNum: 1,
+            sectors: trackSectors(from: base, track: 1, geometry: geometry),
+            diskID: (0x41, 0x42)
+        )
+        try applyTrackByteDiffs(to: disk, halfTrack: 0, replacement: cleanTrack)
+
+        let decoded = try XCTUnwrap(disk.decodedD64Image(patching: Data(base)))
+        let patched = [UInt8](decoded.image)
+
+        XCTAssertEqual(decoded.changedSectorCount, 1)
+        XCTAssertEqual(patched[errorOffset], 0x01)
+        XCTAssertEqual(
+            Array(patched[geometry.trackOffsets[1]..<(geometry.trackOffsets[1] + 256)]),
+            Array(base[geometry.trackOffsets[1]..<(geometry.trackOffsets[1] + 256)])
+        )
+        XCTAssertEqual(disk.image?.sectorErrorCodes?.first, 0x01)
+        XCTAssertEqual(disk.image?.capabilities.nonDefaultSectorErrorCodeCount, 0)
+    }
+
     func testDecodedD64ImageRejectsNativeG64Images() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
         tracks[0] = DiskImage.Track(

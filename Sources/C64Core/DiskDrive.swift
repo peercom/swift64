@@ -198,7 +198,7 @@ public final class DiskDrive {
     }
 
     @discardableResult
-    public func replaceMountedD64ImageAfterLowLevelWrite(_ data: Data) -> Bool {
+    public func replaceMountedD64ImageAfterLowLevelWrite(_ data: Data, notifyChange: Bool = true) -> Bool {
         guard mountedFormat == .d64,
               let geometry = Self.d64Geometry(forByteCount: data.count),
               geometry.dataSize == mountedGeometry?.dataSize else {
@@ -208,7 +208,7 @@ public final class DiskDrive {
         imageData = [UInt8](data)
         mountedGeometry = geometry
         parseDirectory()
-        markD64Modified()
+        markD64Modified(notifyChange: notifyChange)
         return true
     }
 
@@ -227,9 +227,9 @@ public final class DiskDrive {
         return true
     }
 
-    private func markD64Modified() {
+    private func markD64Modified(notifyChange: Bool = true) {
         hasUnsavedChanges = true
-        if let exportedD64Image {
+        if notifyChange, let exportedD64Image {
             onD64ImageChanged?(exportedD64Image)
         }
     }

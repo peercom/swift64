@@ -380,6 +380,9 @@ public final class C64 {
     }
 
     public var exportedD64Image: Data? {
+        guard !drive1541.hasPendingGCRWriteGateSplice else {
+            return nil
+        }
         if drive1541.disk.hasUnsavedLowLevelWrites,
            !synchronizeLowLevelD64WritesIfPossible() {
             return nil
@@ -388,23 +391,49 @@ public final class C64 {
     }
 
     public var exportedG64Image: Data? {
-        drive1541.disk.exportedG64Image
+        drive1541.exportedG64Image()
     }
 
-    private func refreshTrueDriveD64Image(afterHighLevelMutation data: Data) {
-        guard diskDrive.mountedFormat == .d64 else { return }
-        _ = drive1541.insertDisk(data, isG64: false)
+    private var canExportD64ImageWithoutSynchronizing: Bool {
+        guard diskDrive.mountedFormat == .d64,
+              !drive1541.hasPendingGCRWriteGateSplice else {
+            return false
+        }
+
+        guard drive1541.disk.hasUnsavedLowLevelWrites else {
+            return diskDrive.exportedD64Image != nil
+        }
+
+        guard let baseImage = diskDrive.exportedD64Image,
+              let decoded = drive1541.disk.decodedD64Image(
+                patching: baseImage,
+                refreshingMetadata: false
+              ) else {
+            return false
+        }
+        return decoded.changedSectorCount > 0
+    }
+
+    @discardableResult
+    private func refreshTrueDriveD64Image(afterHighLevelMutation data: Data) -> Bool {
+        guard diskDrive.mountedFormat == .d64,
+              drive1541.insertDisk(data, isG64: false) else {
+            return false
+        }
         drive1541.setWriteProtected(diskDrive.isWriteProtected)
+        return true
     }
 
     @discardableResult
     private func synchronizeLowLevelD64WritesIfPossible() -> Bool {
         guard diskDrive.mountedFormat == .d64,
+              !drive1541.hasPendingGCRWriteGateSplice,
               drive1541.disk.hasUnsavedLowLevelWrites,
               let baseImage = diskDrive.exportedD64Image,
               let decoded = drive1541.disk.decodedD64Image(patching: baseImage),
               decoded.changedSectorCount > 0,
-              diskDrive.replaceMountedD64ImageAfterLowLevelWrite(decoded.image) else {
+              diskDrive.replaceMountedD64ImageAfterLowLevelWrite(decoded.image, notifyChange: false),
+              refreshTrueDriveD64Image(afterHighLevelMutation: decoded.image) else {
             return false
         }
 
@@ -417,7 +446,7 @@ public final class C64 {
     }
 
     public func markExportedG64ImageSaved() {
-        drive1541.disk.markLowLevelWritesSaved()
+        drive1541.markExportedG64ImageSaved()
     }
 
     public func setMountedDiskWriteProtected(_ protected: Bool) {
@@ -442,10 +471,10 @@ public final class C64 {
     }
 
     public var emulationStatus: EmulationStatus {
-        let exportableD64Image = exportedD64Image
+        let canExportD64Image = canExportD64ImageWithoutSynchronizing
         let d64ExportBlockedByLowLevelWrites = diskDrive.mountedFormat == .d64
             && drive1541.disk.hasUnsavedLowLevelWrites
-            && exportableD64Image == nil
+            && !canExportD64Image
         return EmulationStatus(
             running: running,
             trueDriveMode: trueDriveEmulationMode,
@@ -457,9 +486,11 @@ public final class C64 {
             mountedCartridgeName: mountedCartridgeName,
             mountedDiskFormat: mountedDiskImage?.format,
             highLevelDiskFormat: diskDrive.mountedFormat,
-            diskHasUnsavedChanges: diskDrive.hasUnsavedChanges || drive1541.disk.hasUnsavedLowLevelWrites,
+            diskHasUnsavedChanges: diskDrive.hasUnsavedChanges
+                || drive1541.disk.hasUnsavedLowLevelWrites
+                || drive1541.hasPendingGCRWriteGateSplice,
             highLevelDiskWriteProtected: diskDrive.isWriteProtected,
-            canExportModifiedD64: exportableD64Image != nil,
+            canExportModifiedD64: canExportD64Image,
             canExportModifiedG64: drive1541.disk.exportedG64Image != nil,
             d64ExportBlockedByLowLevelWrites: d64ExportBlockedByLowLevelWrites,
             tapeHasCapturedWritePulses: !tapeUnit.writePulses.isEmpty,

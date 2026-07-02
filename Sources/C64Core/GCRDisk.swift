@@ -800,7 +800,10 @@ public final class GCRDisk {
     /// with valid headers, data markers, and checksums. Native protected G64
     /// features remain in the low-level image; this bridge is for D64-backed
     /// synthetic tracks whose modified bytes can be represented as sectors.
-    public func decodedD64Image(patching baseImage: Data) -> D64DecodeResult? {
+    public func decodedD64Image(
+        patching baseImage: Data,
+        refreshingMetadata: Bool = true
+    ) -> D64DecodeResult? {
         guard image?.format == .d64,
               let geometry = DiskDrive.d64Geometry(forByteCount: baseImage.count) else {
             return nil
@@ -842,15 +845,24 @@ public final class GCRDisk {
                       offset + 256 <= output.count else {
                     continue
                 }
+                var sectorChanged = false
                 if !output[offset..<(offset + 256)].elementsEqual(sectorData) {
                     output.replaceSubrange(offset..<(offset + 256), with: sectorData)
-                    clearSectorErrorCode(track: trackNum, sector: sectorNum, in: &output, geometry: geometry)
+                    sectorChanged = true
+                }
+                if clearSectorErrorCode(track: trackNum, sector: sectorNum, in: &output, geometry: geometry) {
+                    sectorChanged = true
+                }
+                if sectorChanged {
                     changedSectorCount += 1
                 }
             }
         }
 
         guard decodedSectorCount > 0 else { return nil }
+        if refreshingMetadata && changedSectorCount > 0 {
+            refreshD64SectorErrorMetadata(from: output, geometry: geometry)
+        }
         return D64DecodeResult(
             image: Data(output),
             decodedSectorCount: decodedSectorCount,
@@ -1073,16 +1085,20 @@ public final class GCRDisk {
         return merged
     }
 
-    private func clearSectorErrorCode(track: Int, sector: Int, in image: inout [UInt8], geometry: DiskDrive.D64Geometry) {
+    @discardableResult
+    private func clearSectorErrorCode(track: Int, sector: Int, in image: inout [UInt8], geometry: DiskDrive.D64Geometry) -> Bool {
         guard let errorInfoOffset = geometry.errorInfoOffset,
               let ordinal = sectorOrdinal(track: track, sector: sector, geometry: geometry) else {
-            return
+            return false
         }
 
         let errorOffset = errorInfoOffset + ordinal
-        if errorOffset < image.count {
-            image[errorOffset] = 0x01
+        guard errorOffset < image.count,
+              image[errorOffset] != 0x01 else {
+            return false
         }
+        image[errorOffset] = 0x01
+        return true
     }
 
     private func sectorOrdinal(track: Int, sector: Int, geometry: DiskDrive.D64Geometry) -> Int? {
@@ -1098,6 +1114,20 @@ public final class GCRDisk {
             }
         }
         return ordinal
+    }
+
+    private func refreshD64SectorErrorMetadata(from bytes: [UInt8], geometry: DiskDrive.D64Geometry) {
+        guard let current = image,
+              current.format == .d64 else {
+            return
+        }
+
+        self.image = DiskImage(
+            format: current.format,
+            tracks: trackInfos,
+            maxTrackSize: current.maxTrackSize,
+            sectorErrorCodes: d64SectorErrorCodes(from: bytes, geometry: geometry)
+        )
     }
 
     private static func packedG64SpeedBlock(_ speedZoneMap: [UInt8], byteCount: Int) -> [UInt8] {

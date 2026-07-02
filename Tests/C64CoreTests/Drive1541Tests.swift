@@ -654,6 +654,112 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(reloaded.image?.capabilities.preservesWeakBitRanges == true)
     }
 
+    func testExportedG64FinalizesActiveWriteGateInSnapshotOnly() throws {
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 16
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+
+        let exported = try XCTUnwrap(drive.exportedG64Image())
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+            DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
+        ])
+
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 1)
+        XCTAssertTrue(drive.statusSnapshot.gcrWriteGateActive)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+    }
+
+    func testC64MarkExportedG64ImageSavedKeepsActiveWriteGateDirty() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.drive1541.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        c64.setMountedDiskWriteProtected(false)
+        c64.drive1541.halfTrack = 36
+        c64.drive1541.headBitPosition = 16
+        c64.drive1541.motorOn = true
+        c64.drive1541.via2.writeRegister(0x03, value: 0xFF)
+
+        c64.drive1541.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(c64.drive1541, completeBytes: 1)
+
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertTrue(c64.emulationStatus.drive.gcrWriteGateActive)
+        let activeExport = try XCTUnwrap(c64.exportedG64Image)
+        let activeReload = GCRDisk()
+        XCTAssertTrue(activeReload.loadG64(activeExport))
+        XCTAssertEqual(activeReload.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+            DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
+        ])
+
+        c64.markExportedG64ImageSaved()
+
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertTrue(c64.emulationStatus.drive.gcrWriteGateActive)
+
+        c64.drive1541.via2.writeRegister(0x03, value: 0x00)
+        c64.drive1541.tickGCRHead()
+        _ = try XCTUnwrap(c64.exportedG64Image)
+        c64.markExportedG64ImageSaved()
+
+        XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertFalse(c64.emulationStatus.drive.gcrWriteGateActive)
+    }
+
+    func testC64MarkExportedG64ImageSavedKeepsPendingWriteGateCloseDirty() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.drive1541.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
+        c64.setMountedDiskWriteProtected(false)
+        c64.drive1541.halfTrack = 36
+        c64.drive1541.headBitPosition = 16
+        c64.drive1541.motorOn = true
+        c64.drive1541.via2.writeRegister(0x03, value: 0xFF)
+
+        c64.drive1541.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(c64.drive1541, completeBytes: 1)
+        c64.drive1541.motorOn = false
+
+        XCTAssertFalse(c64.emulationStatus.drive.gcrWriteGateActive)
+        XCTAssertTrue(c64.drive1541.hasPendingGCRWriteGateSplice)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        _ = try XCTUnwrap(c64.exportedG64Image)
+
+        c64.markExportedG64ImageSaved()
+
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertTrue(c64.drive1541.hasPendingGCRWriteGateSplice)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+
+        c64.drive1541.tickGCRHead()
+        XCTAssertFalse(c64.drive1541.hasPendingGCRWriteGateSplice)
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+
+        _ = try XCTUnwrap(c64.exportedG64Image)
+        c64.markExportedG64ImageSaved()
+
+        XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+    }
+
     func testVIA2PortAWriteHonorsWriteProtectAndMotorGate() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x00, 0x11, 0x22, 0x33])))
@@ -976,6 +1082,7 @@ final class Drive1541Tests: XCTestCase {
         let base = try XCTUnwrap(c64.exportedD64Image)
         let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: base.count))
         let sectorOffset = geometry.trackOffsets[1]
+        let previousGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
 
         var sectors = trackSectors(from: [UInt8](base), track: 1, geometry: geometry)
         sectors[0][5] = 0x7D
@@ -988,13 +1095,59 @@ final class Drive1541Tests: XCTestCase {
 
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
-        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        let dirtyStatus = c64.emulationStatus
+        XCTAssertTrue(dirtyStatus.diskHasUnsavedChanges)
+        XCTAssertTrue(dirtyStatus.canExportModifiedD64)
+        XCTAssertFalse(dirtyStatus.d64ExportBlockedByLowLevelWrites)
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration)
 
         let exported = try XCTUnwrap(c64.exportedD64Image)
         XCTAssertEqual([UInt8](exported)[sectorOffset + 5], 0x7D)
         XCTAssertTrue(c64.diskDrive.hasUnsavedChanges)
         XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration + 1)
+    }
+
+    func testLowLevelD64SectorErrorRepairRefreshesTrueDriveMetadata() throws {
+        var d64 = [UInt8](makeMinimalD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 23
+
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(Data(d64)))
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 0), 23)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.nonDefaultSectorErrorCodeCount, 1)
+        let previousGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
+
+        let cleanTrack = c64.drive1541.disk.encodeTrack(
+            trackNum: 1,
+            sectors: trackSectors(from: d64, track: 1, geometry: geometry),
+            diskID: (0x41, 0x42)
+        )
+        try applyTrackByteDiffs(to: c64.drive1541.disk, halfTrack: 0, replacement: cleanTrack)
+
+        let dirtyStatus = c64.emulationStatus
+        XCTAssertTrue(dirtyStatus.canExportModifiedD64)
+        XCTAssertFalse(dirtyStatus.d64ExportBlockedByLowLevelWrites)
+        XCTAssertEqual(dirtyStatus.mediaCapabilities?.nonDefaultSectorErrorCodeCount, 1)
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 0), 23)
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration)
+
+        let exported = try XCTUnwrap(c64.exportedD64Image)
+
+        XCTAssertEqual([UInt8](exported)[errorOffset], 0x01)
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 0), 0x01)
+        XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration + 1)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.nonDefaultSectorErrorCodeCount, 0)
+        XCTAssertEqual(c64.drive1541.disk.trackInfo(halfTrack: 0)?.bytes, cleanTrack)
     }
 
     func testUnrepresentableLowLevelD64WritesDoNotExportStaleD64Image() throws {
@@ -1013,6 +1166,32 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertNil(c64.exportedD64Image)
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
+    }
+
+    func testPendingGCRWriteGateBlocksD64ExportSynchronization() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
+        XCTAssertNotNil(c64.exportedD64Image)
+        let previousGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
+
+        c64.setMountedDiskWriteProtected(false)
+        c64.drive1541.halfTrack = 0
+        c64.drive1541.headBitPosition = 16
+        c64.drive1541.motorOn = true
+        c64.drive1541.via2.writeRegister(0x03, value: 0xFF)
+        c64.drive1541.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(c64.drive1541, completeBytes: 1)
+        c64.drive1541.motorOn = false
+
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertTrue(c64.drive1541.hasPendingGCRWriteGateSplice)
+        XCTAssertFalse(c64.emulationStatus.drive.gcrWriteGateActive)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertTrue(c64.emulationStatus.d64ExportBlockedByLowLevelWrites)
+        XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
+        XCTAssertNil(c64.exportedD64Image)
+        XCTAssertFalse(c64.diskDrive.hasUnsavedChanges)
+        XCTAssertEqual(c64.drive1541.statusSnapshot.mediaChangeCount, previousGeneration)
     }
 
     func testHighLevelD64CommandMutationsRefreshTrueDriveGCRImage() throws {

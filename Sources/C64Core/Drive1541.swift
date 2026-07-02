@@ -368,6 +368,39 @@ public final class Drive1541 {
         updateVIA2Inputs()
     }
 
+    public func exportedG64Image(finalizingActiveWriteGate: Bool = true) -> Data? {
+        guard finalizingActiveWriteGate,
+              previousGCRWriteGateActive else {
+            return disk.exportedG64Image
+        }
+
+        let exportDisk = GCRDisk()
+        exportDisk.tracks = disk.tracks
+        exportDisk.trackInfos = disk.trackInfos
+        exportDisk.image = disk.image
+        exportDisk.writeProtected = disk.writeProtected
+        exportDisk.hasUnsavedLowLevelWrites = disk.hasUnsavedLowLevelWrites
+        _ = exportDisk.addWeakBitRange(
+            startBit: headBitPosition,
+            bitCount: Self.writeSpliceBitCount,
+            forHalfTrack: halfTrack
+        )
+        return exportDisk.exportedG64Image
+    }
+
+    public var hasPendingGCRWriteGateSplice: Bool {
+        previousGCRWriteGateActive
+    }
+
+    @discardableResult
+    public func markExportedG64ImageSaved() -> Bool {
+        guard !previousGCRWriteGateActive else {
+            return false
+        }
+        disk.markLowLevelWritesSaved()
+        return true
+    }
+
     public func acknowledgeMediaChange() {
         mediaChanged = false
     }
