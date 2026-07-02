@@ -1087,6 +1087,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         tapeC64.sid.voices[2].accumulator = 0xAB_CDEF
         tapeC64.sid.voices[2].envelopeLevel = 0x7F
         tapeC64.sid.sampleVoice3Readbacks()
+        tapeC64.vic.framebuffer[0] = ColorPalette.rgba[2]
+        tapeC64.vic.framebuffer[1] = ColorPalette.rgba[5]
         XCTAssertTrue(tapeC64.mountTape(makeTinyTAP(pulses: [0x01, 0x02]), fileName: "loader.tap"))
         XCTAssertTrue(tapeC64.mountDisk(makeResultLogD64WithErrorTable(), fileName: "result-log.d64"))
         writeScreenText("READY.", into: tapeC64, row: 4, column: 2)
@@ -1123,6 +1125,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""finalSIDVoiceStates":"#))
         XCTAssertTrue(log.contains(#""finalScreenText":"#))
         XCTAssertTrue(log.contains(#""screenRAMHash":"#))
+        XCTAssertTrue(log.contains(#""framebufferHash":"#))
         XCTAssertTrue(log.contains(#""finalTapeDecodeStatus":"rawPulsesOnly""#))
         XCTAssertTrue(log.contains(#""finalMountedTapeName":"loader.tap""#))
         XCTAssertTrue(log.contains(#""finalMediaFormat":"D64""#))
@@ -1155,6 +1158,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalCPUInstructionCycle, 0)
         XCTAssertEqual(records.last?.finalVICRasterLine, 0)
         XCTAssertEqual(records.last?.finalVICRasterCycle, 0)
+        XCTAssertEqual(records.last?.framebufferHash, CompatibilityHash.framebuffer(
+            tapeC64.vic.framebuffer,
+            width: VIC.screenWidth,
+            height: VIC.screenHeight
+        ))
         XCTAssertEqual(records.last?.finalSIDModel, "mos6581")
         XCTAssertEqual(records.last?.finalSIDAccuracyMode, "compatibility")
         XCTAssertEqual(records.last?.finalSIDAudioSignature, SIDAudioSignatureRecord(SID.AudioSignature(
@@ -1702,6 +1710,70 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.category, .screen)
         XCTAssertTrue(result.reason.contains("color RAM hash"))
+    }
+
+    func testNamedMilestoneCanMatchFramebufferHash() {
+        let c64 = C64()
+        c64.vic.framebuffer[0] = ColorPalette.rgba[2]
+        c64.vic.framebuffer[1] = ColorPalette.rgba[5]
+        let expectedHash = CompatibilityHash.framebuffer(
+            c64.vic.framebuffer,
+            width: VIC.screenWidth,
+            height: VIC.screenHeight
+        )
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            framebufferHash: expectedHash,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresFramebufferHash() {
+        let c64 = C64()
+        c64.vic.framebuffer[0] = ColorPalette.rgba[2]
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            framebufferHash: "1111111111111111",
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .screen)
+        XCTAssertTrue(result.reason.contains("framebuffer hash"))
     }
 
     func testNamedMilestoneRequiresColorRAMSignature() {
@@ -3080,6 +3152,13 @@ final class LocalDiskMatrixTests: XCTestCase {
             let colorRAMHashMatches = milestone.colorRAMHash.map {
                 CompatibilityHash.colorRAM(c64.memory.colorRAM).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
+            let framebufferHashMatches = milestone.framebufferHash.map {
+                CompatibilityHash.framebuffer(
+                    c64.vic.framebuffer,
+                    width: VIC.screenWidth,
+                    height: VIC.screenHeight
+                ).caseInsensitiveCompare($0) == .orderedSame
+            } ?? true
             let screenTextMatches = milestone.screenTextContains.allSatisfy {
                 screenText(c64.memory.ram).localizedCaseInsensitiveContains($0)
             }
@@ -3101,7 +3180,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && cia2Matches
                 && screenTextMatches
                 && screenMatches
-                && colorRAMHashMatches {
+                && colorRAMHashMatches
+                && framebufferHashMatches {
                 return MatrixRunResult(passed: true, elapsedCycles: c64.cpu.totalCycles, reason: "named milestone reached")
             }
         }
@@ -3227,6 +3307,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 screenTextContains: entry.screenTextContains,
                 screenRAMHash: entry.screenRAMHash,
                 colorRAMHash: entry.colorRAMHash,
+                framebufferHash: entry.framebufferHash,
                 screenshotName: entry.screenshotName,
                 expectedFailure: entry.expectedFailure
             )
@@ -3416,6 +3497,16 @@ final class LocalDiskMatrixTests: XCTestCase {
             let actualColorRAMHash = CompatibilityHash.colorRAM(c64.memory.colorRAM)
             if actualColorRAMHash.caseInsensitiveCompare(expectedColorRAMHash) != .orderedSame {
                 unmet.append("color RAM hash \(actualColorRAMHash) != \(expectedColorRAMHash)")
+            }
+        }
+        if let expectedFramebufferHash = milestone.framebufferHash {
+            let actualFramebufferHash = CompatibilityHash.framebuffer(
+                c64.vic.framebuffer,
+                width: VIC.screenWidth,
+                height: VIC.screenHeight
+            )
+            if actualFramebufferHash.caseInsensitiveCompare(expectedFramebufferHash) != .orderedSame {
+                unmet.append("framebuffer hash \(actualFramebufferHash) != \(expectedFramebufferHash)")
             }
         }
 
@@ -4539,6 +4630,11 @@ private struct MatrixRunResult {
             finalScreenText: milestoneScreenText(c64.memory.ram),
             screenRAMHash: CompatibilityHash.screenRAM(c64.memory.ram),
             colorRAMHash: CompatibilityHash.colorRAM(c64.memory.colorRAM),
+            framebufferHash: CompatibilityHash.framebuffer(
+                c64.vic.framebuffer,
+                width: VIC.screenWidth,
+                height: VIC.screenHeight
+            ),
             screenshotPath: screenshotURL?.path
         )
     }
@@ -4668,6 +4764,7 @@ private enum MilestoneResultCategory: String {
         }
         if lower.contains("screen hash")
             || lower.contains("screen text")
+            || lower.contains("framebuffer hash")
             || lower.contains("color ram hash")
             || lower.contains("color ram $") {
             return .screen
@@ -4878,6 +4975,7 @@ private struct LocalMilestone {
     var screenTextContains: [String] = []
     let screenRAMHash: String?
     let colorRAMHash: String?
+    var framebufferHash: String? = nil
     let screenshotName: String?
     var expectedFailure: CompatibilityExpectedFailure? = nil
 
@@ -4978,7 +5076,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 25
+    static let currentFormatVersion = 26
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5079,6 +5177,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalScreenText: String?
     let screenRAMHash: String?
     let colorRAMHash: String?
+    let framebufferHash: String?
     let screenshotPath: String?
 
     init(
@@ -5181,6 +5280,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalScreenText: String? = nil,
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
+        framebufferHash: String? = nil,
         screenshotPath: String? = nil
     ) {
         self.formatVersion = formatVersion
@@ -5282,6 +5382,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalScreenText = finalScreenText
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
+        self.framebufferHash = framebufferHash
         self.screenshotPath = screenshotPath
     }
 

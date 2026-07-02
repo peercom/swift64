@@ -246,6 +246,7 @@ final class CompatibilityManifestTests: XCTestCase {
               "screenTextContains": ["READY.", "PRESS FIRE"],
               "screenRAMHash": "0123456789abcdef",
               "colorRAMHash": "fedcba9876543210",
+              "framebufferHash": "0011223344556677",
               "screenshotName": "demo-title",
               "expectedFailure": {
                 "category": "drive",
@@ -490,6 +491,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.screenTextContains, ["READY.", "PRESS FIRE"])
         XCTAssertEqual(milestone.screenRAMHash, "0123456789abcdef")
         XCTAssertEqual(milestone.colorRAMHash, "fedcba9876543210")
+        XCTAssertEqual(milestone.framebufferHash, "0011223344556677")
         XCTAssertEqual(milestone.screenshotName, "demo-title")
         XCTAssertEqual(milestone.expectedFailure, CompatibilityExpectedFailure(
             category: .drive,
@@ -539,6 +541,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.screenTextContains, [])
         XCTAssertNil(milestone.screenRAMHash)
         XCTAssertNil(milestone.colorRAMHash)
+        XCTAssertNil(milestone.framebufferHash)
         XCTAssertNil(milestone.expectedFailure)
         XCTAssertEqual(milestone.pcRanges, [])
         XCTAssertEqual(milestone.expectedPCRanges, [])
@@ -1014,5 +1017,21 @@ final class CompatibilityManifestTests: XCTestCase {
 
         XCTAssertEqual(first, unchanged)
         XCTAssertNotEqual(first, changed)
+    }
+
+    func testFramebufferHashUsesStableFNV1A64OverVisiblePixels() {
+        var framebuffer = [UInt32](repeating: 0, count: 4)
+        framebuffer[0] = 0x44332211
+        framebuffer[1] = 0x88776655
+
+        let first = CompatibilityHash.framebuffer(framebuffer, width: 1, height: 2)
+        framebuffer[2] = 0xFFFFFFFF
+        let unchanged = CompatibilityHash.framebuffer(framebuffer, width: 1, height: 2)
+        framebuffer[1] = 0x88776656
+        let changed = CompatibilityHash.framebuffer(framebuffer, width: 1, height: 2)
+
+        XCTAssertEqual(first, unchanged)
+        XCTAssertNotEqual(first, changed)
+        XCTAssertEqual(first, CompatibilityHash.fnv1a64([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]))
     }
 }

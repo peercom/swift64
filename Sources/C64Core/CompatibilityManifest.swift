@@ -270,6 +270,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let screenTextContains: [String]
     public let screenRAMHash: String?
     public let colorRAMHash: String?
+    public let framebufferHash: String?
     public let screenshotName: String?
     public let expectedFailure: CompatibilityExpectedFailure?
 
@@ -309,6 +310,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case screenTextContains
         case screenRAMHash
         case colorRAMHash
+        case framebufferHash
         case screenshotName
         case expectedFailure
     }
@@ -347,6 +349,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenTextContains: [String] = [],
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
+        framebufferHash: String? = nil,
         screenshotName: String? = nil,
         expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
@@ -384,6 +387,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.screenTextContains = screenTextContains
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
+        self.framebufferHash = framebufferHash
         self.screenshotName = screenshotName
         self.expectedFailure = expectedFailure
     }
@@ -423,6 +427,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenTextContains: [String] = [],
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
+        framebufferHash: String? = nil,
         screenshotName: String? = nil,
         expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
@@ -460,6 +465,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.screenTextContains = screenTextContains
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
+        self.framebufferHash = framebufferHash
         self.screenshotName = screenshotName
         self.expectedFailure = expectedFailure
     }
@@ -533,6 +539,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         }
         screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
         colorRAMHash = try container.decodeIfPresent(String.self, forKey: .colorRAMHash)
+        framebufferHash = try container.decodeIfPresent(String.self, forKey: .framebufferHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
         expectedFailure = try container.decodeIfPresent(CompatibilityExpectedFailure.self, forKey: .expectedFailure)
     }
@@ -2102,6 +2109,19 @@ public enum CompatibilityHash {
     public static func colorRAM(_ colorRAM: [UInt8]) -> String {
         let end = min(colorRAM.count, 1000)
         return fnv1a64(colorRAM[..<end].map { $0 & 0x0F })
+    }
+
+    public static func framebuffer(_ framebuffer: [UInt32], width: Int, height: Int) -> String {
+        let pixelCount = min(framebuffer.count, max(0, width * height))
+        let bytes = framebuffer.prefix(pixelCount).flatMap { pixel in
+            [
+                UInt8(pixel & 0x000000FF),
+                UInt8((pixel & 0x0000FF00) >> 8),
+                UInt8((pixel & 0x00FF0000) >> 16),
+                UInt8((pixel & 0xFF000000) >> 24)
+            ]
+        }
+        return fnv1a64(bytes)
     }
 
     static func fnv1a64<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
