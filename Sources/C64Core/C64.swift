@@ -455,7 +455,8 @@ public final class C64 {
         return true
     }
 
-    public func markExportedG64ImageSaved() {
+    @discardableResult
+    public func markExportedG64ImageSaved() -> Bool {
         drive1541.markExportedG64ImageSaved()
     }
 

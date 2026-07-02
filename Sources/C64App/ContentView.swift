@@ -961,9 +961,13 @@ final class EmulatorController: ObservableObject {
         }
 
         try data.write(to: url, options: .atomic)
-        c64.markExportedG64ImageSaved()
+        let markedSaved = c64.markExportedG64ImageSaved()
         refreshStatus()
-        print("Modified G64 exported: \(url.lastPathComponent)")
+        if markedSaved {
+            print("Modified G64 exported: \(url.lastPathComponent)")
+        } else {
+            print("Modified G64 snapshot exported: \(url.lastPathComponent)")
+        }
     }
 
     func exportCapturedTAP(to url: URL) throws {

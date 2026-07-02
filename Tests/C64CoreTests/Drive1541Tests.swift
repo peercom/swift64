@@ -709,7 +709,7 @@ final class Drive1541Tests: XCTestCase {
             DiskImage.Track.WeakBitRange(startBit: 24, endBit: 39),
         ])
 
-        c64.markExportedG64ImageSaved()
+        XCTAssertFalse(c64.markExportedG64ImageSaved())
 
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
@@ -718,7 +718,7 @@ final class Drive1541Tests: XCTestCase {
         c64.drive1541.via2.writeRegister(0x03, value: 0x00)
         c64.drive1541.tickGCRHead()
         _ = try XCTUnwrap(c64.exportedG64Image)
-        c64.markExportedG64ImageSaved()
+        XCTAssertTrue(c64.markExportedG64ImageSaved())
 
         XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
@@ -743,7 +743,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
         _ = try XCTUnwrap(c64.exportedG64Image)
 
-        c64.markExportedG64ImageSaved()
+        XCTAssertFalse(c64.markExportedG64ImageSaved())
 
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertTrue(c64.drive1541.hasPendingGCRWriteGateSplice)
@@ -754,7 +754,7 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
 
         _ = try XCTUnwrap(c64.exportedG64Image)
-        c64.markExportedG64ImageSaved()
+        XCTAssertTrue(c64.markExportedG64ImageSaved())
 
         XCTAssertFalse(c64.drive1541.disk.hasUnsavedLowLevelWrites)
         XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
