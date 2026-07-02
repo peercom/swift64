@@ -518,7 +518,7 @@ public final class KernalTraps {
         debugLog("[DISK] loadFromDisk: filename=\"\(filename)\" directory has \(drive.directory.count) entries, diskName=\"\(drive.diskName)\"")
 
         if drive.isDirectoryListingRequest(filename) {
-            guard let listing = drive.loadDirectoryListing() else {
+            guard let listing = drive.loadDirectoryListing(matching: filename) else {
                 debugLog("[DISK] Directory read failed: \(drive.currentCommandStatus.trimmingCharacters(in: .whitespacesAndNewlines))")
                 return nil
             }

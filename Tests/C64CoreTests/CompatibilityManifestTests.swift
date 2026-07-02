@@ -92,6 +92,17 @@ final class CompatibilityManifestTests: XCTestCase {
                 "maxTrackSize": 7928,
                 "unsupportedFeaturesContains": ["Weak/random bits", "Flux-level timing"]
               },
+              "lowLevelTracks": [
+                {
+                  "halfTrack": 34,
+                  "byteCount": 7928,
+                  "bitLength": 63424,
+                  "speedZone": 3,
+                  "bytesHash": "0123456789abcdef",
+                  "speedZoneMapHash": "fedcba9876543210",
+                  "weakBitRangeCount": 2
+                }
+              ],
               "weakBitRanges": [
                 { "halfTrack": 34, "startBit": 128, "endBit": 255 },
                 { "halfTrack": 35, "startBit": 64, "endBit": 95 }
@@ -346,6 +357,17 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.mediaStatus?.supportsWraparoundReads, true)
         XCTAssertEqual(milestone.mediaStatus?.maxTrackSize, 7928)
         XCTAssertEqual(milestone.mediaStatus?.unsupportedFeaturesContains, ["Weak/random bits", "Flux-level timing"])
+        XCTAssertEqual(milestone.lowLevelTracks, [
+            CompatibilityLowLevelTrackExpectation(
+                halfTrack: 34,
+                byteCount: 7928,
+                bitLength: 63424,
+                speedZone: 3,
+                bytesHash: "0123456789abcdef",
+                speedZoneMapHash: "fedcba9876543210",
+                weakBitRangeCount: 2
+            )
+        ])
         XCTAssertEqual(milestone.weakBitRanges, [
             CompatibilityWeakBitRange(halfTrack: 34, startBit: 128, endBit: 255),
             CompatibilityWeakBitRange(halfTrack: 35, startBit: 64, endBit: 95)
@@ -849,6 +871,37 @@ final class CompatibilityManifestTests: XCTestCase {
         """
 
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidLowLevelTrackExpectations() {
+        let invalidTracks = [
+            #""byteCount": 1"#,
+            #""halfTrack": -1"#,
+            #""halfTrack": 84"#,
+            #""halfTrack": 34, "speedZone": 4"#,
+            #""halfTrack": 34, "bitLength": -1"#
+        ]
+
+        for track in invalidTracks {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "bad-track.g64",
+                  "command": "LOAD\\"*\\",8,1",
+                  "lowLevelTracks": [
+                    { \(track) }
+                  ]
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected lowLevelTracks entry to reject \(track)"
+            )
+        }
     }
 
     func testManifestRejectsNegativeMediaCounters() {

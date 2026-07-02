@@ -127,6 +127,7 @@ public final class DiskDrive {
         var clearsCommandStatusOnEOF: Bool = false
         var outputFilename: String?
         var outputFileType: UInt8 = 0x82
+        var outputTypeFilter: UInt8?
         var outputReplacesExisting: Bool = false
 
         var hasData: Bool { position < data.count }
@@ -391,28 +392,37 @@ public final class DiskDrive {
 
     /// Find a file by name. Supports wildcards (* and ?).
     public func findFile(_ name: String) -> DirectoryEntry? {
-        let request = parseDiskFilename(name)
+        findFile(matching: parseDiskFilename(name))
+    }
+
+    private func findFile(matching request: DiskFilenameRequest) -> DirectoryEntry? {
         let searchName = request.name
 
         if searchName == "*" || searchName.isEmpty {
-            // First PRG file
-            return directory.first { $0.fileType & 0x07 == 2 }
+            // First matching typed file. Plain * defaults to PRG.
+            let wantedType = request.typeFilter ?? 0x82
+            return directory.first { ($0.fileType & 0x07) == (wantedType & 0x07) }
         }
 
         let uppercasedSearchName = searchName.uppercased()
         return directory.first { entry in
-            matchWildcard(uppercasedSearchName, entry.filename.uppercased())
+            fileTypeMatches(entry.fileType, filter: request.typeFilter)
+                && matchWildcard(uppercasedSearchName, entry.filename.uppercased())
         }
+    }
+
+    private func fileTypeMatches(_ fileType: UInt8, filter: UInt8?) -> Bool {
+        filter.map { (fileType & 0x07) == ($0 & 0x07) } ?? true
     }
 
     public func isDirectoryListingRequest(_ name: String) -> Bool {
         parseDiskFilename(name).name.hasPrefix("$")
     }
 
-    public func loadDirectoryListing() -> [UInt8]? {
+    public func loadDirectoryListing(matching filename: String = "$") -> [UInt8]? {
         guard validateDirectorySectorsReadable() else { return nil }
         commandStatus = "00, OK,00,00\r"
-        return generateDirectoryListing()
+        return generateDirectoryListing(matching: directoryListingRequest(for: filename))
     }
 
     /// Read the raw data of a file (following the track/sector chain).
@@ -544,7 +554,12 @@ public final class DiskDrive {
         }
         guard validateDirectorySectorsReadable() else { return false }
 
-        let existing = findDirectorySlot(named: request.name)
+        let existing: (slot: DirectorySlot, entry: DirectoryEntry)?
+        if request.replaceExisting, request.typeFilter != nil {
+            existing = findDirectorySlot(matching: request)
+        } else {
+            existing = findDirectorySlot(named: request.name)
+        }
         guard request.replaceExisting || existing == nil else { return false }
 
         let releasedSectors: Set<Int>
@@ -735,8 +750,8 @@ public final class DiskDrive {
             switch result {
             case .read:
                 commandStatus = "00, OK,00,00\r"
-            case .invalidBlock:
-                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .invalidBlock(let track, let sector):
+                commandStatus = String(format: "66, ILLEGAL TRACK OR SECTOR,%02d,%02d\r", track, sector)
             case .readError:
                 break
             case .syntaxError:
@@ -754,8 +769,8 @@ public final class DiskDrive {
             switch result {
             case .read:
                 commandStatus = "00, OK,00,00\r"
-            case .invalidBlock:
-                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .invalidBlock(let track, let sector):
+                commandStatus = String(format: "66, ILLEGAL TRACK OR SECTOR,%02d,%02d\r", track, sector)
             case .readError:
                 break
             case .syntaxError:
@@ -773,8 +788,8 @@ public final class DiskDrive {
             switch result {
             case .written:
                 commandStatus = "00, OK,00,00\r"
-            case .invalidBlock:
-                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .invalidBlock(let track, let sector):
+                commandStatus = String(format: "66, ILLEGAL TRACK OR SECTOR,%02d,%02d\r", track, sector)
             case .driveNotReady:
                 commandStatus = "74, DRIVE NOT READY,00,00\r"
             case .writeProtected:
@@ -811,8 +826,8 @@ public final class DiskDrive {
                 commandStatus = "00, OK,00,00\r"
             case .alreadyAllocated(let track, let sector):
                 commandStatus = String(format: "65, NO BLOCK,%02d,%02d\r", track, sector)
-            case .invalidBlock:
-                commandStatus = "66, ILLEGAL TRACK OR SECTOR,00,00\r"
+            case .invalidBlock(let track, let sector):
+                commandStatus = String(format: "66, ILLEGAL TRACK OR SECTOR,%02d,%02d\r", track, sector)
             case .driveNotReady:
                 commandStatus = "74, DRIVE NOT READY,00,00\r"
             case .writeProtected:
@@ -868,6 +883,7 @@ public final class DiskDrive {
         let name: String
         let replaceExisting: Bool
         let fileType: UInt8
+        let typeFilter: UInt8?
         let accessMode: DiskFileAccessMode
     }
 
@@ -902,14 +918,14 @@ public final class DiskDrive {
 
     private enum BlockReadResult: Equatable {
         case read
-        case invalidBlock
+        case invalidBlock(track: Int, sector: Int)
         case readError
         case syntaxError
     }
 
     private enum BlockWriteResult: Equatable {
         case written
-        case invalidBlock
+        case invalidBlock(track: Int, sector: Int)
         case driveNotReady
         case writeProtected
         case syntaxError
@@ -923,7 +939,7 @@ public final class DiskDrive {
     private enum BlockAllocationResult: Equatable {
         case changed
         case alreadyAllocated(track: Int, sector: Int)
-        case invalidBlock
+        case invalidBlock(track: Int, sector: Int)
         case driveNotReady
         case writeProtected
         case readError
@@ -963,7 +979,7 @@ public final class DiskDrive {
         command: String,
         acceptedPrefixes: [String] = ["B-R", "BLOCK-READ", "U1", "UA"]
     ) -> BlockReadResult? {
-        guard isMounted else { return .invalidBlock }
+        guard isMounted else { return .invalidBlock(track: 0, sector: 0) }
         let upper = command.uppercased()
         guard let prefix = acceptedPrefixes.first(where: { upper.hasPrefix($0) }) else {
             return nil
@@ -1001,7 +1017,7 @@ public final class DiskDrive {
         }
 
         guard let sectorData = readSector(track: request.track, sector: request.sector) else {
-            return .invalidBlock
+            return .invalidBlock(track: request.track, sector: request.sector)
         }
         channels[request.channel] = Channel(data: sectorData, position: 0, isOpen: true)
         return .read
@@ -1052,7 +1068,7 @@ public final class DiskDrive {
         guard let geometry = mountedGeometry,
               request.track >= 1 && request.track <= geometry.trackCount,
               request.sector >= 0 && request.sector < geometry.sectorsPerTrack[request.track] else {
-            return .invalidBlock
+            return .invalidBlock(track: request.track, sector: request.sector)
         }
 
         var sectorData = [UInt8](repeating: 0, count: 256)
@@ -1199,7 +1215,7 @@ public final class DiskDrive {
         guard let geometry = mountedGeometry,
               track >= 1 && track <= geometry.trackCount,
               sector >= 0 && sector < geometry.sectorsPerTrack[track] else {
-            return .invalidBlock
+            return .invalidBlock(track: track, sector: sector)
         }
         guard validateDirectorySectorsReadable() else { return .readError }
 
@@ -1425,7 +1441,7 @@ public final class DiskDrive {
                   let count = parseCommandNumber(parts[1]),
                   (0...0xFFFF).contains(address),
                   (0...256).contains(count),
-                  parts.count == count + 2 else {
+                  parts.count == (count == 0 ? 256 : count) + 2 else {
                 return nil
             }
             var bytes: [UInt8] = []
@@ -1601,6 +1617,7 @@ public final class DiskDrive {
         var name = filename
         var replaceExisting = false
         var fileType: UInt8 = 0x82
+        var typeFilter: UInt8?
         var accessMode: DiskFileAccessMode = .read
 
         if name.hasPrefix("@") {
@@ -1630,12 +1647,16 @@ public final class DiskDrive {
             switch option {
             case "P", "PRG":
                 fileType = 0x82
+                typeFilter = 0x82
             case "S", "SEQ":
                 fileType = 0x81
+                typeFilter = 0x81
             case "U", "USR":
                 fileType = 0x83
+                typeFilter = 0x83
             case "L", "REL":
                 fileType = 0x84
+                typeFilter = 0x84
             case "R":
                 accessMode = .read
             case "W":
@@ -1651,6 +1672,7 @@ public final class DiskDrive {
             name: name,
             replaceExisting: replaceExisting,
             fileType: fileType,
+            typeFilter: typeFilter,
             accessMode: accessMode
         )
     }
@@ -1717,7 +1739,17 @@ public final class DiskDrive {
     }
 
     private func findDirectorySlot(named name: String) -> (slot: DirectorySlot, entry: DirectoryEntry)? {
-        let searchName = name.uppercased()
+        findDirectorySlot(matching: DiskFilenameRequest(
+            name: name,
+            replaceExisting: false,
+            fileType: 0x82,
+            typeFilter: nil,
+            accessMode: .read
+        ))
+    }
+
+    private func findDirectorySlot(matching request: DiskFilenameRequest) -> (slot: DirectorySlot, entry: DirectoryEntry)? {
+        let searchName = request.name.uppercased()
         var track = 18
         var sector = 1
         var visitedSectors = Set<Int>()
@@ -1735,7 +1767,8 @@ public final class DiskDrive {
 
                 let filenameRaw = Array(data[offset + 5...offset + 20])
                 let filename = petsciiToString(filenameRaw)
-                guard filename.uppercased() == searchName else { continue }
+                guard filename.uppercased() == searchName,
+                      fileTypeMatches(fileType, filter: request.typeFilter) else { continue }
 
                 let entry = DirectoryEntry(
                     filename: filename,
@@ -1765,7 +1798,7 @@ public final class DiskDrive {
         let request = parseDiskFilename(filename)
         guard !request.name.isEmpty, request.name != "$" else { return 0 }
 
-        let matches = directorySlots(matching: request.name)
+        let matches = directorySlots(matching: request)
         guard !matches.isEmpty else { return 0 }
 
         for match in matches {
@@ -1791,12 +1824,12 @@ public final class DiskDrive {
         guard let separator = expression.firstIndex(of: "=") else { return .syntaxError }
 
         let destination = parseDiskFilename(String(expression[..<separator])).name
-        let source = parseDiskFilename(String(expression[expression.index(after: separator)...])).name
-        guard !destination.isEmpty, !source.isEmpty, destination != "$", source != "$" else {
+        let source = parseDiskFilename(String(expression[expression.index(after: separator)...]))
+        guard !destination.isEmpty, !source.name.isEmpty, destination != "$", source.name != "$" else {
             return .syntaxError
         }
         guard findDirectorySlot(named: destination) == nil else { return .destinationExists }
-        guard let existing = findDirectorySlot(named: source) else { return .missingSource }
+        guard let existing = findDirectorySlot(matching: source) else { return .missingSource }
 
         renameDirectoryEntry(slot: existing.slot, filename: destination)
         parseDirectory()
@@ -1823,9 +1856,9 @@ public final class DiskDrive {
         var copiedData: [UInt8] = []
         var copiedFileType: UInt8?
         for sourceSpec in sourceSpecs {
-            let source = parseDiskFilename(sourceSpec).name
-            guard !source.isEmpty, source != "$" else { return .syntaxError }
-            guard let sourceEntry = findFile(source) else { return .missingSource }
+            let sourceRequest = parseDiskFilename(sourceSpec)
+            guard !sourceRequest.name.isEmpty, sourceRequest.name != "$" else { return .syntaxError }
+            guard let sourceEntry = findFile(sourceSpec) else { return .missingSource }
             guard let data = loadFileData(sourceEntry) else {
                 return .readError
             }
@@ -1839,6 +1872,7 @@ public final class DiskDrive {
             name: destinationRequest.name,
             replaceExisting: false,
             fileType: copiedFileType ?? 0x82,
+            typeFilter: nil,
             accessMode: .write
         )
         guard saveFile(request: request, data: copiedData, fileType: request.fileType) else {
@@ -1862,8 +1896,8 @@ public final class DiskDrive {
         return sources
     }
 
-    private func directorySlots(matching name: String) -> [(slot: DirectorySlot, entry: DirectoryEntry)] {
-        let searchName = name.uppercased()
+    private func directorySlots(matching request: DiskFilenameRequest) -> [(slot: DirectorySlot, entry: DirectoryEntry)] {
+        let searchName = request.name.uppercased()
         var matches: [(slot: DirectorySlot, entry: DirectoryEntry)] = []
         var track = 18
         var sector = 1
@@ -1882,7 +1916,8 @@ public final class DiskDrive {
 
                 let filenameRaw = Array(data[offset + 5...offset + 20])
                 let filename = petsciiToString(filenameRaw)
-                guard matchWildcard(searchName, filename.uppercased()) else { continue }
+                guard matchWildcard(searchName, filename.uppercased()),
+                      fileTypeMatches(fileType, filter: request.typeFilter) else { continue }
 
                 let entry = DirectoryEntry(
                     filename: filename,
@@ -2150,8 +2185,12 @@ public final class DiskDrive {
         }
     }
 
-    /// Generate a directory listing as a BASIC program (like LOAD"$",8).
     public func generateDirectoryListing() -> [UInt8] {
+        generateDirectoryListing(matching: nil)
+    }
+
+    /// Generate a directory listing as a BASIC program (like LOAD"$",8).
+    private func generateDirectoryListing(matching request: DiskFilenameRequest?) -> [UInt8] {
         var prg: [UInt8] = []
 
         // Load address: $0801 (BASIC start — matches where LOAD"$",8 puts it)
@@ -2165,6 +2204,10 @@ public final class DiskDrive {
 
         // File entries
         for entry in directory {
+            if let request,
+               !directoryEntry(entry, matchesListingRequest: request) {
+                continue
+            }
             let typeName = entry.typeName
             let closed = entry.isClosed ? " " : "*"
             let name = "\"\(entry.filename)\""
@@ -2181,6 +2224,40 @@ public final class DiskDrive {
         prg.append(0x00)
 
         return prg
+    }
+
+    private func directoryListingRequest(for filename: String) -> DiskFilenameRequest? {
+        var listingName = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        if listingName.hasPrefix(":") {
+            listingName.removeFirst()
+        }
+        if listingName.count >= 2 {
+            let chars = Array(listingName)
+            if chars[0].isNumber && chars[1] == ":" {
+                listingName.removeFirst(2)
+            }
+        }
+        guard listingName.hasPrefix("$") else { return nil }
+
+        var pattern = String(listingName.dropFirst())
+        if pattern == "0" || pattern.isEmpty { return nil }
+        if pattern.hasPrefix(":") {
+            pattern.removeFirst()
+        }
+        if pattern.count >= 2 {
+            let chars = Array(pattern)
+            if chars[0].isNumber && chars[1] == ":" {
+                pattern.removeFirst(2)
+            }
+        }
+        guard !pattern.isEmpty else { return nil }
+        return parseDiskFilename(pattern)
+    }
+
+    private func directoryEntry(_ entry: DirectoryEntry, matchesListingRequest request: DiskFilenameRequest) -> Bool {
+        let searchName = request.name.isEmpty ? "*" : request.name.uppercased()
+        return fileTypeMatches(entry.fileType, filter: request.typeFilter)
+            && (searchName == "*" || matchWildcard(searchName, entry.filename.uppercased()))
     }
 
     private func validateDirectorySectorsReadable() -> Bool {
@@ -2334,7 +2411,7 @@ public final class DiskDrive {
 
         if isDirectoryListingRequest(filename) {
             // Directory listing
-            guard let listing = loadDirectoryListing() else { return false }
+            guard let listing = loadDirectoryListing(matching: filename) else { return false }
             channels[channel] = Channel(data: listing, position: 0, isOpen: true)
             return true
         }
@@ -2365,7 +2442,7 @@ public final class DiskDrive {
             return false
         }
 
-        let existing = findFile(request.name)
+        let existing = request.accessMode == .append ? findFile(matching: request) : findFile(request.name)
         if request.accessMode == .write && existing != nil && !request.replaceExisting {
             commandStatus = "63, FILE EXISTS,00,00\r"
             return false
@@ -2379,6 +2456,7 @@ public final class DiskDrive {
             isOpen: true,
             outputFilename: request.name,
             outputFileType: request.fileType,
+            outputTypeFilter: request.accessMode == .append ? request.typeFilter : nil,
             outputReplacesExisting: request.replaceExisting || request.accessMode == .append
         )
 
@@ -2433,6 +2511,7 @@ public final class DiskDrive {
                 name: request.name,
                 replaceExisting: channels[channel].outputReplacesExisting,
                 fileType: channels[channel].outputFileType,
+                typeFilter: channels[channel].outputTypeFilter,
                 accessMode: .write
             )
             if !saveFile(request: request, data: channels[channel].writeData, fileType: channels[channel].outputFileType) {

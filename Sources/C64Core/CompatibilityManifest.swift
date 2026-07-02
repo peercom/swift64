@@ -252,6 +252,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let minByteReady: Int?
     public let driveStatus: CompatibilityDriveStatus?
     public let mediaStatus: CompatibilityMediaStatus?
+    public let lowLevelTracks: [CompatibilityLowLevelTrackExpectation]
     public let weakBitRanges: [CompatibilityWeakBitRange]
     public let speedZoneRanges: [CompatibilitySpeedZoneRange]
     public let tapeStatus: CompatibilityTapeStatus?
@@ -292,6 +293,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case minByteReady
         case driveStatus
         case mediaStatus
+        case lowLevelTracks
         case weakBitRanges
         case speedZoneRanges
         case tapeStatus
@@ -331,6 +333,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
+        lowLevelTracks: [CompatibilityLowLevelTrackExpectation] = [],
         weakBitRanges: [CompatibilityWeakBitRange] = [],
         speedZoneRanges: [CompatibilitySpeedZoneRange] = [],
         tapeStatus: CompatibilityTapeStatus? = nil,
@@ -369,6 +372,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
+        self.lowLevelTracks = lowLevelTracks
         self.weakBitRanges = weakBitRanges
         self.speedZoneRanges = speedZoneRanges
         self.tapeStatus = tapeStatus
@@ -409,6 +413,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady: Int? = nil,
         driveStatus: CompatibilityDriveStatus? = nil,
         mediaStatus: CompatibilityMediaStatus? = nil,
+        lowLevelTracks: [CompatibilityLowLevelTrackExpectation] = [],
         weakBitRanges: [CompatibilityWeakBitRange] = [],
         speedZoneRanges: [CompatibilitySpeedZoneRange] = [],
         tapeStatus: CompatibilityTapeStatus? = nil,
@@ -447,6 +452,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.minByteReady = minByteReady
         self.driveStatus = driveStatus
         self.mediaStatus = mediaStatus
+        self.lowLevelTracks = lowLevelTracks
         self.weakBitRanges = weakBitRanges
         self.speedZoneRanges = speedZoneRanges
         self.tapeStatus = tapeStatus
@@ -515,6 +521,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         minByteReady = try container.decodeIfPresent(Int.self, forKey: .minByteReady)
         driveStatus = try container.decodeIfPresent(CompatibilityDriveStatus.self, forKey: .driveStatus)
         mediaStatus = try container.decodeIfPresent(CompatibilityMediaStatus.self, forKey: .mediaStatus)
+        lowLevelTracks = try container.decodeIfPresent([CompatibilityLowLevelTrackExpectation].self, forKey: .lowLevelTracks) ?? []
         weakBitRanges = try container.decodeIfPresent([CompatibilityWeakBitRange].self, forKey: .weakBitRanges) ?? []
         speedZoneRanges = try container.decodeIfPresent([CompatibilitySpeedZoneRange].self, forKey: .speedZoneRanges) ?? []
         tapeStatus = try container.decodeIfPresent(CompatibilityTapeStatus.self, forKey: .tapeStatus)
@@ -813,6 +820,95 @@ public struct CompatibilityMediaStatus: Decodable, Equatable {
         supportsWraparoundReads = try container.decodeIfPresent(Bool.self, forKey: .supportsWraparoundReads)
         maxTrackSize = try Self.decodeNonNegativeIfPresent(container, forKey: .maxTrackSize)
         unsupportedFeaturesContains = try container.decodeIfPresent([String].self, forKey: .unsupportedFeaturesContains) ?? []
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else {
+            return nil
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
+    }
+}
+
+public struct CompatibilityLowLevelTrackExpectation: Decodable, Equatable {
+    public let halfTrack: Int
+    public let byteCount: Int?
+    public let bitLength: Int?
+    public let speedZone: Int?
+    public let bytesHash: String?
+    public let speedZoneMapHash: String?
+    public let weakBitRangeCount: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case halfTrack
+        case byteCount
+        case bitLength
+        case speedZone
+        case bytesHash
+        case speedZoneMapHash
+        case weakBitRangeCount
+    }
+
+    public init(
+        halfTrack: Int,
+        byteCount: Int? = nil,
+        bitLength: Int? = nil,
+        speedZone: Int? = nil,
+        bytesHash: String? = nil,
+        speedZoneMapHash: String? = nil,
+        weakBitRangeCount: Int? = nil
+    ) {
+        self.halfTrack = halfTrack
+        self.byteCount = byteCount
+        self.bitLength = bitLength
+        self.speedZone = speedZone
+        self.bytesHash = bytesHash
+        self.speedZoneMapHash = speedZoneMapHash
+        self.weakBitRangeCount = weakBitRangeCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard let decodedHalfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .halfTrack) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.halfTrack,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "lowLevelTracks entries require halfTrack"
+                )
+            )
+        }
+        halfTrack = decodedHalfTrack
+        guard halfTrack < GCRDisk.maxHalfTracks else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .halfTrack,
+                in: container,
+                debugDescription: "halfTrack must be 0...\(GCRDisk.maxHalfTracks - 1)"
+            )
+        }
+        byteCount = try Self.decodeNonNegativeIfPresent(container, forKey: .byteCount)
+        bitLength = try Self.decodeNonNegativeIfPresent(container, forKey: .bitLength)
+        speedZone = try Self.decodeNonNegativeIfPresent(container, forKey: .speedZone)
+        if let speedZone, !(0...3).contains(speedZone) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .speedZone,
+                in: container,
+                debugDescription: "speedZone must be 0...3"
+            )
+        }
+        bytesHash = try container.decodeIfPresent(String.self, forKey: .bytesHash)
+        speedZoneMapHash = try container.decodeIfPresent(String.self, forKey: .speedZoneMapHash)
+        weakBitRangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitRangeCount)
     }
 
     private static func decodeNonNegativeIfPresent(

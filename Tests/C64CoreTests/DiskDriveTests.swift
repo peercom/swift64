@@ -330,6 +330,28 @@ final class DiskDriveTests: XCTestCase {
             "Even empty directory should have non-zero first pointer")
     }
 
+    func testDirectoryListingHonorsNameAndTypeFilters() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeSameNamePRGAndSEQD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "$:HELLO,S"))
+        let seqListing = readChannelString(drive, channel: 2)
+        XCTAssertTrue(seqListing.contains("HELLO"))
+        XCTAssertTrue(seqListing.contains("SEQ"))
+        XCTAssertFalse(seqListing.contains("PRG"))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "$0:HELLO,P"))
+        let prgListing = readChannelString(drive, channel: 2)
+        XCTAssertTrue(prgListing.contains("HELLO"))
+        XCTAssertTrue(prgListing.contains("PRG"))
+        XCTAssertFalse(prgListing.contains("SEQ"))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "$:MISSING"))
+        let missingListing = readChannelString(drive, channel: 2)
+        XCTAssertFalse(missingListing.contains("HELLO"))
+        XCTAssertTrue(missingListing.contains("BLOCKS FREE."))
+    }
+
     func testDirectoryListingLoadReportsD64DirectorySectorReadErrors() {
         let drive = DiskDrive()
         var image = [UInt8](makeMinimalD64())
@@ -353,6 +375,19 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertNotNil(drive.findFile("HEL*,P"))
         XCTAssertTrue(drive.isDirectoryListingRequest("$0"))
         XCTAssertTrue(drive.isDirectoryListingRequest("0:$"))
+    }
+
+    func testFindFileHonorsRequestedFileTypeForReadLookup() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeSameNamePRGAndSEQD64()))
+
+        XCTAssertEqual(try XCTUnwrap(drive.findFile("HELLO")).typeName, "PRG")
+        XCTAssertEqual(try XCTUnwrap(drive.findFile("HELLO,S")).typeName, "SEQ")
+        XCTAssertEqual(try XCTUnwrap(drive.findFile("*,S")).typeName, "SEQ")
+        XCTAssertNil(drive.findFile("HELLO,U"))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "HELLO,S,R"))
+        XCTAssertEqual(readChannelBytes(drive, channel: 2, count: 3), [0x10, 0x20, 0x30])
     }
 
     func testOpenMissingFileReportsFileNotFoundStatus() {
@@ -676,7 +711,11 @@ final class DiskDriveTests: XCTestCase {
     func testOpenAppendChannelRewritesExistingFileWithAppendedData() throws {
         let drive = DiskDrive()
         XCTAssertTrue(drive.mount(makeBlankWritableD64()))
-        XCTAssertTrue(drive.savePRG(filename: "LOG,S", data: Array("ONE".utf8)))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "LOG,S,W"))
+        for byte in Array("ONE".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
         let freeAfterFirstWrite = drive.freeBlocks()
 
         XCTAssertTrue(drive.openFile(channel: 2, filename: "LOG,S,A"))
@@ -689,6 +728,22 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(entry.typeName, "SEQ")
         XCTAssertEqual(drive.readFileData(entry), Array("ONETWO".utf8))
         XCTAssertEqual(drive.freeBlocks(), freeAfterFirstWrite)
+    }
+
+    func testOpenAppendChannelHonorsRequestedFileType() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeSameNamePRGAndSEQD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "HELLO,S,A"))
+        for byte in Array("!".utf8) {
+            XCTAssertTrue(drive.writeByte(channel: 2, byte: byte))
+        }
+        drive.closeChannel(2)
+
+        let prg = try XCTUnwrap(drive.findFile("HELLO,P"))
+        let seq = try XCTUnwrap(drive.findFile("HELLO,S"))
+        XCTAssertEqual(drive.readFileData(prg), [0xAA, 0xBB])
+        XCTAssertEqual(drive.readFileData(seq), [0x10, 0x20, 0x30, 0x21])
     }
 
     func testOpenWriteChannelRejectsWriteProtectedD64() {
@@ -750,6 +805,17 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(readChannelString(drive, channel: 15).hasPrefix("02, FILES SCRATCHED"))
     }
 
+    func testCommandChannelScratchHonorsRequestedFileType() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeSameNamePRGAndSEQD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "S:HELLO,S"))
+
+        XCTAssertNotNil(drive.findFile("HELLO,P"))
+        XCTAssertNil(drive.findFile("HELLO,S"))
+        XCTAssertTrue(readChannelString(drive, channel: 15).hasPrefix("01, FILES SCRATCHED"))
+    }
+
     func testCommandChannelScratchMissingFileReportsFileNotFound() {
         let drive = DiskDrive()
         XCTAssertTrue(drive.mount(makeBlankWritableD64()))
@@ -789,6 +855,20 @@ final class DiskDriveTests: XCTestCase {
         let entry = try XCTUnwrap(drive.findFile("0:NEW"))
         XCTAssertEqual(drive.readFileData(entry), [0x01, 0x08, 0xA9, 0x2A])
         XCTAssertEqual(drive.freeBlocks(), freeAfterSave)
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+    }
+
+    func testCommandChannelRenameHonorsRequestedSourceFileType() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeSameNamePRGAndSEQD64()))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "R:RENAMED=HELLO,S"))
+
+        XCTAssertNotNil(drive.findFile("HELLO,P"))
+        XCTAssertNil(drive.findFile("HELLO,S"))
+        let renamed = try XCTUnwrap(drive.findFile("RENAMED,S"))
+        XCTAssertEqual(renamed.typeName, "SEQ")
+        XCTAssertEqual(drive.readFileData(renamed), [0x10, 0x20, 0x30])
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
     }
 
@@ -1096,7 +1176,7 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(readChannelString(drive, channel: 15), "30, SYNTAX ERROR,00,00\r")
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,99,0"))
-        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,00,00\r")
+        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,99,00\r")
     }
 
     func testCommandChannelAcceptsLongBlockCommandAliases() throws {
@@ -1290,7 +1370,7 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(readChannelString(drive, channel: 15), "30, SYNTAX ERROR,00,00\r")
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,99,0"))
-        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,00,00\r")
+        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,99,00\r")
 
         let g64Drive = DiskDrive()
         XCTAssertTrue(g64Drive.mountG64(makeMinimalReadableG64()))
@@ -1324,7 +1404,7 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.mount(makeBlankWritableD64()))
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:0,99,0"))
-        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,00,00\r")
+        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,99,00\r")
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:1,1,0"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "30, SYNTAX ERROR,00,00\r")
@@ -1369,6 +1449,18 @@ final class DiskDriveTests: XCTestCase {
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "M-R:$0400,3"))
         XCTAssertEqual(readChannelBytes(drive, channel: 15, count: 3), [0xDE, 0xAD, 0xBE])
+    }
+
+    func testCommandChannelMemoryWriteCountZeroWritesFullPageInNumericSyntax() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let bytes = (0...255).map { "$" + String(format: "%02X", $0) }.joined(separator: ",")
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "M-W:$0500,0,\(bytes)"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "M-R:$0500,0"))
+        XCTAssertEqual(readChannelBytes(drive, channel: 15, count: 256), Array(0...255).map(UInt8.init))
     }
 
     func testCommandChannelAcceptsLongMemoryCommandAliases() {
@@ -1504,6 +1596,36 @@ final class DiskDriveTests: XCTestCase {
 
         XCTAssertEqual(drive.directory.count, 0)
         XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+    }
+
+    private func makeSameNamePRGAndSEQD64() -> Data {
+        var image = [UInt8](makeMinimalD64(fileBlocks: 1))
+
+        let prgOffset = DiskDrive.trackOffset[1]
+        image[prgOffset + 0] = 0
+        image[prgOffset + 1] = 4
+        image[prgOffset + 2] = 0xAA
+        image[prgOffset + 3] = 0xBB
+
+        let seqOffset = DiskDrive.trackOffset[1] + 256
+        image[seqOffset + 0] = 0
+        image[seqOffset + 1] = 5
+        image[seqOffset + 2] = 0x10
+        image[seqOffset + 3] = 0x20
+        image[seqOffset + 4] = 0x30
+
+        let dirOffset = DiskDrive.trackOffset[18] + 256
+        let secondEntry = dirOffset + 32
+        image[secondEntry + 2] = 0x81
+        image[secondEntry + 3] = 1
+        image[secondEntry + 4] = 1
+        let name = Array("HELLO".utf8)
+        for index in 0..<16 {
+            image[secondEntry + 5 + index] = index < name.count ? name[index] : 0xA0
+        }
+        image[secondEntry + 30] = 1
+
+        return Data(image)
     }
 
     private func makeBlankWritableD64() -> Data {

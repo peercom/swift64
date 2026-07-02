@@ -67,6 +67,55 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(mismatches.contains("media.preservesWeakBitRanges true != false"))
     }
 
+    func testLowLevelTrackMismatchReportsProtectedTrackProof() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0xAA, 0x55, 0x00],
+            speedZone: 2,
+            speedZoneMap: [0, 1, 2],
+            weakBitRanges: [
+                DiskImage.Track.WeakBitRange(startBit: 0, endBit: 3),
+            ],
+            isNativeLowLevel: true
+        )
+        let drive = Drive1541()
+        XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: 3)))
+
+        XCTAssertTrue(lowLevelTrackMismatches([
+            CompatibilityLowLevelTrackExpectation(
+                halfTrack: 34,
+                byteCount: 3,
+                bitLength: 24,
+                speedZone: 2,
+                bytesHash: CompatibilityHash.fnv1a64([0xAA, 0x55, 0x00]),
+                speedZoneMapHash: CompatibilityHash.fnv1a64([0, 1, 2]),
+                weakBitRangeCount: 1
+            )
+        ], disk: drive.disk).isEmpty)
+
+        let mismatches = lowLevelTrackMismatches([
+            CompatibilityLowLevelTrackExpectation(
+                halfTrack: 34,
+                byteCount: 2,
+                bitLength: 23,
+                speedZone: 3,
+                bytesHash: "0000000000000000",
+                speedZoneMapHash: "1111111111111111",
+                weakBitRangeCount: 2
+            ),
+            CompatibilityLowLevelTrackExpectation(halfTrack: 35, byteCount: 1)
+        ], disk: drive.disk)
+
+        XCTAssertTrue(mismatches.contains("media.lowLevelTrack[34].byteCount 3 != 2"))
+        XCTAssertTrue(mismatches.contains("media.lowLevelTrack[34].bitLength 24 != 23"))
+        XCTAssertTrue(mismatches.contains("media.lowLevelTrack[34].speedZone 2 != 3"))
+        XCTAssertTrue(mismatches.contains { $0.hasPrefix("media.lowLevelTrack[34].bytesHash ") })
+        XCTAssertTrue(mismatches.contains { $0.hasPrefix("media.lowLevelTrack[34].speedZoneMapHash ") })
+        XCTAssertTrue(mismatches.contains("media.lowLevelTrack[34].weakBitRangeCount 1 != 2"))
+        XCTAssertTrue(mismatches.contains("media.lowLevelTrack[35] missing"))
+    }
+
     func testTapeStatusMismatchReportsSignalAndExportFields() {
         let c64 = C64()
 
@@ -944,7 +993,7 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     func testNamedMilestoneFailureReasonReportsUnmetExpectations() {
         let c64 = C64()
-        let milestone = LocalMilestone(
+        var milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/missing.d64"),
             mediaType: .d64,
             machineProfile: .palC64,
@@ -980,6 +1029,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             colorRAMHash: "1111111111111111",
             screenshotName: nil
         )
+        milestone.lowLevelTracks = [
+            CompatibilityLowLevelTrackExpectation(halfTrack: 34, byteCount: 1)
+        ]
 
         let reason = namedMilestoneFailureReason(
             c64,
@@ -1008,6 +1060,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("drive.gcrWriteModeActive"))
         XCTAssertTrue(reason.contains("drive.hasDisk"))
         XCTAssertTrue(reason.contains("media capabilities unavailable"))
+        XCTAssertTrue(reason.contains("media.lowLevelTrack[34] missing"))
         XCTAssertTrue(reason.contains("RAM $0801"))
         XCTAssertTrue(reason.contains("color RAM $0000"))
         XCTAssertTrue(reason.contains("screen hash"))
@@ -1045,6 +1098,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         milestone.id = "demo-loader"
         milestone.name = "Demo Loader"
         milestone.sidAudioSignature = CompatibilitySIDAudioSignature(sampleCount: 3)
+        milestone.lowLevelTracks = [
+            CompatibilityLowLevelTrackExpectation(halfTrack: 34)
+        ]
         let runID = "unit-run"
         let currentManifestHash = "current-manifest"
 
@@ -1142,6 +1198,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""finalTapeDecodeStatus":"rawPulsesOnly""#))
         XCTAssertTrue(log.contains(#""finalMountedTapeName":"loader.tap""#))
         XCTAssertTrue(log.contains(#""finalMediaFormat":"D64""#))
+        XCTAssertTrue(log.contains(#""finalLowLevelTracks":"#))
         let records = try log.split(separator: "\n").map {
             try JSONDecoder().decode(MilestoneResultRecord.self, from: Data(String($0).utf8))
         }
@@ -1313,6 +1370,12 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalMediaSupportsWraparoundReads, true)
         XCTAssertNil(records.last?.finalMediaMaxTrackSize)
         XCTAssertEqual(records.last?.finalMediaUnsupportedFeatures, ["Native copy-protection bitstream"])
+        XCTAssertEqual(records.last?.finalLowLevelTracks?.count, 1)
+        XCTAssertEqual(records.last?.finalLowLevelTracks?.first?.halfTrack, 34)
+        XCTAssertNotNil(records.last?.finalLowLevelTracks?.first?.byteCount)
+        XCTAssertNotNil(records.last?.finalLowLevelTracks?.first?.bitLength)
+        XCTAssertNotNil(records.last?.finalLowLevelTracks?.first?.speedZone)
+        XCTAssertNotNil(records.last?.finalLowLevelTracks?.first?.bytesHash)
         XCTAssertEqual(records.last?.finalMountedTapeName, "loader.tap")
         XCTAssertEqual(records.last?.finalTapeDecodeStatus, "rawPulsesOnly")
         XCTAssertEqual(records.last?.finalTapePulseCount, 2)
@@ -1380,6 +1443,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalDriveNoProgressCycleCount)
         XCTAssertNil(legacyRecord.finalFailureReason)
         XCTAssertNil(legacyRecord.finalMediaFormat)
+        XCTAssertNil(legacyRecord.finalLowLevelTracks)
         XCTAssertNil(legacyRecord.finalTapeDecodeStatus)
         XCTAssertNil(legacyRecord.finalScreenText)
         XCTAssertTrue(try passedMilestoneKeys(from: legacyURL).contains(legacyRecord.key))
@@ -3131,6 +3195,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             let mediaExpectationMatches = milestone.mediaStatus.map { expectation in
                 mediaStatusMismatches(expectation, capabilities: c64.emulationStatus.mediaCapabilities).isEmpty
             } ?? true
+            let lowLevelTrackMatches = lowLevelTrackMismatches(
+                milestone.lowLevelTracks,
+                disk: c64.drive1541.disk
+            ).isEmpty
             let tapeExpectationMatches = milestone.tapeStatus.map { expectation in
                 tapeStatusMismatches(expectation, status: c64.emulationStatus).isEmpty
             } ?? true
@@ -3190,6 +3258,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && driveProgress
                 && driveExpectationMatches
                 && mediaExpectationMatches
+                && lowLevelTrackMatches
                 && tapeExpectationMatches
                 && ramMatches
                 && colorRAMMatches
@@ -3337,6 +3406,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             milestone.id = entry.id
             milestone.name = entry.name
             milestone.tapeStatus = entry.tapeStatus
+            milestone.lowLevelTracks = entry.lowLevelTracks
             milestone.weakBitRanges = entry.weakBitRanges
             milestone.speedZoneRanges = entry.speedZoneRanges
             return milestone
@@ -3476,6 +3546,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 capabilities: c64.emulationStatus.mediaCapabilities
             ))
         }
+        unmet.append(contentsOf: lowLevelTrackMismatches(
+            milestone.lowLevelTracks,
+            disk: c64.drive1541.disk
+        ))
         if let tapeStatusExpectation = milestone.tapeStatus {
             unmet.append(contentsOf: tapeStatusMismatches(
                 tapeStatusExpectation,
@@ -3784,6 +3858,50 @@ final class LocalDiskMatrixTests: XCTestCase {
             }) else {
                 mismatches.append("media.unsupportedFeatures missing \(expectedFeature)")
                 continue
+            }
+        }
+        return mismatches
+    }
+
+    private func lowLevelTrackMismatches(
+        _ expectations: [CompatibilityLowLevelTrackExpectation],
+        disk: GCRDisk
+    ) -> [String] {
+        var mismatches: [String] = []
+        for expectation in expectations {
+            let prefix = "media.lowLevelTrack[\(expectation.halfTrack)]"
+            guard let track = disk.trackInfo(halfTrack: expectation.halfTrack) else {
+                mismatches.append("\(prefix) missing")
+                continue
+            }
+            if let byteCount = expectation.byteCount, track.bytes.count != byteCount {
+                mismatches.append("\(prefix).byteCount \(track.bytes.count) != \(byteCount)")
+            }
+            if let bitLength = expectation.bitLength, track.bitLength != bitLength {
+                mismatches.append("\(prefix).bitLength \(track.bitLength) != \(bitLength)")
+            }
+            if let speedZone = expectation.speedZone, track.speedZone != speedZone {
+                mismatches.append("\(prefix).speedZone \(track.speedZone) != \(speedZone)")
+            }
+            if let bytesHash = expectation.bytesHash {
+                let actualHash = CompatibilityHash.fnv1a64(track.bytes)
+                if actualHash.caseInsensitiveCompare(bytesHash) != .orderedSame {
+                    mismatches.append("\(prefix).bytesHash \(actualHash) != \(bytesHash)")
+                }
+            }
+            if let speedZoneMapHash = expectation.speedZoneMapHash {
+                guard let speedZoneMap = track.speedZoneMap else {
+                    mismatches.append("\(prefix).speedZoneMapHash nil != \(speedZoneMapHash)")
+                    continue
+                }
+                let actualHash = CompatibilityHash.fnv1a64(speedZoneMap)
+                if actualHash.caseInsensitiveCompare(speedZoneMapHash) != .orderedSame {
+                    mismatches.append("\(prefix).speedZoneMapHash \(actualHash) != \(speedZoneMapHash)")
+                }
+            }
+            if let weakBitRangeCount = expectation.weakBitRangeCount,
+               track.weakBitRanges.count != weakBitRangeCount {
+                mismatches.append("\(prefix).weakBitRangeCount \(track.weakBitRanges.count) != \(weakBitRangeCount)")
             }
         }
         return mismatches
@@ -4679,6 +4797,7 @@ private struct MatrixRunResult {
             finalMediaSupportsWraparoundReads: media?.supportsWraparoundReads,
             finalMediaMaxTrackSize: media?.maxTrackSize,
             finalMediaUnsupportedFeatures: media?.unsupportedFeatures,
+            finalLowLevelTracks: lowLevelTrackRecords(milestone.lowLevelTracks, disk: c64.drive1541.disk),
             finalMountedTapeName: tapeStatus.mountedTapeName,
             finalTapeDecodeStatus: tapeDecode.status,
             finalTapePulseCount: tapeDecode.pulseCount,
@@ -4703,6 +4822,14 @@ private struct MatrixRunResult {
             ),
             screenshotPath: screenshotURL?.path
         )
+    }
+
+    private func lowLevelTrackRecords(
+        _ expectations: [CompatibilityLowLevelTrackExpectation],
+        disk: GCRDisk
+    ) -> [LowLevelTrackRecord]? {
+        guard !expectations.isEmpty else { return nil }
+        return expectations.map { LowLevelTrackRecord(expectation: $0, disk: disk) }
     }
 
     func expectedFailureMismatches(for expectedFailure: CompatibilityExpectedFailure?) -> [String] {
@@ -5023,6 +5150,7 @@ private struct LocalMilestone {
     let minByteReady: UInt64
     let driveStatus: CompatibilityDriveStatus?
     let mediaStatus: CompatibilityMediaStatus?
+    var lowLevelTracks: [CompatibilityLowLevelTrackExpectation] = []
     var weakBitRanges: [CompatibilityWeakBitRange] = []
     var speedZoneRanges: [CompatibilitySpeedZoneRange] = []
     var tapeStatus: CompatibilityTapeStatus? = nil
@@ -5141,8 +5269,37 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
     return "\(idText)file=\(key.file) profile=\(key.machineProfile) drive=\(key.driveMode) command=\(key.commandSummary)"
 }
 
+private struct LowLevelTrackRecord: Codable, Equatable {
+    let halfTrack: Int
+    let byteCount: Int?
+    let bitLength: Int?
+    let speedZone: Int?
+    let bytesHash: String?
+    let speedZoneMapHash: String?
+    let weakBitRangeCount: Int?
+
+    init(expectation: CompatibilityLowLevelTrackExpectation, disk: GCRDisk) {
+        halfTrack = expectation.halfTrack
+        guard let track = disk.trackInfo(halfTrack: expectation.halfTrack) else {
+            byteCount = nil
+            bitLength = nil
+            speedZone = nil
+            bytesHash = nil
+            speedZoneMapHash = nil
+            weakBitRangeCount = nil
+            return
+        }
+        byteCount = track.bytes.count
+        bitLength = track.bitLength
+        speedZone = track.speedZone
+        bytesHash = CompatibilityHash.fnv1a64(track.bytes)
+        speedZoneMapHash = track.speedZoneMap.map { CompatibilityHash.fnv1a64($0) }
+        weakBitRangeCount = track.weakBitRanges.count
+    }
+}
+
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 28
+    static let currentFormatVersion = 29
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5231,6 +5388,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalMediaSupportsWraparoundReads: Bool?
     let finalMediaMaxTrackSize: Int?
     let finalMediaUnsupportedFeatures: [String]?
+    let finalLowLevelTracks: [LowLevelTrackRecord]?
     let finalMountedTapeName: String?
     let finalTapeDecodeStatus: String?
     let finalTapePulseCount: Int?
@@ -5339,6 +5497,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalMediaSupportsWraparoundReads: Bool? = nil,
         finalMediaMaxTrackSize: Int? = nil,
         finalMediaUnsupportedFeatures: [String]? = nil,
+        finalLowLevelTracks: [LowLevelTrackRecord]? = nil,
         finalMountedTapeName: String? = nil,
         finalTapeDecodeStatus: String? = nil,
         finalTapePulseCount: Int? = nil,
@@ -5446,6 +5605,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalMediaSupportsWraparoundReads = finalMediaSupportsWraparoundReads
         self.finalMediaMaxTrackSize = finalMediaMaxTrackSize
         self.finalMediaUnsupportedFeatures = finalMediaUnsupportedFeatures
+        self.finalLowLevelTracks = finalLowLevelTracks
         self.finalMountedTapeName = finalMountedTapeName
         self.finalTapeDecodeStatus = finalTapeDecodeStatus
         self.finalTapePulseCount = finalTapePulseCount

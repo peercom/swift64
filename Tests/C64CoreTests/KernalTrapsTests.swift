@@ -73,6 +73,23 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertEqual(readKernalChannelLine(c64), "23, READ ERROR,18,01\r")
     }
 
+    func testDirectoryLoadTrapHonorsNameAndTypeFilters() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeSameNamePRGAndSEQD64()))
+        prepareKernalLoadTrap(c64, filename: "$:HELLO,S", verify: false)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0)
+
+        let endAddress = Int(c64.memory.ram[0x2D]) | (Int(c64.memory.ram[0x2E]) << 8)
+        let loadedListing = String(decoding: c64.memory.ram[0x0801..<endAddress], as: UTF8.self)
+        XCTAssertTrue(loadedListing.contains("HELLO"))
+        XCTAssertTrue(loadedListing.contains("SEQ"))
+        XCTAssertFalse(loadedListing.contains("PRG"))
+    }
+
     func testLoadTrapMissingDiskFileReportsFileNotFoundCommandStatus() {
         let c64 = C64()
         XCTAssertTrue(c64.mountDisk(makeMinimalD64()))
@@ -770,6 +787,18 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertEqual(c64.cpu.a, 0xBE)
     }
 
+    func testOpenCommandChannelBlockReadReportsInvalidTrackSector() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+
+        prepareKernalOpenTrap(c64, filename: "B-R:2,0,99,0", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "66, ILLEGAL TRACK OR SECTOR,99,00\r")
+    }
+
     func testBufferedCommandChannelBinaryU1FeedsTargetChannel() {
         let c64 = C64()
         var image = [UInt8](makeBlankWritableD64())
@@ -1228,6 +1257,30 @@ final class KernalTrapsTests: XCTestCase {
             imageWithErrors.append(contentsOf: errorTable)
             return Data(imageWithErrors)
         }
+
+        return Data(image)
+    }
+
+    private func makeSameNamePRGAndSEQD64() -> Data {
+        var image = [UInt8](makeBlankWritableD64())
+        let dirOffset = DiskDrive.trackOffset[18] + 256
+
+        image[dirOffset + 2] = 0x82
+        image[dirOffset + 3] = 1
+        image[dirOffset + 4] = 0
+        let name = Array("HELLO".utf8)
+        for index in 0..<16 {
+            image[dirOffset + 5 + index] = index < name.count ? name[index] : 0xA0
+        }
+        image[dirOffset + 30] = 1
+
+        image[dirOffset + 32 + 2] = 0x81
+        image[dirOffset + 32 + 3] = 1
+        image[dirOffset + 32 + 4] = 1
+        for index in 0..<16 {
+            image[dirOffset + 32 + 5 + index] = index < name.count ? name[index] : 0xA0
+        }
+        image[dirOffset + 32 + 30] = 1
 
         return Data(image)
     }
