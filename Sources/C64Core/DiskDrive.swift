@@ -38,6 +38,8 @@ public final class DiskDrive {
         205312, 206114,  // 42 tracks
     ]
 
+    private static let standardBAMTrackLimit = 35
+
     struct D64Geometry {
         let dataSize: Int
         let errorInfoOffset: Int?
@@ -1213,7 +1215,7 @@ public final class DiskDrive {
         }
 
         guard let geometry = mountedGeometry,
-              track >= 1 && track <= geometry.trackCount,
+              track >= 1 && track <= min(geometry.trackCount, Self.standardBAMTrackLimit),
               sector >= 0 && sector < geometry.sectorsPerTrack[track] else {
             return .invalidBlock(track: track, sector: sector)
         }
@@ -2000,7 +2002,7 @@ public final class DiskDrive {
         var occupied = occupiedSectors().subtracting(released)
         var selected: [(track: Int, sector: Int)] = []
 
-        for track in 1...geometry.trackCount where track != 18 {
+        for track in 1...min(geometry.trackCount, Self.standardBAMTrackLimit) where track != 18 {
             ensureUsableBAMBitmap(forTrack: track, occupied: occupied)
 
             for sector in 0..<geometry.sectorsPerTrack[track] {

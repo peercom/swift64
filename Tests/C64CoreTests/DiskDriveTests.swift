@@ -1416,6 +1416,20 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertFalse(g64Drive.hasUnsavedChanges)
     }
 
+    func testCommandChannelBlockAllocateRejectsExtendedD64TracksWithoutCorruptingBAMName() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 196_608 - image.count))
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertEqual(drive.diskName, "write test")
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:0,36,0"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "66, ILLEGAL TRACK OR SECTOR,36,00\r")
+        XCTAssertEqual(drive.diskName, "write test")
+        XCTAssertFalse(drive.hasUnsavedChanges)
+    }
+
     func testCommandChannelBlockAllocateReportsD64BAMSectorReadErrors() {
         let drive = DiskDrive()
         var image = [UInt8](makeBlankWritableD64WithErrorTable())
