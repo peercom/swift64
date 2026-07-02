@@ -113,8 +113,13 @@ final class Drive1541Tests: XCTestCase {
 
         XCTAssertEqual(fixedBytes, [0x00, 0x00, 0x00, 0x00])
         XCTAssertEqual(fixedDrive.statusSnapshot.weakBitReadCount, 0)
+        XCTAssertNil(fixedDrive.statusSnapshot.lastWeakBitHalfTrack)
+        XCTAssertNil(fixedDrive.statusSnapshot.lastWeakBitPosition)
         XCTAssertTrue(weakBytes.contains { $0 != 0x00 })
         XCTAssertGreaterThan(weakDrive.statusSnapshot.weakBitReadCount, 0)
+        XCTAssertEqual(weakDrive.statusSnapshot.lastWeakBitHalfTrack, 36)
+        XCTAssertGreaterThanOrEqual(weakDrive.statusSnapshot.lastWeakBitPosition ?? -1, 0)
+        XCTAssertLessThan(weakDrive.statusSnapshot.lastWeakBitPosition ?? 128, 128)
     }
 
     func testGCRHeadUsesWeakBitAnnotationsAddedAfterInsert() {
@@ -131,6 +136,9 @@ final class Drive1541Tests: XCTestCase {
         let bytes = readPresentedGCRBytes(from: drive, count: 4)
         XCTAssertTrue(bytes.contains { $0 != 0x00 })
         XCTAssertGreaterThan(drive.statusSnapshot.weakBitReadCount, 0)
+        XCTAssertEqual(drive.statusSnapshot.lastWeakBitHalfTrack, 36)
+        XCTAssertGreaterThanOrEqual(drive.statusSnapshot.lastWeakBitPosition ?? -1, 0)
+        XCTAssertLessThan(drive.statusSnapshot.lastWeakBitPosition ?? 128, 128)
     }
 
     func testExportedG64PreservesWeakBitRangesInSwift64Extension() throws {

@@ -906,6 +906,10 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
     public let minGCRWriteSplices: Int?
     public let minGCRWriteEraseBits: Int?
     public let requiredVariableSpeedZones: [Int]
+    public let lastWeakBitHalfTrack: Int?
+    public let lastWeakBitPosition: Int?
+    public let lastWeakBitPositionStart: Int?
+    public let lastWeakBitPositionEnd: Int?
     public let track: Int?
     public let halfTrack: Int?
     public let headBitPosition: Int?
@@ -933,6 +937,10 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         case minGCRWriteSplices
         case minGCRWriteEraseBits
         case requiredVariableSpeedZones
+        case lastWeakBitHalfTrack
+        case lastWeakBitPosition
+        case lastWeakBitPositionStart
+        case lastWeakBitPositionEnd
         case track
         case halfTrack
         case headBitPosition
@@ -961,6 +969,10 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         minGCRWriteSplices: Int? = nil,
         minGCRWriteEraseBits: Int? = nil,
         requiredVariableSpeedZones: [Int] = [],
+        lastWeakBitHalfTrack: Int? = nil,
+        lastWeakBitPosition: Int? = nil,
+        lastWeakBitPositionStart: Int? = nil,
+        lastWeakBitPositionEnd: Int? = nil,
         track: Int? = nil,
         halfTrack: Int? = nil,
         headBitPosition: Int? = nil,
@@ -987,6 +999,10 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
         self.minGCRWriteSplices = minGCRWriteSplices
         self.minGCRWriteEraseBits = minGCRWriteEraseBits
         self.requiredVariableSpeedZones = requiredVariableSpeedZones
+        self.lastWeakBitHalfTrack = lastWeakBitHalfTrack
+        self.lastWeakBitPosition = lastWeakBitPosition
+        self.lastWeakBitPositionStart = lastWeakBitPositionStart
+        self.lastWeakBitPositionEnd = lastWeakBitPositionEnd
         self.track = track
         self.halfTrack = halfTrack
         self.headBitPosition = headBitPosition
@@ -1021,6 +1037,17 @@ public struct CompatibilityDriveStatus: Decodable, Equatable {
                 forKey: .requiredVariableSpeedZones,
                 in: container,
                 debugDescription: "Required variable speed zones must be 0...3"
+            )
+        }
+        lastWeakBitHalfTrack = try Self.decodeNonNegativeIfPresent(container, forKey: .lastWeakBitHalfTrack)
+        lastWeakBitPosition = try Self.decodeNonNegativeIfPresent(container, forKey: .lastWeakBitPosition)
+        lastWeakBitPositionStart = try Self.decodeNonNegativeIfPresent(container, forKey: .lastWeakBitPositionStart)
+        lastWeakBitPositionEnd = try Self.decodeNonNegativeIfPresent(container, forKey: .lastWeakBitPositionEnd)
+        if let start = lastWeakBitPositionStart, let end = lastWeakBitPositionEnd, start > end {
+            throw DecodingError.dataCorruptedError(
+                forKey: .lastWeakBitPositionEnd,
+                in: container,
+                debugDescription: "lastWeakBitPositionStart must be <= lastWeakBitPositionEnd"
             )
         }
         track = try Self.decodeNonNegativeIfPresent(container, forKey: .track)

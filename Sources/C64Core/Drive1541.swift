@@ -30,6 +30,8 @@ public final class Drive1541 {
         public let via2PortAReadCount: UInt64
         public let syncDetectionCount: UInt64
         public let weakBitReadCount: UInt64
+        public let lastWeakBitHalfTrack: Int?
+        public let lastWeakBitPosition: Int?
         public let variableSpeedZoneSampleCount: UInt64
         public let variableSpeedZoneMask: UInt8
         public let gcrWriteByteCount: UInt64
@@ -139,6 +141,8 @@ public final class Drive1541 {
 
     /// Total unstable weak/random media bits consumed by the GCR head.
     public private(set) var weakBitReadCount: UInt64 = 0
+    public private(set) var lastWeakBitHalfTrack: Int?
+    public private(set) var lastWeakBitPosition: Int?
 
     /// Total UE7 speed samples that used a per-byte variable speed-zone map.
     public private(set) var variableSpeedZoneSampleCount: UInt64 = 0
@@ -373,6 +377,8 @@ public final class Drive1541 {
             via2PortAReadCount: via2PortAReadCount,
             syncDetectionCount: syncDetectionCount,
             weakBitReadCount: weakBitReadCount,
+            lastWeakBitHalfTrack: lastWeakBitHalfTrack,
+            lastWeakBitPosition: lastWeakBitPosition,
             variableSpeedZoneSampleCount: variableSpeedZoneSampleCount,
             variableSpeedZoneMask: variableSpeedZoneMask,
             gcrWriteByteCount: gcrWriteByteCount,
@@ -521,6 +527,8 @@ public final class Drive1541 {
         via2PortAReadBytes.removeAll(keepingCapacity: true)
         syncDetectionCount = 0
         weakBitReadCount = 0
+        lastWeakBitHalfTrack = nil
+        lastWeakBitPosition = nil
         variableSpeedZoneSampleCount = 0
         variableSpeedZoneMask = 0
         gcrWriteByteCount = 0
@@ -832,6 +840,7 @@ public final class Drive1541 {
                     let bit = readTrackBit(
                         trackData: trackData,
                         trackInfo: trackInfo,
+                        halfTrack: resolvedTrack.halfTrack,
                         byteIndex: byteIdx,
                         bitIndex: bitIdx,
                         bitPosition: headBitPosition
@@ -978,6 +987,7 @@ public final class Drive1541 {
     private func readTrackBit(
         trackData: [UInt8],
         trackInfo: DiskImage.Track?,
+        halfTrack: Int,
         byteIndex: Int,
         bitIndex: Int,
         bitPosition: Int
@@ -985,6 +995,8 @@ public final class Drive1541 {
         if let trackInfo,
            trackInfo.weakBitRanges.contains(where: { $0.contains(bitPosition) }) {
             weakBitReadCount += 1
+            lastWeakBitHalfTrack = halfTrack
+            lastWeakBitPosition = bitPosition
             return nextWeakBit()
         }
         return UInt16((trackData[byteIndex] >> bitIndex) & 1)

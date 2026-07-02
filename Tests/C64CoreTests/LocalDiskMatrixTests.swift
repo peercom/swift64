@@ -961,6 +961,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 minGCRWriteSplices: 1,
                 minGCRWriteEraseBits: 1,
                 requiredVariableSpeedZones: [0, 4],
+                lastWeakBitHalfTrack: 36,
+                lastWeakBitPosition: 12,
+                lastWeakBitPositionStart: 10,
+                lastWeakBitPositionEnd: 20,
                 track: 17,
                 headBitPosition: 123,
                 gcrWriteModeActive: true,
@@ -990,6 +994,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(reason.contains("drive.minGCRWriteEraseBits 0 < 1"))
         XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones missing 0"))
         XCTAssertTrue(reason.contains("drive.requiredVariableSpeedZones invalid 4"))
+        XCTAssertTrue(reason.contains("drive.lastWeakBitHalfTrack"))
+        XCTAssertTrue(reason.contains("drive.lastWeakBitPosition"))
+        XCTAssertTrue(reason.contains("drive.lastWeakBitPosition nil < 10"))
         XCTAssertTrue(reason.contains("drive.track"))
         XCTAssertTrue(reason.contains("drive.headBitPosition"))
         XCTAssertTrue(reason.contains("drive.gcrWriteModeActive"))
@@ -1268,6 +1275,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
         XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
         XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
+        XCTAssertNil(records.last?.finalLastWeakBitHalfTrack)
+        XCTAssertNil(records.last?.finalLastWeakBitPosition)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneSampleCount, 0)
         XCTAssertEqual(records.last?.finalVariableSpeedZoneMask, 0)
         XCTAssertEqual(records.last?.finalGCRWriteByteCount, 0)
@@ -1348,6 +1357,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalSIDVoiceStates)
         XCTAssertNil(legacyRecord.finalHeadBitPosition)
         XCTAssertNil(legacyRecord.finalWeakBitReadCount)
+        XCTAssertNil(legacyRecord.finalLastWeakBitHalfTrack)
+        XCTAssertNil(legacyRecord.finalLastWeakBitPosition)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneSampleCount)
         XCTAssertNil(legacyRecord.finalVariableSpeedZoneMask)
         XCTAssertNil(legacyRecord.finalGCRWriteByteCount)
@@ -3573,6 +3584,32 @@ final class LocalDiskMatrixTests: XCTestCase {
                 mismatches.append("drive.requiredVariableSpeedZones missing \(zone)")
             }
         }
+        if let lastWeakBitHalfTrack = expectation.lastWeakBitHalfTrack,
+           snapshot.lastWeakBitHalfTrack != lastWeakBitHalfTrack {
+            mismatches.append("drive.lastWeakBitHalfTrack \(snapshot.lastWeakBitHalfTrack.map(String.init) ?? "nil") != \(lastWeakBitHalfTrack)")
+        }
+        if let lastWeakBitPosition = expectation.lastWeakBitPosition,
+           snapshot.lastWeakBitPosition != lastWeakBitPosition {
+            mismatches.append("drive.lastWeakBitPosition \(snapshot.lastWeakBitPosition.map(String.init) ?? "nil") != \(lastWeakBitPosition)")
+        }
+        if let lastWeakBitPositionStart = expectation.lastWeakBitPositionStart {
+            if let actual = snapshot.lastWeakBitPosition {
+                if actual < lastWeakBitPositionStart {
+                    mismatches.append("drive.lastWeakBitPosition \(actual) < \(lastWeakBitPositionStart)")
+                }
+            } else {
+                mismatches.append("drive.lastWeakBitPosition nil < \(lastWeakBitPositionStart)")
+            }
+        }
+        if let lastWeakBitPositionEnd = expectation.lastWeakBitPositionEnd {
+            if let actual = snapshot.lastWeakBitPosition {
+                if actual > lastWeakBitPositionEnd {
+                    mismatches.append("drive.lastWeakBitPosition \(actual) > \(lastWeakBitPositionEnd)")
+                }
+            } else {
+                mismatches.append("drive.lastWeakBitPosition nil > \(lastWeakBitPositionEnd)")
+            }
+        }
         if let track = expectation.track, snapshot.track != track {
             mismatches.append("drive.track \(snapshot.track) != \(track)")
         }
@@ -4581,6 +4618,8 @@ private struct MatrixRunResult {
             finalByteReadyCount: drive.byteReadyCount,
             finalVia2PortAReadCount: drive.via2PortAReadCount,
             finalWeakBitReadCount: drive.weakBitReadCount,
+            finalLastWeakBitHalfTrack: drive.lastWeakBitHalfTrack,
+            finalLastWeakBitPosition: drive.lastWeakBitPosition,
             finalVariableSpeedZoneSampleCount: drive.variableSpeedZoneSampleCount,
             finalVariableSpeedZoneMask: drive.variableSpeedZoneMask,
             finalGCRWriteByteCount: drive.gcrWriteByteCount,
@@ -5076,7 +5115,7 @@ private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 26
+    static let currentFormatVersion = 27
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5128,6 +5167,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalByteReadyCount: UInt64?
     let finalVia2PortAReadCount: UInt64?
     let finalWeakBitReadCount: UInt64?
+    let finalLastWeakBitHalfTrack: Int?
+    let finalLastWeakBitPosition: Int?
     let finalVariableSpeedZoneSampleCount: UInt64?
     let finalVariableSpeedZoneMask: UInt8?
     let finalGCRWriteByteCount: UInt64?
@@ -5231,6 +5272,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalByteReadyCount: UInt64? = nil,
         finalVia2PortAReadCount: UInt64? = nil,
         finalWeakBitReadCount: UInt64? = nil,
+        finalLastWeakBitHalfTrack: Int? = nil,
+        finalLastWeakBitPosition: Int? = nil,
         finalVariableSpeedZoneSampleCount: UInt64? = nil,
         finalVariableSpeedZoneMask: UInt8? = nil,
         finalGCRWriteByteCount: UInt64? = nil,
@@ -5333,6 +5376,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalByteReadyCount = finalByteReadyCount
         self.finalVia2PortAReadCount = finalVia2PortAReadCount
         self.finalWeakBitReadCount = finalWeakBitReadCount
+        self.finalLastWeakBitHalfTrack = finalLastWeakBitHalfTrack
+        self.finalLastWeakBitPosition = finalLastWeakBitPosition
         self.finalVariableSpeedZoneSampleCount = finalVariableSpeedZoneSampleCount
         self.finalVariableSpeedZoneMask = finalVariableSpeedZoneMask
         self.finalGCRWriteByteCount = finalGCRWriteByteCount

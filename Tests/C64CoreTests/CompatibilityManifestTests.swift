@@ -45,6 +45,10 @@ final class CompatibilityManifestTests: XCTestCase {
                 "minGCRWriteSplices": 2,
                 "minGCRWriteEraseBits": 9,
                 "requiredVariableSpeedZones": [0, 3],
+                "lastWeakBitHalfTrack": 35,
+                "lastWeakBitPosition": 4096,
+                "lastWeakBitPositionStart": 4000,
+                "lastWeakBitPositionEnd": 4200,
                 "track": 18,
                 "halfTrack": 34,
                 "headBitPosition": 12345,
@@ -295,6 +299,10 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.driveStatus?.minGCRWriteSplices, 2)
         XCTAssertEqual(milestone.driveStatus?.minGCRWriteEraseBits, 9)
         XCTAssertEqual(milestone.driveStatus?.requiredVariableSpeedZones, [0, 3])
+        XCTAssertEqual(milestone.driveStatus?.lastWeakBitHalfTrack, 35)
+        XCTAssertEqual(milestone.driveStatus?.lastWeakBitPosition, 4096)
+        XCTAssertEqual(milestone.driveStatus?.lastWeakBitPositionStart, 4000)
+        XCTAssertEqual(milestone.driveStatus?.lastWeakBitPositionEnd, 4200)
         XCTAssertEqual(milestone.driveStatus?.track, 18)
         XCTAssertEqual(milestone.driveStatus?.halfTrack, 34)
         XCTAssertEqual(milestone.driveStatus?.headBitPosition, 12345)
@@ -773,6 +781,43 @@ final class CompatibilityManifestTests: XCTestCase {
               "command": "LOAD\\"*\\",8,1",
               "driveStatus": {
                 "minVariableSpeedZoneSamples": -1
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsNegativeWeakBitCoordinateExpectations() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-weak-coordinate.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "driveStatus": {
+                "lastWeakBitPosition": -1
+              }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidWeakBitCoordinateRange() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "bad-weak-range.g64",
+              "command": "LOAD\\"*\\",8,1",
+              "driveStatus": {
+                "lastWeakBitPositionStart": 200,
+                "lastWeakBitPositionEnd": 100
               }
             }
           ]
