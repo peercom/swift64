@@ -128,6 +128,16 @@ struct C64App: App {
 
             // Emulation menu
             CommandMenu("Emulation") {
+                Menu("Compatibility Preset") {
+                    ForEach(CompatibilityPresetPreference.allCases) { preset in
+                        Button(preset.title) {
+                            emulator.applyCompatibilityPreset(preset)
+                        }
+                    }
+                }
+
+                Divider()
+
                 Toggle("True Drive Emulation (1541)", isOn: Binding(
                     get: { emulator.c64.trueDriveEmulation },
                     set: { enabled in

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import C64Core
 
@@ -404,6 +405,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let c64 = C64(machineProfile: .palC64)
         try loadBundledROMs(into: c64)
         c64.trueDriveEmulationMode = .compat1541
+        applyLocalSIDOverrides(to: c64)
         XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
         c64.powerOn()
 
@@ -416,6 +418,58 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         let maxCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_RUN_MAX_CYCLES"] ?? "") ?? 8_000_000
         let stopOnScreenChange = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_CONTINUE_AFTER_SCREEN_CHANGE"] == nil
+        let pressSpaceOnScreenChange = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_PRESS_SPACE_ON_SCREEN_CHANGE"] == "1"
+        let spaceDelayCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_SPACE_DELAY_CYCLES"] ?? "") ?? 0
+        let spaceHoldCycles = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_SPACE_HOLD_CYCLES"] ?? "") ?? 30_000
+        let spaceTargetPC = parseOptionalUInt16Environment("SWIFT64_LOCAL_GIANA_PRESS_SPACE_AT_PC")
+        let spaceTargetMinCycle = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_PRESS_SPACE_AT_PC_MIN_CYCLES"] ?? "") ?? 0
+        let wavCaptureURL = optionalFileURLEnvironment("SWIFT64_LOCAL_GIANA_WAV_CAPTURE")
+        let wavCaptureSeconds = boundedDoubleEnvironment(
+            "SWIFT64_LOCAL_GIANA_WAV_CAPTURE_SECONDS",
+            defaultValue: 8,
+            range: 0.1...30
+        )
+        let wavCaptureMaxSamples = max(1, Int((wavCaptureSeconds * SID.sampleRate).rounded()))
+        let wavCaptureStartChipWrites = max(
+            0,
+            Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_WAV_CAPTURE_AFTER_CHIP_WRITES"] ?? "") ?? 3
+        )
+        let wavCaptureStartMode = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_WAV_CAPTURE_START"] ?? "voice-output"
+        let stopAfterWavCapture = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_STOP_AFTER_WAV_CAPTURE"] == "1"
+        let sidTraceURL = optionalFileURLEnvironment("SWIFT64_LOCAL_GIANA_SID_TRACE_JSONL")
+        let sidTraceLimit = max(
+            1,
+            Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_SID_TRACE_LIMIT"] ?? "") ?? 50_000
+        )
+        let sidTraceIncludesRAMWindow = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_SID_TRACE_INCLUDE_RAM"] == "1"
+        var sidTraceEvents: [SIDRegisterWriteTraceEvent] = []
+        var sidTraceDroppedEvents = 0
+        var wavSamples: [Float] = []
+        var wavCaptureStarted = false
+        var wavCaptureComplete = false
+        if wavCaptureURL != nil {
+            wavSamples.reserveCapacity(wavCaptureMaxSamples)
+            c64.sid.onSampleGenerated = { sample in
+                guard wavCaptureStarted && !wavCaptureComplete else { return }
+                if wavSamples.count < wavCaptureMaxSamples {
+                    wavSamples.append(sample)
+                }
+                if wavSamples.count >= wavCaptureMaxSamples {
+                    wavCaptureComplete = true
+                }
+            }
+        }
+        if sidTraceURL != nil {
+            sidTraceEvents.reserveCapacity(min(sidTraceLimit, 50_000))
+            c64.onSIDRegisterWriteTrace = { event in
+                guard event.reachedChip || sidTraceIncludesRAMWindow else { return }
+                guard sidTraceEvents.count < sidTraceLimit else {
+                    sidTraceDroppedEvents += 1
+                    return
+                }
+                sidTraceEvents.append(event)
+            }
+        }
         var loaded = false
         var loadScreenHash: String?
         var screenChangedAfterLoad = false
@@ -426,9 +480,55 @@ final class LocalDiskMatrixTests: XCTestCase {
         var kernalPCRangeHits: [UInt16: Int] = [:]
         var lastKernalPC: UInt16?
         var sameKernalPCCycles = 0
+        var secondScreenSpacePressed = false
+        var spacePressCycle: Int?
+        var spaceReleaseCycle: Int?
+        var spacePressReason = "none"
+        defer {
+            c64.sid.onSampleGenerated = nil
+            c64.onSIDRegisterWriteTrace = nil
+            if secondScreenSpacePressed {
+                CompatibilityKey.space.release(on: c64)
+            }
+        }
 
         for cycle in 0..<maxCycles {
+            if let pressCycle = spacePressCycle, cycle >= pressCycle {
+                CompatibilityKey.space.press(on: c64)
+                secondScreenSpacePressed = true
+                spacePressCycle = nil
+                spaceReleaseCycle = cycle + max(1, spaceHoldCycles)
+            }
+            if let releaseCycle = spaceReleaseCycle, cycle >= releaseCycle {
+                CompatibilityKey.space.release(on: c64)
+                spaceReleaseCycle = nil
+            }
+            if wavCaptureURL != nil,
+               !wavCaptureStarted,
+               shouldStartGianaWAVCapture(
+                   c64,
+                   minimumChipWrites: wavCaptureStartChipWrites,
+                   mode: wavCaptureStartMode
+               ) {
+                wavCaptureStarted = true
+            }
+            if wavCaptureComplete && stopAfterWavCapture {
+                break
+            }
+
             c64.tickOneCycle()
+            if wavCaptureURL != nil,
+               !wavCaptureStarted,
+               shouldStartGianaWAVCapture(
+                   c64,
+                   minimumChipWrites: wavCaptureStartChipWrites,
+                   mode: wavCaptureStartMode
+               ) {
+                wavCaptureStarted = true
+            }
+            if wavCaptureComplete && stopAfterWavCapture {
+                break
+            }
             enteredProgramCode = enteredProgramCode || (0x0801...0xBFFF).contains(c64.cpu.pc)
             if (0xFFB0...0xFFE4).contains(c64.cpu.pc) {
                 kernalPCRangeHits[c64.cpu.pc, default: 0] += 1
@@ -441,6 +541,14 @@ final class LocalDiskMatrixTests: XCTestCase {
             } else {
                 lastKernalPC = nil
                 sameKernalPCCycles = 0
+            }
+            if let spaceTargetPC,
+               !secondScreenSpacePressed,
+               spacePressCycle == nil,
+               cycle >= spaceTargetMinCycle,
+               c64.cpu.pc == spaceTargetPC {
+                spacePressReason = "pc=$\(String(format: "%04X", spaceTargetPC))"
+                spacePressCycle = cycle
             }
             if cycle & 0x03FF == 0, let reason = c64.emulationStatus.lastFailureReason {
                 failureReason = reason
@@ -462,7 +570,14 @@ final class LocalDiskMatrixTests: XCTestCase {
                    let loadScreenHash,
                    CompatibilityHash.screenRAM(c64.memory.ram) != loadScreenHash {
                     screenChangedAfterLoad = true
-                    if stopOnScreenChange {
+                    if pressSpaceOnScreenChange &&
+                        spaceTargetPC == nil &&
+                        !secondScreenSpacePressed &&
+                        spacePressCycle == nil {
+                        spacePressReason = "screen-change"
+                        spacePressCycle = cycle + max(0, spaceDelayCycles)
+                    }
+                    if stopOnScreenChange && !pressSpaceOnScreenChange {
                         break
                     }
                 }
@@ -475,7 +590,23 @@ final class LocalDiskMatrixTests: XCTestCase {
         let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
         let loadEnd = String(format: "%04X", loadEndAddress)
         let pcBytes = cpuBytes(c64, at: c64.cpu.pc, count: 12)
-        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) cycles=\(c64.cpu.totalCycles) pc=$\(pc) pcBytes=\(pcBytes) vic=\(vicSummary(c64)) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) reason=\(failureReason ?? c64.emulationStatus.lastFailureReason ?? "none")"
+        let wavCaptureSummary: String
+        if let wavCaptureURL {
+            if !wavSamples.isEmpty {
+                try writeMono16BitWAV(samples: wavSamples, sampleRate: Int(SID.sampleRate), to: wavCaptureURL)
+            }
+            wavCaptureSummary = "wavCapture=\(wavCaptureURL.path),samples=\(wavSamples.count),started=\(wavCaptureStarted),complete=\(wavCaptureComplete)"
+        } else {
+            wavCaptureSummary = "wavCapture=disabled"
+        }
+        let sidTraceSummary: String
+        if let sidTraceURL {
+            try writeSIDTraceJSONL(sidTraceEvents, to: sidTraceURL)
+            sidTraceSummary = "sidTrace=\(sidTraceURL.path),events=\(sidTraceEvents.count),dropped=\(sidTraceDroppedEvents),includeRAM=\(sidTraceIncludesRAMWindow)"
+        } else {
+            sidTraceSummary = "sidTrace=disabled"
+        }
+        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) secondScreenSpacePressed=\(secondScreenSpacePressed) spaceReason=\(spacePressReason) cycles=\(c64.cpu.totalCycles) pc=$\(pc) pcBytes=\(pcBytes) vic=\(vicSummary(c64)) sid=\(sidRunSummary(c64)) \(wavCaptureSummary) \(sidTraceSummary) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) reason=\(failureReason ?? c64.emulationStatus.lastFailureReason ?? "none")"
         print(summary)
 
         XCTAssertNil(failureReason, summary)
@@ -494,6 +625,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let c64 = C64(machineProfile: .palC64)
         try loadBundledROMs(into: c64)
         c64.trueDriveEmulationMode = .off
+        applyLocalSIDOverrides(to: c64)
         XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
         c64.powerOn()
 
@@ -572,6 +704,104 @@ final class LocalDiskMatrixTests: XCTestCase {
         ProcessInfo.processInfo.environment[env] ?? "LOAD\"*\",8,1\rRUN\r"
     }
 
+    private func parseOptionalUInt16Environment(_ name: String) -> UInt16? {
+        guard let rawValue = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        let parsed: Int?
+        if rawValue.lowercased().hasPrefix("0x") {
+            parsed = Int(rawValue.dropFirst(2), radix: 16)
+        } else if rawValue.hasPrefix("$") {
+            parsed = Int(rawValue.dropFirst(), radix: 16)
+        } else {
+            parsed = Int(rawValue)
+        }
+        guard let parsed, parsed >= 0 && parsed <= 0xFFFF else { return nil }
+        return UInt16(parsed)
+    }
+
+    private func applyLocalSIDOverrides(to c64: C64) {
+        let environment = ProcessInfo.processInfo.environment
+        if let modelValue = environment["SWIFT64_LOCAL_GIANA_SID_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !modelValue.isEmpty,
+           let model = SID.Model(rawValue: modelValue) {
+            c64.sid.model = model
+        }
+        if let accuracyValue = environment["SWIFT64_LOCAL_GIANA_SID_ACCURACY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !accuracyValue.isEmpty,
+           let accuracyMode = SID.AccuracyMode(rawValue: accuracyValue) {
+            c64.sid.accuracyMode = accuracyMode
+        }
+    }
+
+    private func optionalFileURLEnvironment(_ name: String) -> URL? {
+        guard let rawValue = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: rawValue)
+    }
+
+    private func boundedDoubleEnvironment(
+        _ name: String,
+        defaultValue: Double,
+        range: ClosedRange<Double>
+    ) -> Double {
+        let value = Double(ProcessInfo.processInfo.environment[name] ?? "") ?? defaultValue
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private func writeMono16BitWAV(samples: [Float], sampleRate: Int, to url: URL) throws {
+        let outputSamples = acCoupledAudioSamples(samples)
+        var data = Data()
+        data.appendASCII("RIFF")
+        data.appendLittleEndian(UInt32(36 + outputSamples.count * 2))
+        data.appendASCII("WAVE")
+        data.appendASCII("fmt ")
+        data.appendLittleEndian(UInt32(16))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt32(sampleRate))
+        data.appendLittleEndian(UInt32(sampleRate * 2))
+        data.appendLittleEndian(UInt16(2))
+        data.appendLittleEndian(UInt16(16))
+        data.appendASCII("data")
+        data.appendLittleEndian(UInt32(outputSamples.count * 2))
+        for sample in outputSamples {
+            let clamped = min(max(sample, -1), 1)
+            data.appendLittleEndian(Int16((clamped * Float(Int16.max)).rounded()))
+        }
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func writeSIDTraceJSONL(_ events: [SIDRegisterWriteTraceEvent], to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var data = Data()
+        for event in events {
+            data.append(try encoder.encode(event))
+            data.append(0x0A)
+        }
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func acCoupledAudioSamples(_ samples: [Float]) -> [Float] {
+        let pole: Float = 0.995
+        var lastInput: Float = 0
+        var lastOutput: Float = 0
+        return samples.map { sample in
+            let output = sample - lastInput + pole * lastOutput
+            lastInput = sample
+            lastOutput = output
+            return min(max(output, -0.95), 0.95)
+        }
+    }
+
     private func loadTrapSummary(_ c64: C64) -> String {
         let start = c64.kernalTraps.lastLoadTrapAddress.map { String(format: "%04X", $0) } ?? "none"
         let end = c64.kernalTraps.lastLoadTrapEndAddress.map { String(format: "%04X", $0) } ?? "none"
@@ -592,6 +822,40 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private func vicSummary(_ c64: C64) -> String {
         "$D011=\(String(format: "%02X", c64.memory.read(0xD011))) $D012=\(String(format: "%02X", c64.memory.read(0xD012))) raster=\(c64.vic.rasterLine) cycle=\(c64.vic.rasterCycle)"
+    }
+
+    private func sidRunSummary(_ c64: C64) -> String {
+        let state = c64.sid.debugAudioState()
+        return "chipWrites=\(c64.sidChipWriteCount),chipRegs=\(sidRegisterHistogram(c64.sidChipRegisterWriteCounts)),ramWindowWrites=\(c64.sidRAMWindowWriteCount),ramRegs=\(sidRegisterHistogram(c64.sidRAMWindowRegisterWriteCounts)),$D418=\(String(format: "%02X", c64.sid.debugRegisterValue(0x18))),mixed=\(state.mixedOutput),direct=\(state.directOutput),filterIn=\(state.filterInput),filterOut=\(state.filterOutput),voices=\(sidVoiceSummary(c64.sid.debugVoiceStates()))"
+    }
+
+    private func sidRegisterHistogram(_ counts: [UInt64]) -> String {
+        let pairs = counts.enumerated().compactMap { index, count -> String? in
+            guard count > 0 else { return nil }
+            return "$D4\(String(format: "%02X", index)):\(count)"
+        }
+        return pairs.isEmpty ? "none" : pairs.joined(separator: "|")
+    }
+
+    private func sidVoiceSummary(_ voices: [SID.VoiceDebugState]) -> String {
+        voices.enumerated().map { index, voice in
+            "v\(index + 1){f=\(String(format: "%04X", voice.frequency)),pw=\(String(format: "%03X", voice.pulseWidth)),ctrl=\(String(format: "%02X", voice.control)),ad=\(String(format: "%02X", voice.attackDecay)),sr=\(String(format: "%02X", voice.sustainRelease)),env=\(String(format: "%02X", voice.envelopeLevel)),gate=\(voice.gate ? 1 : 0),wf=\(voice.hasWaveform ? 1 : 0),out=\(voice.waveformOutput),state=\(voice.envelopeState)}"
+        }.joined(separator: "|")
+    }
+
+    private func shouldStartGianaWAVCapture(
+        _ c64: C64,
+        minimumChipWrites: Int,
+        mode: String
+    ) -> Bool {
+        guard c64.sidChipWriteCount >= UInt64(minimumChipWrites) else { return false }
+        switch mode {
+        case "chip-writes":
+            return true
+        default:
+            let state = c64.sid.debugAudioState()
+            return state.directOutput != 0 || state.filterInput != 0 || state.filterOutput != 0
+        }
     }
 
     private func hasGianaFirstStageLoaded(_ c64: C64, loadEndAddress: UInt16) -> Bool {
@@ -902,7 +1166,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             mean: 0.5 / 3.0,
             rootMeanSquare: 0.540_061_724_867_321_7,
             zeroCrossings: 1
-        )))
+        ), audioSummary: tapeC64.sid.recentAudioSummary(sampleCount: 3)))
         XCTAssertEqual(records.last?.finalSIDAudioState, SIDAudioStateRecord(SID.AudioDebugState(
             accuracyMode: .compatibility,
             sampleCycleCounter: 0,
@@ -1606,6 +1870,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         c64.sid.sampleBuffer[1] = 0.25
         c64.sid.sampleBuffer[2] = 0.75
         c64.sid.sampleWritePos = 3
+        let audioSummary = c64.sid.recentAudioSummary(sampleCount: 3)
         let milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/demo.prg"),
             mediaType: .prg,
@@ -1628,7 +1893,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 absoluteSum: 1.5,
                 mean: 0.166_666_667,
                 rootMeanSquare: 0.540_061_724,
-                zeroCrossings: 1
+                zeroCrossings: 1,
+                zeroCrossingRate: audioSummary.zeroCrossingRate,
+                lowBandRootMeanSquare: audioSummary.lowBandRootMeanSquare,
+                midBandRootMeanSquare: audioSummary.midBandRootMeanSquare,
+                highBandRootMeanSquare: audioSummary.highBandRootMeanSquare,
+                crestFactor: audioSummary.crestFactor
             ),
             screenRAMHash: nil,
             colorRAMHash: nil,
@@ -1704,6 +1974,44 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.category, .audio)
         XCTAssertTrue(result.reason.contains("SID audio.rootMeanSquare"))
+    }
+
+    func testNamedMilestoneRequiresSIDAudioTextureSignature() {
+        let c64 = C64()
+        c64.sid.sampleBuffer[0] = -0.5
+        c64.sid.sampleBuffer[1] = 0.25
+        c64.sid.sampleBuffer[2] = 0.75
+        c64.sid.sampleWritePos = 3
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            sidAudioSignature: CompatibilitySIDAudioSignature(
+                sampleCount: 3,
+                highBandRootMeanSquare: 1.0,
+                crestFactor: 9.0
+            ),
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .audio)
+        XCTAssertTrue(result.reason.contains("SID audio.highBandRootMeanSquare"))
+        XCTAssertTrue(result.reason.contains("SID audio.crestFactor"))
     }
 
     func testNamedMilestoneCanMatchSIDAudioState() {
@@ -3483,6 +3791,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         sid: SID
     ) -> [String] {
         let actual = sid.recentAudioSignature(sampleCount: expectation.sampleCount)
+        let actualSummary = sid.recentAudioSummary(sampleCount: expectation.sampleCount)
         var mismatches: [String] = []
         if actual.sampleCount != expectation.sampleCount {
             mismatches.append("SID audio.sampleCount \(actual.sampleCount) != \(expectation.sampleCount)")
@@ -3515,7 +3824,26 @@ final class LocalDiskMatrixTests: XCTestCase {
            actual.zeroCrossings != zeroCrossings {
             mismatches.append("SID audio.zeroCrossings \(actual.zeroCrossings) != \(zeroCrossings)")
         }
+        appendSIDAudioDoubleMismatch(&mismatches, field: "zeroCrossingRate", actual: actualSummary.zeroCrossingRate, expected: expectation.zeroCrossingRate, tolerance: expectation.tolerance)
+        appendSIDAudioDoubleMismatch(&mismatches, field: "lowBandRootMeanSquare", actual: actualSummary.lowBandRootMeanSquare, expected: expectation.lowBandRootMeanSquare, tolerance: expectation.tolerance)
+        appendSIDAudioDoubleMismatch(&mismatches, field: "midBandRootMeanSquare", actual: actualSummary.midBandRootMeanSquare, expected: expectation.midBandRootMeanSquare, tolerance: expectation.tolerance)
+        appendSIDAudioDoubleMismatch(&mismatches, field: "highBandRootMeanSquare", actual: actualSummary.highBandRootMeanSquare, expected: expectation.highBandRootMeanSquare, tolerance: expectation.tolerance)
+        appendSIDAudioDoubleMismatch(&mismatches, field: "crestFactor", actual: actualSummary.crestFactor, expected: expectation.crestFactor, tolerance: expectation.tolerance)
         return mismatches
+    }
+
+    private func appendSIDAudioDoubleMismatch(
+        _ mismatches: inout [String],
+        field: String,
+        actual: Double,
+        expected: Double?,
+        tolerance: Double
+    ) {
+        guard let expected,
+              abs(actual - expected) > tolerance else {
+            return
+        }
+        mismatches.append("SID audio.\(field) \(formatDouble(actual)) != \(formatDouble(expected)) tolerance \(formatDouble(tolerance))")
     }
 
     private func sidAudioStateMismatches(
@@ -4145,7 +4473,8 @@ private struct MatrixRunResult {
             finalSIDModel: c64.sid.model.rawValue,
             finalSIDAccuracyMode: c64.sid.accuracyMode.rawValue,
             finalSIDAudioSignature: SIDAudioSignatureRecord(
-                c64.sid.recentAudioSignature(sampleCount: milestone.sidAudioSignature?.sampleCount ?? 512)
+                c64.sid.recentAudioSignature(sampleCount: milestone.sidAudioSignature?.sampleCount ?? 512),
+                audioSummary: c64.sid.recentAudioSummary(sampleCount: milestone.sidAudioSignature?.sampleCount ?? 512)
             ),
             finalSIDAudioState: SIDAudioStateRecord(c64.sid.debugAudioState()),
             finalSIDRegisterSnapshot: c64.sid.debugRegisterSnapshot().map(hex8),
@@ -5198,6 +5527,11 @@ private struct SIDAudioSignatureRecord: Codable, Equatable {
     let mean: Double
     let rootMeanSquare: Double
     let zeroCrossings: Int
+    let zeroCrossingRate: Double
+    let lowBandRootMeanSquare: Double
+    let midBandRootMeanSquare: Double
+    let highBandRootMeanSquare: Double
+    let crestFactor: Double
 
     private enum CodingKeys: String, CodingKey {
         case sampleCount
@@ -5208,9 +5542,14 @@ private struct SIDAudioSignatureRecord: Codable, Equatable {
         case mean
         case rootMeanSquare
         case zeroCrossings
+        case zeroCrossingRate
+        case lowBandRootMeanSquare
+        case midBandRootMeanSquare
+        case highBandRootMeanSquare
+        case crestFactor
     }
 
-    init(_ signature: SID.AudioSignature) {
+    init(_ signature: SID.AudioSignature, audioSummary: SIDTraceAudioSummary = .empty) {
         sampleCount = signature.sampleCount
         minimum = signature.minimum
         maximum = signature.maximum
@@ -5219,6 +5558,11 @@ private struct SIDAudioSignatureRecord: Codable, Equatable {
         mean = signature.mean
         rootMeanSquare = signature.rootMeanSquare
         zeroCrossings = signature.zeroCrossings
+        zeroCrossingRate = audioSummary.zeroCrossingRate
+        lowBandRootMeanSquare = audioSummary.lowBandRootMeanSquare
+        midBandRootMeanSquare = audioSummary.midBandRootMeanSquare
+        highBandRootMeanSquare = audioSummary.highBandRootMeanSquare
+        crestFactor = audioSummary.crestFactor
     }
 
     init(from decoder: Decoder) throws {
@@ -5232,6 +5576,11 @@ private struct SIDAudioSignatureRecord: Codable, Equatable {
             (sampleCount > 0 ? sum / Double(sampleCount) : 0)
         rootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .rootMeanSquare) ?? 0
         zeroCrossings = try container.decode(Int.self, forKey: .zeroCrossings)
+        zeroCrossingRate = try container.decodeIfPresent(Double.self, forKey: .zeroCrossingRate) ?? 0
+        lowBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .lowBandRootMeanSquare) ?? 0
+        midBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .midBandRootMeanSquare) ?? 0
+        highBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .highBandRootMeanSquare) ?? 0
+        crestFactor = try container.decodeIfPresent(Double.self, forKey: .crestFactor) ?? 0
     }
 }
 
@@ -5396,6 +5745,30 @@ private struct SIDVoiceStateRecord: Codable, Equatable {
         waveformOutput = state.waveformOutput
         waveformDACOutput = String(format: "%03X", state.waveformDACOutput)
         waveformDACHoldCyclesRemaining = state.waveformDACHoldCyclesRemaining
+    }
+}
+
+private extension Data {
+    mutating func appendASCII(_ string: String) {
+        append(Data(string.utf8))
+    }
+
+    mutating func appendLittleEndian(_ value: UInt16) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) {
+            append(contentsOf: $0)
+        }
+    }
+
+    mutating func appendLittleEndian(_ value: Int16) {
+        appendLittleEndian(UInt16(bitPattern: value))
+    }
+
+    mutating func appendLittleEndian(_ value: UInt32) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) {
+            append(contentsOf: $0)
+        }
     }
 }
 

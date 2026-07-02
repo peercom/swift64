@@ -4,6 +4,14 @@ import Emu6502
 /// C64 memory map implementing the Bus protocol.
 /// Handles RAM, ROM banking, Color RAM, and I/O chip dispatch.
 public final class MemoryMap: Bus {
+    public struct CPUPortSnapshot: Equatable {
+        public let direction: UInt8
+        public let data: UInt8
+        public let effective: UInt8
+        public let loram: Bool
+        public let hiram: Bool
+        public let charen: Bool
+    }
 
     // MARK: - Memory arrays
 
@@ -61,6 +69,12 @@ public final class MemoryMap: Bus {
     /// Called when the effective cassette motor-control output level changes.
     public var onCassetteMotorLineChange: ((Bool) -> Void)?
 
+    /// Called after a CPU-visible SID register write, with the normalized 5-bit register.
+    public var onSIDRegisterWrite: ((UInt16, UInt8) -> Void)?
+
+    /// Called when the CPU writes to the SID address window while RAM/ROM is banked in.
+    public var onBankedOutSIDAddressWrite: ((UInt16, UInt8) -> Void)?
+
     /// Last value driven on the CPU data bus, used for simple open-bus reads.
     var cpuDataBus: UInt8 = 0xFF
 
@@ -84,6 +98,17 @@ public final class MemoryMap: Bus {
     var hiram: Bool { effectivePort & 0x02 != 0 }
     /// CHAREN: Character ROM vs I/O at $D000-$DFFF
     var charen: Bool { effectivePort & 0x04 != 0 }
+
+    public var cpuPortSnapshot: CPUPortSnapshot {
+        CPUPortSnapshot(
+            direction: portDirection,
+            data: portData,
+            effective: effectivePort,
+            loram: loram,
+            hiram: hiram,
+            charen: charen
+        )
+    }
 
     // MARK: - Chip references (set by C64 machine)
 
@@ -233,6 +258,10 @@ public final class MemoryMap: Bus {
             return
         }
 
+        if addr >= 0xD400 && addr <= 0xD7FF {
+            onBankedOutSIDAddressWrite?(address & 0x1F, value)
+        }
+
         // All writes go to RAM underneath
         ram[addr] = value
     }
@@ -345,7 +374,9 @@ public final class MemoryMap: Bus {
             vic?.writeRegister(address & 0x3F, value: value)
 
         case 0xD400...0xD7FF:
-            sid?.writeRegister(address & 0x1F, value: value)
+            let register = address & 0x1F
+            sid?.writeRegister(register, value: value)
+            onSIDRegisterWrite?(register, value)
 
         case 0xD800...0xDBFF:
             colorRAM[Int(address - 0xD800)] = value & 0x0F

@@ -142,6 +142,11 @@ final class CompatibilityManifestTests: XCTestCase {
                 "mean": 0.009765625,
                 "rootMeanSquare": 0.25,
                 "zeroCrossings": 4,
+                "zeroCrossingRate": 512.5,
+                "lowBandRootMeanSquare": 0.125,
+                "midBandRootMeanSquare": 0.0625,
+                "highBandRootMeanSquare": 0.03125,
+                "crestFactor": 2.0,
                 "tolerance": 0.0001
               },
               "sidAudioState": {
@@ -381,6 +386,11 @@ final class CompatibilityManifestTests: XCTestCase {
             mean: 0.009765625,
             rootMeanSquare: 0.25,
             zeroCrossings: 4,
+            zeroCrossingRate: 512.5,
+            lowBandRootMeanSquare: 0.125,
+            midBandRootMeanSquare: 0.0625,
+            highBandRootMeanSquare: 0.03125,
+            crestFactor: 2.0,
             tolerance: 0.0001
         ))
         XCTAssertEqual(milestone.sidAudioState, CompatibilitySIDAudioState(
@@ -793,6 +803,11 @@ final class CompatibilityManifestTests: XCTestCase {
             #""sampleCount": 1, "absoluteSum": -0.1"#,
             #""sampleCount": 1, "rootMeanSquare": -0.1"#,
             #""sampleCount": 1, "zeroCrossings": -1"#,
+            #""sampleCount": 1, "zeroCrossingRate": -0.1"#,
+            #""sampleCount": 1, "lowBandRootMeanSquare": -0.1"#,
+            #""sampleCount": 1, "midBandRootMeanSquare": -0.1"#,
+            #""sampleCount": 1, "highBandRootMeanSquare": -0.1"#,
+            #""sampleCount": 1, "crestFactor": -0.1"#,
             #""sampleCount": 1, "minimum": 0.5, "maximum": -0.5"#,
             #""sampleCount": 1, "tolerance": -0.1"#
         ]

@@ -122,6 +122,407 @@ final class SIDTests: XCTestCase {
         )
     }
 
+    func testSampleGeneratedCallbackReceivesGeneratedSamples() {
+        let sid = SID()
+        sid.clockRate = SID.sampleRate
+        sid.writeRegister(0x18, value: 0x0F)
+        var captured: [Float] = []
+        sid.onSampleGenerated = { captured.append($0) }
+
+        sid.tick()
+
+        XCTAssertEqual(captured.count, 1)
+        XCTAssertEqual(captured[0], sid.sampleBuffer[0])
+    }
+
+    func testPlaybackAudioRingBufferReadsGeneratedSamplesInOrder() {
+        let sid = SID()
+
+        sid.writeSample(-32768)
+        sid.writeSample(16384)
+
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 2)
+        XCTAssertEqual(try XCTUnwrap(sid.readAudioSampleForPlayback()), -1.0, accuracy: 0.000_001)
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 1)
+        XCTAssertEqual(try XCTUnwrap(sid.readAudioSampleForPlayback()), 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 0)
+        XCTAssertNil(sid.readAudioSampleForPlayback())
+    }
+
+    func testPlaybackAudioRingBufferKeepsFullStateDistinctFromEmpty() {
+        let sid = SID()
+
+        for index in 0..<sid.sampleBuffer.count {
+            sid.writeSample(Int32(index % 256))
+        }
+
+        XCTAssertEqual(sid.sampleWritePos, sid.sampleReadPos)
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), sid.sampleBuffer.count)
+        XCTAssertNotNil(sid.readAudioSampleForPlayback())
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), sid.sampleBuffer.count - 1)
+    }
+
+    func testPlaybackAudioRingBufferDropsOldestSampleWhenOverfilled() {
+        let sid = SID()
+        let capacity = sid.sampleBuffer.count
+
+        for index in 0...capacity {
+            sid.writeSample(Int32(index))
+        }
+
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), capacity)
+        XCTAssertEqual(try XCTUnwrap(sid.readAudioSampleForPlayback()), Float(1) / 32768.0, accuracy: 0.000_001)
+    }
+
+    func testC64EmitsSIDRegisterWriteTraceEvents() {
+        let c64 = C64(machineProfile: .palC64)
+        c64.sid.accuracyMode = .compatibility
+        c64.powerOn()
+        var events: [SIDRegisterWriteTraceEvent] = []
+        c64.onSIDRegisterWriteTrace = { events.append($0) }
+
+        c64.memory.write(0xD418, value: 0x0F)
+        c64.memory.write(0xD404, value: 0x21)
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0].register, 0x18)
+        XCTAssertEqual(events[0].value, 0x0F)
+        XCTAssertTrue(events[0].reachedChip)
+        XCTAssertEqual(events[0].sidModel, .mos6581)
+        XCTAssertEqual(events[0].sidAccuracyMode, .compatibility)
+        XCTAssertEqual(events[1].register, 0x04)
+        XCTAssertEqual(events[1].value, 0x21)
+    }
+
+    func testSIDRegisterTracePlayerReplaysWritesAndProducesAudioSignature() throws {
+        let events = [
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x00,
+                value: 0x00,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x01,
+                value: 0x20,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x05,
+                value: 0x00,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x06,
+                value: 0xF0,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x18,
+                value: 0x0F,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 100,
+                pc: 0x2000,
+                rasterLine: 10,
+                rasterCycle: 5,
+                register: 0x04,
+                value: 0x21,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+        ]
+
+        let result = try SIDRegisterTracePlayer().replay(
+            events,
+            tailCycles: UInt64(SID.attackRates[0] * 4),
+            signatureSampleCount: 4
+        )
+
+        XCTAssertEqual(result.eventCount, events.count)
+        XCTAssertGreaterThan(result.samplesGenerated, 0)
+        XCTAssertEqual(result.audioState.volume, 0x0F)
+        XCTAssertEqual(result.voiceStates[0].frequency, 0x2000)
+        XCTAssertEqual(result.voiceStates[0].control, 0x21)
+        XCTAssertGreaterThan(result.voiceStates[0].envelopeLevel, 0)
+        XCTAssertGreaterThan(result.signature.absoluteSum, 0)
+        XCTAssertTrue(result.capturedSamples.isEmpty)
+    }
+
+    func testSIDRegisterTracePlayerCanCaptureBoundedReplaySamples() throws {
+        let jsonl = """
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":0,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":0}
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":1,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":32}
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":5,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":0}
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":6,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":240}
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":24,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":15}
+        {"cycle":100,"pc":4096,"rasterCycle":5,"rasterLine":10,"reachedChip":true,"register":4,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":33}
+        """.data(using: .utf8)!
+        let player = SIDRegisterTracePlayer()
+        let events = try player.decodeJSONLines(jsonl)
+
+        let result = try player.replay(
+            events,
+            tailCycles: UInt64(SID.attackRates[0]) * 64,
+            signatureSampleCount: 32,
+            captureSampleLimit: 5
+        )
+
+        XCTAssertGreaterThan(result.samplesGenerated, result.capturedSamples.count)
+        XCTAssertEqual(result.capturedSamples.count, 5)
+        XCTAssertTrue(result.capturedSamples.contains { abs($0) > 0 })
+        XCTAssertEqual(result.capturedAudioSummary.sampleCount, 5)
+        XCTAssertGreaterThan(result.capturedAudioSummary.rootMeanSquare, 0)
+        XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.crestFactor, 1)
+    }
+
+    func testSIDRegisterTracePlayerCanStartCaptureAtNonSilentSample() throws {
+        let events = [
+            SIDRegisterWriteTraceEvent(
+                cycle: 0,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x18,
+                value: 0x00,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 2_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x18,
+                value: 0x0F,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+        ]
+
+        let result = try SIDRegisterTracePlayer().replay(
+            events,
+            tailCycles: 1_000,
+            captureSampleLimit: 4,
+            captureStartWhenAbsoluteSampleAtLeast: 0.001
+        )
+
+        XCTAssertEqual(result.capturedSamples.count, 4)
+        XCTAssertGreaterThanOrEqual(abs(try XCTUnwrap(result.capturedSamples.first)), 0.001)
+        XCTAssertGreaterThan(result.capturedAudioSummary.rootMeanSquare, 0)
+    }
+
+    func testSIDRegisterTracePlayerFindsBestAudioTextureWindow() throws {
+        let events = [
+            SIDRegisterWriteTraceEvent(
+                cycle: 0,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x18,
+                value: 0x0F,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 4_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x00,
+                value: 0x00,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 4_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x01,
+                value: 0x40,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 4_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x05,
+                value: 0x00,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 4_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x06,
+                value: 0xF0,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+            SIDRegisterWriteTraceEvent(
+                cycle: 4_000,
+                pc: 0x2000,
+                rasterLine: 0,
+                rasterCycle: 0,
+                register: 0x04,
+                value: 0x21,
+                sidModel: .mos6581,
+                sidAccuracyMode: .compatibility
+            ),
+        ]
+
+        let result = try SIDRegisterTracePlayer().replay(
+            events,
+            tailCycles: 8_000,
+            textureWindowSampleCount: 32,
+            textureWindowStride: 8
+        )
+
+        XCTAssertGreaterThan(result.bestAudioTextureWindow.startSample, 0)
+        XCTAssertGreaterThan(result.bestAudioTextureWindow.score, 0)
+        XCTAssertGreaterThan(result.bestAudioTextureWindow.summary.rootMeanSquare, 0)
+        XCTAssertGreaterThan(
+            result.bestAudioTextureWindow.summary.midBandRootMeanSquare +
+            result.bestAudioTextureWindow.summary.highBandRootMeanSquare,
+            0
+        )
+    }
+
+    func testSIDTraceAudioSummaryReportsSilence() {
+        let summary = SIDTraceAudioSummary(samples: [], sampleRate: SID.sampleRate)
+
+        XCTAssertEqual(summary.sampleCount, 0)
+        XCTAssertEqual(summary.rootMeanSquare, 0)
+        XCTAssertEqual(summary.lowBandRootMeanSquare, 0)
+        XCTAssertEqual(summary.midBandRootMeanSquare, 0)
+        XCTAssertEqual(summary.highBandRootMeanSquare, 0)
+        XCTAssertEqual(summary.crestFactor, 0)
+    }
+
+    func testSIDTraceAudioSummarySeparatesLowAndHighTexture() {
+        let sampleRate = 44_100.0
+        let lowTone = (0..<4096).map { index in
+            Float(sin(2 * Double.pi * 110 * Double(index) / sampleRate) * 0.6)
+        }
+        let highTone = (0..<4096).map { index in
+            Float(sin(2 * Double.pi * 6_000 * Double(index) / sampleRate) * 0.6)
+        }
+
+        let lowSummary = SIDTraceAudioSummary(samples: lowTone, sampleRate: sampleRate)
+        let highSummary = SIDTraceAudioSummary(samples: highTone, sampleRate: sampleRate)
+
+        XCTAssertGreaterThan(lowSummary.lowBandRootMeanSquare, lowSummary.highBandRootMeanSquare)
+        XCTAssertGreaterThan(highSummary.highBandRootMeanSquare, highSummary.lowBandRootMeanSquare)
+        XCTAssertGreaterThan(highSummary.zeroCrossingRate, lowSummary.zeroCrossingRate)
+    }
+
+    func testSIDRegisterTracePlayerDecodesJSONLines() throws {
+        let data = """
+        {"cycle":10,"pc":4096,"rasterCycle":2,"rasterLine":3,"reachedChip":true,"register":24,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":15}
+        {"cycle":12,"pc":4098,"rasterCycle":4,"rasterLine":3,"reachedChip":false,"register":36,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":33}
+
+        """.data(using: .utf8)!
+
+        let events = try SIDRegisterTracePlayer().decodeJSONLines(data)
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0].cycle, 10)
+        XCTAssertEqual(events[0].register, 0x18)
+        XCTAssertTrue(events[0].reachedChip)
+        XCTAssertEqual(events[1].register, 0x04)
+        XCTAssertFalse(events[1].reachedChip)
+    }
+
+    func testSIDRegisterTracePlayerReportsInvalidJSONLine() {
+        let data = """
+        {"cycle":10,"pc":4096,"rasterCycle":2,"rasterLine":3,"reachedChip":true,"register":24,"sidAccuracyMode":"compatibility","sidModel":"mos6581","value":15}
+        nope
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try SIDRegisterTracePlayer().decodeJSONLines(data)) { error in
+            XCTAssertEqual(error as? SIDRegisterTraceDecodeError, .invalidJSONLine(2))
+        }
+    }
+
+    func testLocalSIDTraceReplayWhenEnabled() throws {
+        guard let path = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_JSONL"],
+              !path.isEmpty else {
+            throw XCTSkip("Set SWIFT64_LOCAL_SID_TRACE_REPLAY_JSONL to replay a local SID trace")
+        }
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let player = SIDRegisterTracePlayer()
+        let events = try player.decodeJSONLines(data)
+        let tailCycles = UInt64(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_TAIL_CYCLES"] ?? "") ?? 0
+        let captureLimit = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_CAPTURE_SAMPLES"] ?? "") ?? 4096
+        let captureThreshold = Float(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_CAPTURE_THRESHOLD"] ?? "") ?? 0
+        let captureSkip = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_CAPTURE_SKIP"] ?? "") ?? 0
+        let textureWindow = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_TEXTURE_WINDOW"] ?? "") ?? 0
+        let textureStride = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_TEXTURE_STRIDE"] ?? "") ?? 0
+        let result = try player.replay(
+            events,
+            tailCycles: tailCycles,
+            signatureSampleCount: 4096,
+            captureSampleLimit: captureLimit,
+            captureStartAfterGeneratedSamples: captureSkip,
+            captureStartWhenAbsoluteSampleAtLeast: captureThreshold,
+            textureWindowSampleCount: textureWindow,
+            textureWindowStride: textureStride
+        )
+
+        print(
+            "SID trace replay path=\(path) events=\(result.eventCount) finalCycle=\(result.finalCycle) " +
+            "samples=\(result.samplesGenerated) captured=\(result.capturedSamples.count) " +
+            "rms=\(result.signature.rootMeanSquare) zeroCrossings=\(result.signature.zeroCrossings) " +
+            "capturedRMS=\(result.capturedAudioSummary.rootMeanSquare) " +
+            "lowRMS=\(result.capturedAudioSummary.lowBandRootMeanSquare) " +
+            "midRMS=\(result.capturedAudioSummary.midBandRootMeanSquare) " +
+            "highRMS=\(result.capturedAudioSummary.highBandRootMeanSquare) " +
+            "zcr=\(result.capturedAudioSummary.zeroCrossingRate) " +
+            "bestTextureStart=\(result.bestAudioTextureWindow.startSample) " +
+            "bestTextureScore=\(result.bestAudioTextureWindow.score) " +
+            "bestTextureRMS=\(result.bestAudioTextureWindow.summary.rootMeanSquare) " +
+            "bestTextureLowRMS=\(result.bestAudioTextureWindow.summary.lowBandRootMeanSquare) " +
+            "bestTextureMidRMS=\(result.bestAudioTextureWindow.summary.midBandRootMeanSquare) " +
+            "bestTextureHighRMS=\(result.bestAudioTextureWindow.summary.highBandRootMeanSquare) " +
+            "bestTextureZCR=\(result.bestAudioTextureWindow.summary.zeroCrossingRate) " +
+            "volume=\(result.audioState.volume) mixed=\(result.audioState.mixedOutput)"
+        )
+        XCTAssertFalse(events.isEmpty)
+        XCTAssertGreaterThan(result.samplesGenerated, 0)
+        XCTAssertGreaterThan(result.signature.rootMeanSquare, 0)
+    }
+
     func testResetClearsCompatibilityAudioAccumulator() {
         let sid = SID()
         sid.accuracyMode = .compatibility
@@ -1391,7 +1792,7 @@ final class SIDTests: XCTestCase {
         sid.voices[0].exponentialPeriod = 2
         sid.voices[0].sustainRelease = 0x00
         sid.voices[0].attackDecay = 0x00
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
 
         sid.clockEnvelope(0)
 
@@ -1399,7 +1800,7 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].exponentialCounter, 1)
         XCTAssertEqual(sid.voices[0].exponentialPeriod, 2)
 
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
         sid.clockEnvelope(0)
 
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0x5C)
@@ -1430,7 +1831,7 @@ final class SIDTests: XCTestCase {
         sid.voices[0].envelopeLevel = 0x88
         sid.voices[0].sustainRelease = 0x80
         sid.voices[0].attackDecay = 0x00
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
 
         sid.clockEnvelope(0)
 
@@ -1479,7 +1880,7 @@ final class SIDTests: XCTestCase {
         sid.voices[0].exponentialPeriod = 1
         sid.voices[0].sustainRelease = 0x70
         sid.voices[0].attackDecay = 0x00
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
 
         sid.clockEnvelope(0)
 
@@ -1488,7 +1889,7 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].exponentialCounter, 0)
         XCTAssertEqual(sid.voices[0].exponentialPeriod, 1)
 
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
         sid.clockEnvelope(0)
 
         XCTAssertEqual(sid.voices[0].envelopeState, .decay)
@@ -1504,7 +1905,7 @@ final class SIDTests: XCTestCase {
         sid.voices[0].exponentialPeriod = 1
         sid.voices[0].sustainRelease = 0x50
         sid.voices[0].attackDecay = 0x00
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
 
         sid.clockEnvelope(0)
 
@@ -1520,14 +1921,14 @@ final class SIDTests: XCTestCase {
         sid.voices[0].envelopeLevel = 1
         sid.voices[0].exponentialPeriod = 1
         sid.voices[0].sustainRelease = 0x00
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
 
         sid.clockEnvelope(0)
 
         XCTAssertEqual(sid.voices[0].envelopeLevel, 0)
         XCTAssertTrue(sid.voices[0].holdZero)
 
-        sid.voices[0].rateCounter = 8
+        sid.voices[0].rateCounter = SID.decayReleaseRates[0] - 1
         sid.voices[0].exponentialCounter = 0
         sid.clockEnvelope(0)
 

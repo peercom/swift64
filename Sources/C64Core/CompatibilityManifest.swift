@@ -1312,6 +1312,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
     public let mean: Double?
     public let rootMeanSquare: Double?
     public let zeroCrossings: Int?
+    public let zeroCrossingRate: Double?
+    public let lowBandRootMeanSquare: Double?
+    public let midBandRootMeanSquare: Double?
+    public let highBandRootMeanSquare: Double?
+    public let crestFactor: Double?
     public let tolerance: Double
 
     public init(
@@ -1323,6 +1328,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
         mean: Double? = nil,
         rootMeanSquare: Double? = nil,
         zeroCrossings: Int? = nil,
+        zeroCrossingRate: Double? = nil,
+        lowBandRootMeanSquare: Double? = nil,
+        midBandRootMeanSquare: Double? = nil,
+        highBandRootMeanSquare: Double? = nil,
+        crestFactor: Double? = nil,
         tolerance: Double = 0.000_001
     ) {
         self.sampleCount = sampleCount
@@ -1333,6 +1343,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
         self.mean = mean
         self.rootMeanSquare = rootMeanSquare
         self.zeroCrossings = zeroCrossings
+        self.zeroCrossingRate = zeroCrossingRate
+        self.lowBandRootMeanSquare = lowBandRootMeanSquare
+        self.midBandRootMeanSquare = midBandRootMeanSquare
+        self.highBandRootMeanSquare = highBandRootMeanSquare
+        self.crestFactor = crestFactor
         self.tolerance = tolerance
     }
 
@@ -1345,6 +1360,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
         case mean
         case rootMeanSquare
         case zeroCrossings
+        case zeroCrossingRate
+        case lowBandRootMeanSquare
+        case midBandRootMeanSquare
+        case highBandRootMeanSquare
+        case crestFactor
         case tolerance
     }
 
@@ -1358,6 +1378,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
         mean = try container.decodeIfPresent(Double.self, forKey: .mean)
         rootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .rootMeanSquare)
         zeroCrossings = try container.decodeIfPresent(Int.self, forKey: .zeroCrossings)
+        zeroCrossingRate = try container.decodeIfPresent(Double.self, forKey: .zeroCrossingRate)
+        lowBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .lowBandRootMeanSquare)
+        midBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .midBandRootMeanSquare)
+        highBandRootMeanSquare = try container.decodeIfPresent(Double.self, forKey: .highBandRootMeanSquare)
+        crestFactor = try container.decodeIfPresent(Double.self, forKey: .crestFactor)
         tolerance = try container.decodeIfPresent(Double.self, forKey: .tolerance) ?? 0.000_001
 
         guard sampleCount >= 0 else {
@@ -1388,6 +1413,11 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
                 debugDescription: "SID audio rootMeanSquare must be non-negative"
             )
         }
+        try Self.validateNonNegative(zeroCrossingRate, key: .zeroCrossingRate, container: container, name: "zeroCrossingRate")
+        try Self.validateNonNegative(lowBandRootMeanSquare, key: .lowBandRootMeanSquare, container: container, name: "lowBandRootMeanSquare")
+        try Self.validateNonNegative(midBandRootMeanSquare, key: .midBandRootMeanSquare, container: container, name: "midBandRootMeanSquare")
+        try Self.validateNonNegative(highBandRootMeanSquare, key: .highBandRootMeanSquare, container: container, name: "highBandRootMeanSquare")
+        try Self.validateNonNegative(crestFactor, key: .crestFactor, container: container, name: "crestFactor")
         if let zeroCrossings, zeroCrossings < 0 {
             throw DecodingError.dataCorruptedError(
                 forKey: .zeroCrossings,
@@ -1402,6 +1432,20 @@ public struct CompatibilitySIDAudioSignature: Decodable, Equatable {
                 debugDescription: "SID audio minimum must not exceed maximum"
             )
         }
+    }
+
+    private static func validateNonNegative(
+        _ value: Double?,
+        key: CodingKeys,
+        container: KeyedDecodingContainer<CodingKeys>,
+        name: String
+    ) throws {
+        guard let value, value < 0 else { return }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "SID audio \(name) must be non-negative"
+        )
     }
 }
 

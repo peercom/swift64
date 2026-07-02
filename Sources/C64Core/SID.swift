@@ -291,17 +291,24 @@ public final class SID {
     public var sampleBuffer = [Float](repeating: 0, count: 8192)
     public var sampleWritePos: Int = 0
     public var sampleReadPos: Int = 0
+    var sampleBufferedCount: Int = 0
+    public var onSampleGenerated: ((Float) -> Void)?
+    private let sampleBufferLock = NSLock()
 
     // MARK: - ADSR rate table (cycles per increment)
 
+    // Measured SID envelope rate-counter comparison periods at a 1 MHz PHI2
+    // reference clock. The programmed ADSR times describe a full 256-step
+    // sweep, so the per-step comparison periods are the rounded cycle counts
+    // below rather than the previously used off-by-one periods.
     static let attackRates: [UInt16] = [
-        9, 32, 63, 95, 149, 220, 267, 313,
-        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
+        8, 31, 62, 94, 148, 219, 266, 312,
+        391, 976, 1953, 3125, 3906, 11719, 19531, 31250
     ]
 
     static let decayReleaseRates: [UInt16] = [
-        9, 32, 63, 95, 149, 220, 267, 313,
-        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
+        8, 31, 62, 94, 148, 219, 266, 312,
+        391, 976, 1953, 3125, 3906, 11719, 19531, 31250
     ]
 
     static let dataBusLatchHoldCycles = 0x2000
@@ -411,9 +418,14 @@ public final class SID {
         lastMixedOutput = 0
         oscillatorMSBRose = [Bool](repeating: false, count: 3)
         noiseClockRose = [Bool](repeating: false, count: 3)
+        sampleBufferLock.lock()
         sampleWritePos = 0
         sampleReadPos = 0
-        sampleBuffer = [Float](repeating: 0, count: sampleBuffer.count)
+        sampleBufferedCount = 0
+        for index in sampleBuffer.indices {
+            sampleBuffer[index] = 0
+        }
+        sampleBufferLock.unlock()
     }
 
     // MARK: - Tick
@@ -459,6 +471,11 @@ public final class SID {
     }
 
     public func recentAudioSignature(sampleCount requestedCount: Int) -> AudioSignature {
+        sampleBufferLock.lock()
+        let sampleWritePos = self.sampleWritePos
+        let sampleBuffer = self.sampleBuffer
+        sampleBufferLock.unlock()
+
         let sampleCount = min(max(requestedCount, 0), sampleBuffer.count)
         guard sampleCount > 0 else {
             return AudioSignature(
@@ -509,6 +526,24 @@ public final class SID {
             rootMeanSquare: sqrt(sumOfSquares / Double(sampleCount)),
             zeroCrossings: zeroCrossings
         )
+    }
+
+    public func recentAudioSummary(sampleCount requestedCount: Int) -> SIDTraceAudioSummary {
+        sampleBufferLock.lock()
+        let sampleWritePos = self.sampleWritePos
+        let sampleBuffer = self.sampleBuffer
+        sampleBufferLock.unlock()
+
+        let sampleCount = min(max(requestedCount, 0), sampleBuffer.count)
+        guard sampleCount > 0 else {
+            return .empty
+        }
+
+        let start = (sampleWritePos - sampleCount + sampleBuffer.count) % sampleBuffer.count
+        let samples = (0..<sampleCount).map { offset in
+            sampleBuffer[(start + offset) % sampleBuffer.count]
+        }
+        return SIDTraceAudioSummary(samples: samples, sampleRate: Self.sampleRate)
     }
 
     public func debugRegisterSnapshot() -> [UInt8] {
@@ -1062,8 +1097,35 @@ public final class SID {
         let sample = Float(clamped) / 32768.0
 
         // Write to ring buffer
+        sampleBufferLock.lock()
         sampleBuffer[sampleWritePos] = sample
         sampleWritePos = (sampleWritePos + 1) % sampleBuffer.count
+        if sampleBufferedCount == sampleBuffer.count {
+            sampleReadPos = sampleWritePos
+        } else {
+            sampleBufferedCount += 1
+        }
+        sampleBufferLock.unlock()
+        onSampleGenerated?(sample)
+    }
+
+    public func availableAudioSamplesForPlayback() -> Int {
+        sampleBufferLock.lock()
+        defer { sampleBufferLock.unlock() }
+
+        return sampleBufferedCount
+    }
+
+    public func readAudioSampleForPlayback() -> Float? {
+        sampleBufferLock.lock()
+        defer { sampleBufferLock.unlock() }
+
+        guard sampleBufferedCount > 0 else { return nil }
+
+        let sample = sampleBuffer[sampleReadPos]
+        sampleReadPos = (sampleReadPos + 1) % sampleBuffer.count
+        sampleBufferedCount -= 1
+        return sample
     }
 
     func sampleOutput(_ input: Int32) -> Int32 {

@@ -136,11 +136,29 @@ public final class C64 {
     /// Last detected emulator failure/hang reason for diagnostics.
     public private(set) var lastFailureReason: String?
 
+    /// Count of CPU writes that reached the SID register window.
+    public private(set) var sidChipWriteCount: UInt64 = 0
+
+    /// Count of CPU writes to $D400-$D7FF while RAM/ROM was banked in instead of SID I/O.
+    public private(set) var sidRAMWindowWriteCount: UInt64 = 0
+
+    /// Per-register histogram of CPU writes that reached the SID chip.
+    public private(set) var sidChipRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
+
+    /// Per-register histogram of CPU writes to $D400-$D7FF while SID I/O was banked out.
+    public private(set) var sidRAMWindowRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
+
+    /// Optional clean-room SID write stream hook for local audio reference captures.
+    public var onSIDRegisterWriteTrace: ((SIDRegisterWriteTraceEvent) -> Void)?
+
     private var pcFFFFCycleCount: UInt64 = 0
     private var loadNoProgressCycleCount: UInt64 = 0
     private var lastProgressSignature: UInt64 = 0
     private var lastFailureWasClearedAtCycle: UInt64 = 0
     private var pendingTypedText: [Character] = []
+    private var sidTraceWriteCount = 0
+    private let sidTraceWriteLimit = C64.sidTraceLimitFromEnvironment()
+    private let machineLock = NSLock()
 
     /// Cycle counter within the current rasterline
     var lineCycle: Int = 0
@@ -180,6 +198,28 @@ public final class C64 {
         memory.sid = sid
         memory.cia1 = cia1
         memory.cia2 = cia2
+        memory.onSIDRegisterWrite = { [weak self] register, value in
+            guard let self else { return }
+            self.sidChipWriteCount += 1
+            self.sidChipRegisterWriteCounts[Int(register & 0x1F)] += 1
+            self.onSIDRegisterWriteTrace?(self.sidRegisterWriteTraceEvent(
+                register: register,
+                value: value,
+                reachedChip: true
+            ))
+            self.traceSIDRegisterWrite(register: register, value: value, reachedChip: true)
+        }
+        memory.onBankedOutSIDAddressWrite = { [weak self] register, value in
+            guard let self else { return }
+            self.sidRAMWindowWriteCount += 1
+            self.sidRAMWindowRegisterWriteCounts[Int(register & 0x1F)] += 1
+            self.onSIDRegisterWriteTrace?(self.sidRegisterWriteTraceEvent(
+                register: register,
+                value: value,
+                reachedChip: false
+            ))
+            self.traceSIDRegisterWrite(register: register, value: value, reachedChip: false)
+        }
 
         // VIC memory access through the memory map
         vic.readMemory = { [weak self] address in
@@ -675,6 +715,9 @@ public final class C64 {
     // MARK: - Power on / Reset
 
     public func powerOn() {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+
         vic.reset()
         sid.reset()
         cia1.reset()
@@ -682,6 +725,11 @@ public final class C64 {
         restoreKeyDown = false
         pendingTypedText.removeAll(keepingCapacity: true)
         driveClockAccumulator = 0
+        sidTraceWriteCount = 0
+        sidChipWriteCount = 0
+        sidRAMWindowWriteCount = 0
+        sidChipRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
+        sidRAMWindowRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
 
         // Initialize RAM with typical power-on pattern
         for i in stride(from: 0, to: 0x10000, by: 128) {
@@ -716,6 +764,9 @@ public final class C64 {
     }
 
     public func reset() {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+
         vic.reset()
         sid.reset()
         cia1.reset()
@@ -728,6 +779,11 @@ public final class C64 {
         cpu.reset()
         pendingTypedText.removeAll(keepingCapacity: true)
         driveClockAccumulator = 0
+        sidTraceWriteCount = 0
+        sidChipWriteCount = 0
+        sidRAMWindowWriteCount = 0
+        sidChipRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
+        sidRAMWindowRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
 
         if trueDriveEmulationMode != .off {
             iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
@@ -742,6 +798,9 @@ public final class C64 {
     /// Run one complete frame for the active VIC-II video standard.
     /// Returns true when a frame is ready for display.
     public func runFrame() -> Bool {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+
         vic.frameReady = false
 
         while !vic.frameReady {
@@ -911,6 +970,56 @@ public final class C64 {
 
     private func hex16(_ value: UInt16) -> String {
         String(format: "%04X", value)
+    }
+
+    private func hex8(_ value: UInt8) -> String {
+        String(format: "%02X", value)
+    }
+
+    private static func sidTraceLimitFromEnvironment() -> Int {
+        guard let rawValue = ProcessInfo.processInfo.environment["C64_TRACE_SID_LIMIT"],
+              let limit = Int(rawValue) else {
+            return 100_000
+        }
+        return max(1, limit)
+    }
+
+    private func traceSIDRegisterWrite(register: UInt16, value: UInt8, reachedChip: Bool) {
+        guard C64Trace.isEnabled(.sid) else { return }
+
+        if sidTraceWriteCount >= sidTraceWriteLimit {
+            if sidTraceWriteCount == sidTraceWriteLimit {
+                C64Trace.log(
+                    .sid,
+                    "[SID-WR] limit \(sidTraceWriteLimit) reached; set C64_TRACE_SID_LIMIT to capture more writes"
+                )
+            }
+            sidTraceWriteCount += 1
+            return
+        }
+
+        sidTraceWriteCount += 1
+        let marker = reachedChip ? "SID-WR" : "SID-RAM"
+        let port = memory.cpuPortSnapshot
+        let banking = "portDir=$\(hex8(port.direction)) portData=$\(hex8(port.data)) portEff=$\(hex8(port.effective)) L=\(port.loram ? 1 : 0) H=\(port.hiram ? 1 : 0) C=\(port.charen ? 1 : 0)"
+        C64Trace.log(
+            .sid,
+            "[\(marker)] #\(sidTraceWriteCount) @\(cpu.totalCycles) PC=$\(hex16(cpu.pc)) R=$D4\(hex8(UInt8(register & 0x1F))) V=$\(hex8(value)) raster=\(vic.rasterLine):\(vic.rasterCycle) A=$\(hex8(cpu.a)) X=$\(hex8(cpu.x)) Y=$\(hex8(cpu.y)) SP=$\(hex8(cpu.sp)) P=$\(hex8(cpu.p)) IRQ=\(cpu.irqLine ? 1 : 0) NMI=\(cpu.nmiLine ? 1 : 0) RDY=\(cpu.rdyLine ? 1 : 0) \(banking) model=\(sid.model.rawValue) accuracy=\(sid.accuracyMode.rawValue)"
+        )
+    }
+
+    private func sidRegisterWriteTraceEvent(register: UInt16, value: UInt8, reachedChip: Bool) -> SIDRegisterWriteTraceEvent {
+        SIDRegisterWriteTraceEvent(
+            cycle: cpu.totalCycles,
+            pc: cpu.pc,
+            rasterLine: Int(vic.rasterLine),
+            rasterCycle: vic.rasterCycle,
+            register: UInt8(register & 0x1F),
+            value: value,
+            reachedChip: reachedChip,
+            sidModel: sid.model,
+            sidAccuracyMode: sid.accuracyMode
+        )
     }
 
     // MARK: - IRQ management

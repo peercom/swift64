@@ -98,6 +98,10 @@ public final class VIC {
         rasterCyclesPerLine * rasterLinesPerFrame
     }
 
+    /// Records per-cycle VIC bus accesses for diagnostics and unit tests.
+    /// Disable this in real-time app playback to avoid hot-path array churn.
+    public var recordsBusAccessTraces = true
+
     /// Whether the VIC is in the display area vertically
     var displayActive: Bool = false
     /// Vertical scroll
@@ -469,8 +473,10 @@ public final class VIC {
     /// Advance one cycle. Returns true if this is a bad line (CPU should be stalled).
     @discardableResult
     public func tick() -> Bool {
-        lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
-        lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        if recordsBusAccessTraces {
+            lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
+            lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        }
 
         // Check for bad line condition
         if rasterCycle == 0 {
@@ -857,37 +863,45 @@ public final class VIC {
     }
 
     func performLowPhaseAccess() {
-        lastLowPhaseMemoryReads.removeAll(keepingCapacity: true)
+        if recordsBusAccessTraces {
+            lastLowPhaseMemoryReads.removeAll(keepingCapacity: true)
+        }
         switch lowPhaseAccess {
         case .idle:
-            performIdleAccess(traceReads: &lastLowPhaseMemoryReads)
+            performIdleAccess(recordTrace: recordsBusAccessTraces)
         case .refresh:
-            performRefreshAccess(traceReads: &lastLowPhaseMemoryReads)
+            performRefreshAccess(recordTrace: recordsBusAccessTraces)
         case let .displayData(column):
-            fetchDisplayData(column: column, traceReads: &lastLowPhaseMemoryReads)
+            fetchDisplayData(column: column, recordTrace: recordsBusAccessTraces)
         case let .spritePointer(sprite):
             guard sprite >= 0 && sprite < 8 else { return }
 
             let readMem = readMemory ?? { _ in return 0 }
             let screenBase = UInt16((memoryPointers >> 4) & 0x0F) * 0x0400
             let address = screenBase + 0x03F8 + UInt16(sprite)
-            lastLowPhaseMemoryReads.append(address)
+            if recordsBusAccessTraces {
+                lastLowPhaseMemoryReads.append(address)
+            }
             spritePointers[sprite] = readMem(address)
         case let .spriteMiddleByte(sprite):
-            fetchSpriteMiddleByte(sprite: sprite, traceReads: &lastLowPhaseMemoryReads)
+            fetchSpriteMiddleByte(sprite: sprite, recordTrace: recordsBusAccessTraces)
         }
     }
 
-    func performRefreshAccess(traceReads: inout [UInt16]) {
+    func performRefreshAccess(recordTrace: Bool) {
         let address = UInt16(0x3F00) | UInt16(refreshCounter)
-        traceReads.append(address)
+        if recordTrace {
+            lastLowPhaseMemoryReads.append(address)
+        }
         _ = readMemory?(address)
         refreshCounter &-= 1
     }
 
-    func performIdleAccess(traceReads: inout [UInt16]) {
+    func performIdleAccess(recordTrace: Bool) {
         let address: UInt16 = extendedBGMode ? 0x39FF : 0x3FFF
-        traceReads.append(address)
+        if recordTrace {
+            lastLowPhaseMemoryReads.append(address)
+        }
         _ = readMemory?(address)
     }
 
@@ -938,8 +952,10 @@ public final class VIC {
     }
 
     func fetchCharData(column: Int) {
-        lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
-        lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        if recordsBusAccessTraces {
+            lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
+            lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        }
 
         if badLineFetchUsesUnstableStartupData(column: column) {
             lineBuffer[column] = 0xFF
@@ -955,10 +971,14 @@ public final class VIC {
             displayLineBufferBase = videoCounterBase
         }
         let screenAddress = screenBase + vc
-        lastHighPhaseMemoryReads.append(screenAddress)
+        if recordsBusAccessTraces {
+            lastHighPhaseMemoryReads.append(screenAddress)
+        }
         let charCode = readMemory?(screenAddress) ?? 0
         lineBuffer[column] = charCode
-        lastHighPhaseColorRAMReads.append(vc)
+        if recordsBusAccessTraces {
+            lastHighPhaseColorRAMReads.append(vc)
+        }
         colorBuffer[column] = (readColorRAM?(vc) ?? 0) & 0x0F
 
         badLineFetchMask |= UInt64(1) << UInt64(column)
@@ -1013,7 +1033,7 @@ public final class VIC {
         return (charRow, rowBase, pixelRow)
     }
 
-    func fetchDisplayData(column: Int, traceReads: inout [UInt16]) {
+    func fetchDisplayData(column: Int, recordTrace: Bool) {
         guard column >= 0 && column < 40 else { return }
         guard let context = currentDisplayFetchContext() else { return }
 
@@ -1041,19 +1061,25 @@ public final class VIC {
             colorData = colorBuffer[column]
         } else {
             let screenAddress = screenBase + UInt16(vc)
-            traceReads.append(screenAddress)
+            if recordTrace {
+                lastLowPhaseMemoryReads.append(screenAddress)
+            }
             charCode = readMem(screenAddress)
             colorData = (readColorRAM?(UInt16(vc)) ?? 0x0E) & 0x0F
         }
 
         if bitmapMode {
             let bitmapAddr = charBase + UInt16(vc) * 8 + UInt16(context.pixelRow)
-            traceReads.append(bitmapAddr)
+            if recordTrace {
+                lastLowPhaseMemoryReads.append(bitmapAddr)
+            }
             graphicsBuffer[column] = readMem(bitmapAddr)
         } else {
             let glyphCode = extendedBGMode ? (charCode & 0x3F) : charCode
             let charAddr = charBase + UInt16(glyphCode) * 8 + UInt16(context.pixelRow)
-            traceReads.append(charAddr)
+            if recordTrace {
+                lastLowPhaseMemoryReads.append(charAddr)
+            }
             graphicsBuffer[column] = readMem(charAddr)
         }
         graphicsBufferControlReg1[column] = controlReg1
@@ -1700,8 +1726,10 @@ public final class VIC {
     }
 
     func fetchSpriteData(sprite: Int) {
-        lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
-        lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        if recordsBusAccessTraces {
+            lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
+            lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
+        }
 
         guard sprite >= 0 && sprite < 8 else { return }
         let readMem = readMemory ?? { _ in return 0 }
@@ -1712,7 +1740,9 @@ public final class VIC {
 
         let spritePtr = UInt16(spritePointers[sprite]) * 64
         let dataAddr = spritePtr + UInt16(byteOffset)
-        lastHighPhaseMemoryReads.append(contentsOf: [dataAddr, dataAddr + 1, dataAddr + 2])
+        if recordsBusAccessTraces {
+            lastHighPhaseMemoryReads.append(contentsOf: [dataAddr, dataAddr + 1, dataAddr + 2])
+        }
         spriteLineData[sprite][0] = readMem(dataAddr)
         spriteLineData[sprite][1] = readMem(dataAddr + 1)
         spriteLineData[sprite][2] = readMem(dataAddr + 2)
@@ -1733,14 +1763,16 @@ public final class VIC {
         return spriteLineByteOffset(for: sprite)
     }
 
-    func fetchSpriteMiddleByte(sprite: Int, traceReads: inout [UInt16]) {
+    func fetchSpriteMiddleByte(sprite: Int, recordTrace: Bool) {
         guard sprite >= 0 && sprite < 8 else { return }
         guard let byteOffset = spriteMiddleByteOffset(for: sprite) else { return }
 
         let readMem = readMemory ?? { _ in return 0 }
         let spritePtr = UInt16(spritePointers[sprite]) * 64
         let address = spritePtr + UInt16(byteOffset + 1)
-        traceReads.append(address)
+        if recordTrace {
+            lastLowPhaseMemoryReads.append(address)
+        }
         spriteLineData[sprite][1] = readMem(address)
     }
 

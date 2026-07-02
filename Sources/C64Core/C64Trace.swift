@@ -3,7 +3,7 @@ import Foundation
 /// Lightweight opt-in trace sink for low-level C64/1541 debugging.
 ///
 /// Tracing is disabled by default so tests and normal emulator runs do not
-/// spam `/tmp`. Set `C64_TRACE=iec,via,drive,gcr,kernal` or `C64_TRACE=all`
+/// spam `/tmp`. Set `C64_TRACE=iec,via,drive,gcr,kernal,sid` or `C64_TRACE=all`
 /// to enable categories, and optionally `C64_TRACE_FILE=/path/to/log`.
 public enum C64Trace {
     public enum Category: String, CaseIterable {
@@ -12,6 +12,7 @@ public enum C64Trace {
         case drive
         case gcr
         case kernal
+        case sid
     }
 
     private static let enabledCategories: Set<String> = {

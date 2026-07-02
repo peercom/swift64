@@ -70,6 +70,27 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.read(0x0001) & 0x10, 0x00)
     }
 
+    func testCPUPortSnapshotReportsEffectiveBankingLines() {
+        let memory = MemoryMap()
+
+        var snapshot = memory.cpuPortSnapshot
+        XCTAssertEqual(snapshot.direction, 0x2F)
+        XCTAssertEqual(snapshot.data, 0x37)
+        XCTAssertEqual(snapshot.effective, 0x37)
+        XCTAssertTrue(snapshot.loram)
+        XCTAssertTrue(snapshot.hiram)
+        XCTAssertTrue(snapshot.charen)
+
+        memory.write(0x0001, value: 0x30)
+
+        snapshot = memory.cpuPortSnapshot
+        XCTAssertEqual(snapshot.data, 0x30)
+        XCTAssertEqual(snapshot.effective, 0x30)
+        XCTAssertFalse(snapshot.loram)
+        XCTAssertFalse(snapshot.hiram)
+        XCTAssertFalse(snapshot.charen)
+    }
+
     func testCPUDataPortExposesCassetteOutputLineLevels() {
         let memory = MemoryMap()
         memory.write(0x0000, value: 0x28)
@@ -226,6 +247,66 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.read(0xD418), 0xA9)
         XCTAssertEqual(memory.read(0xD419), 0x44)
         XCTAssertEqual(memory.read(0xD41A), 0x55)
+    }
+
+    func testSIDRegisterWriteObserverReceivesMirroredRegisterAndValue() {
+        let memory = MemoryMap()
+        let sid = SID()
+        memory.sid = sid
+        var writes: [(UInt16, UInt8)] = []
+        memory.onSIDRegisterWrite = { register, value in
+            writes.append((register, value))
+        }
+
+        memory.write(0xD420, value: 0x34)
+        memory.write(0xD7FF, value: 0x9A)
+
+        XCTAssertEqual(writes.map(\.0), [0x00, 0x1F])
+        XCTAssertEqual(writes.map(\.1), [0x34, 0x9A])
+        XCTAssertEqual(sid.debugRegisterValue(0x00), 0x34)
+    }
+
+    func testBankedOutSIDAddressWriteObserverReceivesMirroredRegisterAndValue() {
+        let memory = MemoryMap()
+        let sid = SID()
+        memory.sid = sid
+        var sidWrites: [(UInt16, UInt8)] = []
+        var ramWindowWrites: [(UInt16, UInt8)] = []
+        memory.onSIDRegisterWrite = { register, value in
+            sidWrites.append((register, value))
+        }
+        memory.onBankedOutSIDAddressWrite = { register, value in
+            ramWindowWrites.append((register, value))
+        }
+
+        memory.write(0x0001, value: 0x30)
+        memory.write(0xD420, value: 0x34)
+
+        XCTAssertTrue(sidWrites.isEmpty)
+        XCTAssertEqual(ramWindowWrites.map(\.0), [0x00])
+        XCTAssertEqual(ramWindowWrites.map(\.1), [0x34])
+        XCTAssertEqual(memory.ram[0xD420], 0x34)
+        XCTAssertNotEqual(sid.debugRegisterValue(0x00), 0x34)
+    }
+
+    func testC64SIDWriteCountersDistinguishChipAndRAMWindowWrites() {
+        let c64 = C64()
+
+        c64.memory.write(0xD418, value: 0x0F)
+        c64.memory.write(0x0001, value: 0x30)
+        c64.memory.write(0xD418, value: 0x07)
+
+        XCTAssertEqual(c64.sidChipWriteCount, 1)
+        XCTAssertEqual(c64.sidRAMWindowWriteCount, 1)
+        XCTAssertEqual(c64.sidChipRegisterWriteCounts[0x18], 1)
+        XCTAssertEqual(c64.sidRAMWindowRegisterWriteCounts[0x18], 1)
+        XCTAssertEqual(c64.sid.debugRegisterValue(0x18), 0x0F)
+        XCTAssertEqual(c64.memory.ram[0xD418], 0x07)
+
+        c64.reset()
+
+        XCTAssertEqual(c64.sidChipRegisterWriteCounts.reduce(0, +), 0)
+        XCTAssertEqual(c64.sidRAMWindowRegisterWriteCounts.reduce(0, +), 0)
     }
 
     func testColorRAMReadsLowNibbleWithOpenBusHighNibble() {

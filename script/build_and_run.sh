@@ -5,7 +5,7 @@ MODE="${1:-run}"
 APP_NAME="Swift64"
 PROJECT_NAME="Swift64"
 SCHEME_NAME="Swift64"
-CONFIGURATION="${CONFIGURATION:-Debug}"
+CONFIGURATION="${CONFIGURATION:-Release}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_PATH="$ROOT_DIR/$PROJECT_NAME.xcodeproj"

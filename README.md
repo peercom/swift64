@@ -44,6 +44,9 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 - The macOS app now has Settings for machine/drive profile selection and local ROM file paths instead of relying on distributable bundled ROMs
 - The macOS app now includes an opt-in CRT display shader with adjustable intensity
+- The macOS app now exposes Fast Load, Compat True Drive, Strict PAL, PAL C64C, NTSC C64, and CRT + Accurate SID presets from Settings, the toolbar, and the Emulation menu
+- ROM configuration now imports sandbox-safe private copies into Application Support, provides Apply/OK semantics, and lets stale ROM entries be cleared from Settings
+- The macOS Release run path now defaults to the Xcode Release configuration, uses App Store-relevant sandbox/bookmark/user-selected-file entitlements without `get-task-allow`, and keeps the presented C64 frame centered in the app display without changing core VIC timing constants
 - ROM loading now validates expected stock ROM sizes before applying Settings-selected files
 - PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
 - Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
@@ -119,7 +122,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - Compatibility milestone manifests now reject duplicate milestone IDs and duplicate result keys before running, keeping resume logs and aggregate summaries unambiguous
 - Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status, media capabilities, RAM/color-RAM signatures, screen hashes, and color RAM hashes
 - Media capability checks now include weak/random-bit range counts, total weak-bit coverage, weak-bit preservation flags, and per-byte variable-speed-zone coverage for protected G64 validation
-- Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, expected-failure metadata and mismatch diagnostics, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, SID debug and non-mutating chip-readable register snapshots, write compact aggregate JSON summaries with run configuration metadata, manifest content fingerprints, selected/missing media counts, expected-failure drift counts/details, derived `outcome`/`acceptanceFailures` fields, optionally fail acceptance runs on missing manifest media, unclassified failures, or unexpected failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL
+- Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, expected-failure metadata and mismatch diagnostics, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, SID debug and non-mutating chip-readable register snapshots, write compact aggregate JSON summaries with run configuration metadata, manifest content fingerprints, selected/missing media counts, expected-failure drift counts/details, derived `outcome`/`acceptanceFailures` fields, optionally fail acceptance runs on missing manifest media, unclassified failures, or unexpected failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL; `C64_TRACE=sid` now writes bounded SID register-write traces with CPU/raster context for audio divergence triage
 - Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
 - Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
 - Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
@@ -422,6 +425,26 @@ SWIFT64_LOCAL_MILESTONE_MATRIX=1 SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR=/tmp/swi
 ```
 
 The named milestone test has a built-in Great Giana Sisters G64 custom-loader progress checkpoint when that local file is present. You can override or add stricter PRG/D64/G64/NIB/NBZ/P64/T64/TAP/CRT screen, color RAM, RAM, drive, media, and one-or-more-PC-range milestones with an untracked `C64/DISKS/compatibility.json` file. The runner rejects duplicate non-empty milestone IDs and duplicate result keys (`id`, file, command/action summary, machine profile, drive mode) before executing the local corpus, so resumable logs cannot accidentally treat two milestones as one. Known regressions can be kept in the corpus with an `expectedFailure` object containing a subsystem `category`, optional `reasonContains` string/list, and optional `note`; the runner still records the milestone as failed, but does not fail the XCTest slice unless the actual failure category or reason markers change.
+
+For the Great Giana Sisters G64 sound/reset regression, capture the chip-visible SID write stream after the first start screen by running the focused smoke test with the bounded JSONL SID trace enabled. The smoke test presses Space after the first screen change and continues into the second screen where the music starts; `SWIFT64_LOCAL_GIANA_SID_TRACE_LIMIT` bounds the trace so it stays manageable:
+
+```sh
+SWIFT64_LOCAL_GIANA_RUN_SMOKE=1 \
+SWIFT64_LOCAL_GIANA_CONTINUE_AFTER_SCREEN_CHANGE=1 \
+SWIFT64_LOCAL_GIANA_PRESS_SPACE_AT_PC=0x0AB9 \
+SWIFT64_LOCAL_GIANA_PRESS_SPACE_AT_PC_MIN_CYCLES=3000000 \
+SWIFT64_LOCAL_GIANA_SID_MODEL=mos6581 \
+SWIFT64_LOCAL_GIANA_SID_ACCURACY=compatibility \
+SWIFT64_LOCAL_GIANA_SID_TRACE_JSONL=/tmp/swift64-giana-sid.jsonl \
+SWIFT64_LOCAL_GIANA_SID_TRACE_LIMIT=50000 \
+SWIFT64_LOCAL_GIANA_WAV_CAPTURE=/tmp/swift64-giana.wav \
+SWIFT64_LOCAL_GIANA_WAV_CAPTURE_SECONDS=8 \
+SWIFT64_LOCAL_GIANA_STOP_AFTER_WAV_CAPTURE=1 \
+SWIFT64_LOCAL_GIANA_RUN_MAX_CYCLES=12000000 \
+swift test -c release --filter LocalDiskMatrixTests/testLocalGreatGianaSistersRunSmokeWhenEnabled
+```
+
+Replay `/tmp/swift64-giana-sid.jsonl` through the clean-room `SIDRegisterTracePlayer` to isolate SID synthesis from CPU/VIC/CIA/1541 timing. If the replayed chip-visible stream still sounds wrong, the remaining work is inside SID waveform/envelope/filter/output behavior; if the trace is sparse, missing writes, or includes unexpected banked-out writes, the problem is upstream in timing, banking, loader state, or drive behavior. Set `SWIFT64_LOCAL_GIANA_SID_TRACE_INCLUDE_RAM=1` only when you need to inspect `$D400-$D7FF` writes that happened while I/O was banked out. The optional WAV capture writes bounded mono 44.1 kHz output from the emulator's SID sample path after real voice/filter output begins; WAV export and app playback are AC-coupled so large SID DC offsets do not swamp or clip the audible signal, while SID debug state still reports raw internal mixer values. Use the WAV for A/B listening against external references without storing reference audio in the repo. `SWIFT64_LOCAL_GIANA_WAV_CAPTURE_AFTER_CHIP_WRITES` defaults to `3`, which skips the two early Kernal `$D418=00` writes. `SWIFT64_LOCAL_GIANA_WAV_CAPTURE_START=chip-writes` can restore the earlier setup-phase capture, but the default `voice-output` mode avoids recording only SID volume/DC output before the tune is active. The optional `SWIFT64_LOCAL_GIANA_PRESS_SPACE_AT_PC` trigger is useful when screen-RAM changes happen before the actual first-start-screen key loop.
 
 Useful fast regression slices:
 

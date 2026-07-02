@@ -20,6 +20,40 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Form {
+                Section("Presets") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 10)], spacing: 10) {
+                        ForEach(CompatibilityPresetPreference.allCases) { preset in
+                            Button {
+                                applyPreset(preset)
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: preset.systemImage)
+                                        .font(.title3)
+                                        .frame(width: 24)
+                                        .foregroundStyle(.secondary)
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(preset.title)
+                                            .font(.callout.weight(.semibold))
+                                            .lineLimit(1)
+                                        Text(preset.subtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                                .contentShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+
                 Section("Machine") {
                     Picker("Model", selection: $machineProfile) {
                         ForEach(MachineProfilePreference.allCases) { profile in
@@ -56,7 +90,7 @@ struct SettingsView: View {
                     HStack {
                         Spacer()
                         Button {
-                            emulator.applyEmulationPreferences(reset: true)
+                            applyEmulationSettings()
                         } label: {
                             Label("Apply", systemImage: "checkmark")
                         }
@@ -95,14 +129,15 @@ struct SettingsView: View {
                             .lineLimit(2)
                         Spacer()
                         Button {
-                            applyROMSettings()
+                            _ = applyROMSettings()
                         } label: {
                             Label("Apply", systemImage: "checkmark")
                         }
 
                         Button {
-                            applyROMSettings()
-                            dismiss()
+                            if applyROMSettings() {
+                                dismiss()
+                            }
                         } label: {
                             Text("OK")
                         }
@@ -146,7 +181,7 @@ struct SettingsView: View {
                 Label("Display", systemImage: "display")
             }
         }
-        .frame(width: 700, height: 390)
+        .frame(width: 740, height: 520)
         .scenePadding()
     }
 
@@ -162,12 +197,22 @@ struct SettingsView: View {
         "\(Int((crtShaderIntensity * 100).rounded()))%"
     }
 
-    private func applyROMSettings() {
+    private func applyPreset(_ preset: CompatibilityPresetPreference) {
+        emulator.applyCompatibilityPreset(preset)
+    }
+
+    private func applyEmulationSettings() {
+        emulator.applyEmulationPreferences(reset: true)
+    }
+
+    @discardableResult
+    private func applyROMSettings() -> Bool {
         guard ensureROMBookmarks() else {
             emulator.romStatusMessage = "ROM access was not authorized. Use each folder button once to import sandbox-safe ROM copies."
-            return
+            return false
         }
         emulator.reloadROMs(reset: true)
+        return !emulator.romStatusMessage.lowercased().contains("could not")
     }
 
     private func ensureROMBookmarks() -> Bool {
@@ -264,7 +309,23 @@ private struct ROMPathRow: View {
             }
             .labelStyle(.iconOnly)
             .help("Choose \(title) ROM")
+
+            Button {
+                clearROM()
+            } label: {
+                Label("Clear", systemImage: "xmark.circle")
+            }
+            .labelStyle(.iconOnly)
+            .help("Clear \(title) ROM configuration")
+            .disabled(path.isEmpty && !hasImportedROM)
         }
+    }
+
+    private var hasImportedROM: Bool {
+        guard let importedPath = UserDefaults.standard.string(forKey: importedPathKey), !importedPath.isEmpty else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: importedPath)
     }
 
     private func chooseROM() {
@@ -286,5 +347,15 @@ private struct ROMPathRow: View {
                 print("Could not import \(title) ROM: \(error)")
             }
         }
+    }
+
+    private func clearROM() {
+        if let importedPath = UserDefaults.standard.string(forKey: importedPathKey), !importedPath.isEmpty {
+            try? FileManager.default.removeItem(atPath: importedPath)
+        }
+        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        UserDefaults.standard.removeObject(forKey: importedPathKey)
+        path = ""
+        onImport("\(title) ROM configuration cleared.")
     }
 }

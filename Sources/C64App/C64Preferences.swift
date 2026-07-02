@@ -25,7 +25,6 @@ enum PreferenceKey {
 
 enum ROMFileStore {
     static func importAuthorizedROM(from url: URL, bookmarkKey: String, importedPathKey: String, storedFileName: String) throws -> URL {
-        let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -33,6 +32,7 @@ enum ROMFileStore {
             }
         }
 
+        let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
         let data = try Data(contentsOf: url)
         let destination = try importedROMURL(storedFileName: storedFileName)
         try data.write(to: destination, options: .atomic)
@@ -60,6 +60,120 @@ enum ROMFileStore {
         let directory = baseDirectory.appendingPathComponent("Swift64/ROMs", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+}
+
+enum CompatibilityPresetPreference: String, CaseIterable, Identifiable {
+    case fastLoad
+    case compatTrueDrive
+    case strictPAL
+    case palC64C
+    case ntscC64
+    case crtSIDAccurate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fastLoad: return "Fast Load"
+        case .compatTrueDrive: return "Compat True Drive"
+        case .strictPAL: return "Strict PAL"
+        case .palC64C: return "PAL C64C"
+        case .ntscC64: return "NTSC C64"
+        case .crtSIDAccurate: return "CRT + Accurate SID"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .fastLoad:
+            return "PAL C64, Kernal traps, fast SID, CRT off"
+        case .compatTrueDrive:
+            return "PAL C64, 1541C compat, profile SID, CRT on"
+        case .strictPAL:
+            return "PAL C64, strict 1541, 6581, accurate SID"
+        case .palC64C:
+            return "PAL C64C, 1541C compat, 8580, accurate SID"
+        case .ntscC64:
+            return "NTSC C64, 1541C compat, 6581, accurate SID"
+        case .crtSIDAccurate:
+            return "Keep machine profile, accurate SID, CRT on"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .fastLoad: return "bolt"
+        case .compatTrueDrive: return "externaldrive"
+        case .strictPAL: return "checkmark.seal"
+        case .palC64C: return "memorychip"
+        case .ntscC64: return "globe.americas"
+        case .crtSIDAccurate: return "display"
+        }
+    }
+
+    var machineProfile: MachineProfilePreference? {
+        switch self {
+        case .fastLoad, .compatTrueDrive, .strictPAL:
+            return .palC64
+        case .palC64C:
+            return .palC64C
+        case .ntscC64:
+            return .ntscC64
+        case .crtSIDAccurate:
+            return nil
+        }
+    }
+
+    var trueDriveMode: TrueDriveModePreference {
+        switch self {
+        case .fastLoad:
+            return .off
+        case .strictPAL:
+            return .standard1541
+        case .compatTrueDrive, .palC64C, .ntscC64, .crtSIDAccurate:
+            return .compat1541
+        }
+    }
+
+    var sidModel: SIDModelPreference {
+        switch self {
+        case .palC64C:
+            return .mos8580
+        case .strictPAL, .ntscC64:
+            return .mos6581
+        case .fastLoad, .compatTrueDrive, .crtSIDAccurate:
+            return .profileDefault
+        }
+    }
+
+    var sidAccuracyMode: SIDAccuracyModePreference {
+        switch self {
+        case .fastLoad:
+            return .fast
+        case .compatTrueDrive, .strictPAL, .palC64C, .ntscC64, .crtSIDAccurate:
+            return .compatibility
+        }
+    }
+
+    var crtShaderEnabled: Bool {
+        switch self {
+        case .fastLoad:
+            return false
+        case .compatTrueDrive, .strictPAL, .palC64C, .ntscC64, .crtSIDAccurate:
+            return true
+        }
+    }
+
+    var crtShaderIntensity: Double {
+        switch self {
+        case .fastLoad:
+            return 0.0
+        case .compatTrueDrive:
+            return 0.55
+        case .strictPAL, .palC64C, .ntscC64, .crtSIDAccurate:
+            return 0.65
+        }
     }
 }
 

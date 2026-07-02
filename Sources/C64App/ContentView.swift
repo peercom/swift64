@@ -75,6 +75,20 @@ struct ContentView: View {
 
                     Divider()
 
+                    Menu {
+                        ForEach(CompatibilityPresetPreference.allCases) { preset in
+                            Button {
+                                emulator.applyCompatibilityPreset(preset)
+                            } label: {
+                                Label(preset.title, systemImage: preset.systemImage)
+                            }
+                            .help(preset.subtitle)
+                        }
+                    } label: {
+                        Label("Preset", systemImage: "slider.horizontal.3")
+                    }
+                    .help("Apply an emulation compatibility preset")
+
                     Toggle(isOn: Binding(
                         get: { emulator.c64.trueDriveEmulation },
                         set: { enabled in
@@ -786,6 +800,7 @@ final class EmulatorController: ObservableObject {
     let c64 = C64()
     var audioEngine: AVAudioEngine?
     var audioSourceNode: AVAudioSourceNode?
+    var audioUnderrunFrames: UInt64 = 0
     /// Exposed so the debugger bridge can access snapshots.
     var renderer: MetalRenderer?
 
@@ -831,6 +846,7 @@ final class EmulatorController: ObservableObject {
     }
 
     init() {
+        c64.vic.recordsBusAccessTraces = false
         migrateLegacyPreferencesIfNeeded()
         applyEmulationPreferences(reset: false, powerDrive: false)
         applyDisplayPreferences()
@@ -1010,6 +1026,22 @@ final class EmulatorController: ObservableObject {
         refreshStatus()
     }
 
+    func applyCompatibilityPreset(_ preset: CompatibilityPresetPreference, reset: Bool = true) {
+        let defaults = UserDefaults.standard
+        if let machineProfile = preset.machineProfile {
+            defaults.set(machineProfile.rawValue, forKey: PreferenceKey.machineProfile)
+        }
+        defaults.set(preset.trueDriveMode.rawValue, forKey: PreferenceKey.trueDriveMode)
+        defaults.set(preset.sidModel.rawValue, forKey: PreferenceKey.sidModel)
+        defaults.set(preset.sidAccuracyMode.rawValue, forKey: PreferenceKey.sidAccuracyMode)
+        defaults.set(preset.crtShaderEnabled, forKey: PreferenceKey.crtShaderEnabled)
+        defaults.set(preset.crtShaderIntensity, forKey: PreferenceKey.crtShaderIntensity)
+
+        applyEmulationPreferences(reset: reset)
+        applyDisplayPreferences()
+        print("Applied compatibility preset: \(preset.title)")
+    }
+
     func applyEmulationPreferences(reset: Bool, powerDrive: Bool = true) {
         let defaults = UserDefaults.standard
         let profileID = defaults.string(forKey: PreferenceKey.machineProfile) ?? MachineProfilePreference.palC64.rawValue
@@ -1097,13 +1129,13 @@ final class EmulatorController: ObservableObject {
     func hasConfiguredROMPaths() -> Bool {
         let defaults = UserDefaults.standard
         let sources = [
-            (defaults.string(forKey: PreferenceKey.basicROMPath) ?? "", PreferenceKey.basicROMImportedPath),
-            (defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "", PreferenceKey.kernalROMImportedPath),
-            (defaults.string(forKey: PreferenceKey.characterROMPath) ?? "", PreferenceKey.characterROMImportedPath),
-            (defaults.string(forKey: PreferenceKey.driveROMPath) ?? "", PreferenceKey.driveROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.basicROMPath) ?? "", PreferenceKey.basicROMBookmark, PreferenceKey.basicROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "", PreferenceKey.kernalROMBookmark, PreferenceKey.kernalROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.characterROMPath) ?? "", PreferenceKey.characterROMBookmark, PreferenceKey.characterROMImportedPath),
+            (defaults.string(forKey: PreferenceKey.driveROMPath) ?? "", PreferenceKey.driveROMBookmark, PreferenceKey.driveROMImportedPath),
         ]
-        return sources.contains { path, importedPathKey in
-            hasROMSource(path: path, importedPathKey: importedPathKey)
+        return sources.contains { path, bookmarkKey, importedPathKey in
+            hasROMSource(path: path, bookmarkKey: bookmarkKey, importedPathKey: importedPathKey)
         }
     }
 
@@ -1115,9 +1147,9 @@ final class EmulatorController: ObservableObject {
         let drivePath = defaults.string(forKey: PreferenceKey.driveROMPath) ?? ""
 
         do {
-            guard hasROMSource(path: basicPath, importedPathKey: PreferenceKey.basicROMImportedPath),
-                  hasROMSource(path: kernalPath, importedPathKey: PreferenceKey.kernalROMImportedPath),
-                  hasROMSource(path: characterPath, importedPathKey: PreferenceKey.characterROMImportedPath) else {
+            guard hasROMSource(path: basicPath, bookmarkKey: PreferenceKey.basicROMBookmark, importedPathKey: PreferenceKey.basicROMImportedPath),
+                  hasROMSource(path: kernalPath, bookmarkKey: PreferenceKey.kernalROMBookmark, importedPathKey: PreferenceKey.kernalROMImportedPath),
+                  hasROMSource(path: characterPath, bookmarkKey: PreferenceKey.characterROMBookmark, importedPathKey: PreferenceKey.characterROMImportedPath) else {
                 romStatusMessage = "BASIC, Kernal, and Characters ROM paths are required."
                 print("WARNING: \(romStatusMessage)")
                 return false
@@ -1128,7 +1160,7 @@ final class EmulatorController: ObservableObject {
             let characters = try loadConfiguredROM(path: characterPath, bookmarkKey: PreferenceKey.characterROMBookmark, importedPathKey: PreferenceKey.characterROMImportedPath)
             try c64.loadROMsValidated(basic: basic, kernal: kernal, charset: characters)
 
-            if hasROMSource(path: drivePath, importedPathKey: PreferenceKey.driveROMImportedPath) {
+            if hasROMSource(path: drivePath, bookmarkKey: PreferenceKey.driveROMBookmark, importedPathKey: PreferenceKey.driveROMImportedPath) {
                 let drive = try loadConfiguredROM(path: drivePath, bookmarkKey: PreferenceKey.driveROMBookmark, importedPathKey: PreferenceKey.driveROMImportedPath)
                 try c64.loadDriveROMValidated(drive)
                 romStatusMessage = "ROMs loaded from configured paths, including 1541 drive ROM."
@@ -1144,14 +1176,18 @@ final class EmulatorController: ObservableObject {
         }
     }
 
-    func hasROMSource(path: String, importedPathKey: String) -> Bool {
-        if !path.isEmpty {
+    func hasROMSource(path: String, bookmarkKey: String, importedPathKey: String) -> Bool {
+        if let importedPath = UserDefaults.standard.string(forKey: importedPathKey),
+           !importedPath.isEmpty,
+           FileManager.default.isReadableFile(atPath: importedPath) {
             return true
         }
-        guard let importedPath = UserDefaults.standard.string(forKey: importedPathKey), !importedPath.isEmpty else {
-            return false
+
+        guard !path.isEmpty else { return false }
+        if FileManager.default.isReadableFile(atPath: path) {
+            return true
         }
-        return FileManager.default.isReadableFile(atPath: importedPath)
+        return UserDefaults.standard.data(forKey: bookmarkKey) != nil
     }
 
     func loadConfiguredROM(path: String, bookmarkKey: String, importedPathKey: String) throws -> Data {
@@ -1290,21 +1326,46 @@ final class EmulatorController: ObservableObject {
         let sampleRate = SID.sampleRate
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
         let sid = c64.sid
+        let dcBlockerPole: Float = 0.995
+        let prebufferTarget = min(4096, sid.sampleBuffer.count / 2)
+        let underrunLowWatermark = min(512, prebufferTarget / 4)
+        var dcBlockerLastInput: Float = 0
+        var dcBlockerLastOutput: Float = 0
+        var lastOutput: Float = 0
+        var prebuffering = true
+        var underrunFrames: UInt64 = 0
 
-        audioSourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+        audioSourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             let bufferList = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in bufferList {
                 let frames = Int(frameCount)
                 let ptr = buffer.mData!.bindMemory(to: Float.self, capacity: frames)
                 for i in 0..<frames {
-                    if sid.sampleReadPos != sid.sampleWritePos {
-                        ptr[i] = sid.sampleBuffer[sid.sampleReadPos]
-                        sid.sampleReadPos = (sid.sampleReadPos + 1) % sid.sampleBuffer.count
-                    } else {
-                        ptr[i] = 0
+                    let availableSamples = sid.availableAudioSamplesForPlayback()
+                    if prebuffering && availableSamples < prebufferTarget {
+                        ptr[i] = lastOutput
+                        underrunFrames += 1
+                        continue
                     }
+                    prebuffering = false
+
+                    guard let rawSample = sid.readAudioSampleForPlayback() else {
+                        prebuffering = true
+                        ptr[i] = lastOutput
+                        underrunFrames += 1
+                        continue
+                    }
+                    if availableSamples <= underrunLowWatermark {
+                        prebuffering = true
+                    }
+                    let coupledSample = rawSample - dcBlockerLastInput + dcBlockerPole * dcBlockerLastOutput
+                    dcBlockerLastInput = rawSample
+                    dcBlockerLastOutput = coupledSample
+                    lastOutput = min(max(coupledSample, -0.95), 0.95)
+                    ptr[i] = lastOutput
                 }
             }
+            self?.audioUnderrunFrames = underrunFrames
             return noErr
         }
 
