@@ -29,6 +29,38 @@ final class C64ResetTests: XCTestCase {
         XCTAssertEqual(c64.memory.ram[0xFFFF], 0xFF)
     }
 
+    func testPowerOnUsesSelectedMachineProfileRAMPattern() {
+        var profile = MachineProfile.palC64
+        profile = MachineProfile(
+            name: profile.name,
+            videoStandard: profile.videoStandard,
+            cpuClockHz: profile.cpuClockHz,
+            ciaTodCyclesPerTenth: profile.ciaTodCyclesPerTenth,
+            sidModel: profile.sidModel,
+            sidClockHz: profile.sidClockHz,
+            driveModel: profile.driveModel,
+            driveClockHz: profile.driveClockHz,
+            memoryPowerOnPattern: .allOne
+        )
+        let c64 = C64(machineProfile: profile)
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+
+        c64.powerOn()
+
+        XCTAssertEqual(c64.memory.ram[0x0000], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x003F], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x0040], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0x8000], 0xFF)
+        XCTAssertEqual(c64.memory.ram[0xFFFF], 0xFF)
+    }
+
     func testPowerOnColdResetsVideoAudioAndCIAState() {
         let c64 = C64()
         var kernal = Data(repeating: 0, count: C64.kernalROMSize)

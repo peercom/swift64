@@ -773,19 +773,7 @@ public final class C64 {
         sidChipRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
         sidRAMWindowRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
 
-        // Initialize RAM with typical power-on pattern
-        for i in stride(from: 0, to: 0x10000, by: 128) {
-            for j in 0..<64 {
-                if i + j < 0x10000 {
-                    memory.ram[i + j] = 0x00
-                }
-            }
-            for j in 64..<128 {
-                if i + j < 0x10000 {
-                    memory.ram[i + j] = 0xFF
-                }
-            }
-        }
+        initializeRAMPowerOnPattern(machineProfile.memoryPowerOnPattern)
 
         // Set default CPU port
         memory.resetCPUPort()
@@ -1069,5 +1057,11 @@ public final class C64 {
     func updateIRQ() {
         // IRQ is active if any source is asserting it
         cpu.irqLine = cia1.interruptActive || (vic.interruptRegister & 0x80 != 0)
+    }
+
+    func initializeRAMPowerOnPattern(_ pattern: MemoryPowerOnPattern) {
+        for address in memory.ram.indices {
+            memory.ram[address] = pattern.byte(at: address)
+        }
     }
 }

@@ -4,14 +4,29 @@ import Foundation
 
 private final class ProcessorJSONRAMBus: Bus {
     var memory = [UInt8](repeating: 0, count: 0x10000)
+    var isRecording = false
+    var cycles: [ProcessorJSONBusCycle] = []
 
     func read(_ address: UInt16) -> UInt8 {
-        memory[Int(address)]
+        let value = memory[Int(address)]
+        if isRecording {
+            cycles.append(ProcessorJSONBusCycle(address: address, value: value, operation: "read"))
+        }
+        return value
     }
 
     func write(_ address: UInt16, value: UInt8) {
+        if isRecording {
+            cycles.append(ProcessorJSONBusCycle(address: address, value: value, operation: "write"))
+        }
         memory[Int(address)] = value
     }
+}
+
+private struct ProcessorJSONBusCycle: Equatable {
+    let address: UInt16
+    let value: UInt8
+    let operation: String
 }
 
 final class CPU6502ProcessorJSONTests: XCTestCase {
@@ -63,6 +78,8 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
         XCTAssertEqual(summary.executed, 1)
         XCTAssertEqual(summary.passed, 1)
         XCTAssertEqual(summary.failed, 0)
+        XCTAssertEqual(summary.outcome, "passed")
+        XCTAssertEqual(summary.acceptanceFailures, 0)
         XCTAssertNil(summary.firstFailure)
         XCTAssertEqual(summary.strictCycleCount, true)
     }
@@ -117,6 +134,133 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
         XCTAssertTrue(summary.firstFailure?.mismatches.contains("A expected $76 got $77") == true)
         XCTAssertTrue(summary.firstFailure?.mismatches.contains("$0020 expected $76 got $77") == true)
         XCTAssertTrue(summary.firstFailure?.mismatches.contains("cycles expected 2 got 3") == true)
+    }
+
+    func testSyntheticProcessorJSONReportsBusCycleMismatchInStrictMode() throws {
+        let tests = [
+            ProcessorJSONCase(
+                name: "nop-bus-value-mismatch",
+                initial: ProcessorJSONState(
+                    pc: 0x0400,
+                    s: 0xFD,
+                    a: 0x00,
+                    x: 0x00,
+                    y: 0x00,
+                    p: 0x24,
+                    ram: [[0x0400, 0xEA]]
+                ),
+                final: ProcessorJSONState(
+                    pc: 0x0401,
+                    s: 0xFD,
+                    a: 0x00,
+                    x: 0x00,
+                    y: 0x00,
+                    p: 0x24,
+                    ram: [[0x0400, 0xEA]]
+                ),
+                cycles: [
+                    ProcessorJSONCycle(address: 0x0400, value: 0xEA, operation: "read"),
+                    ProcessorJSONCycle(address: 0x0401, value: 0xFF, operation: "read"),
+                ]
+            ),
+        ]
+
+        let strict = try runProcessorJSONCases(
+            tests,
+            sourcePath: "/tmp/processor-json/ea.json",
+            startIndex: 0,
+            limit: nil,
+            strictCycleCount: true,
+            recordPassingCases: true
+        )
+        XCTAssertEqual(strict.failed, 1)
+        XCTAssertTrue(strict.firstFailure?.mismatches.contains("cycle 1 read $0401 expected $FF got read $0401 $00") == true)
+
+        let loose = try runProcessorJSONCases(
+            tests,
+            sourcePath: "/tmp/processor-json/ea.json",
+            startIndex: 0,
+            limit: nil,
+            strictCycleCount: false,
+            recordPassingCases: true
+        )
+        XCTAssertEqual(loose.failed, 0)
+    }
+
+    func testProcessorJSONRejectsInvalidCycleOperationBeforeExecution() throws {
+        let test = ProcessorJSONCase(
+            name: "bad-operation",
+            initial: ProcessorJSONState(
+                pc: 0x0400,
+                s: 0xFD,
+                a: 0x00,
+                x: 0x00,
+                y: 0x00,
+                p: 0x24,
+                ram: [[0x0400, 0xEA]]
+            ),
+            final: ProcessorJSONState(
+                pc: 0x0401,
+                s: 0xFD,
+                a: 0x00,
+                x: 0x00,
+                y: 0x00,
+                p: 0x24,
+                ram: [[0x0400, 0xEA]]
+            ),
+            cycles: [
+                ProcessorJSONCycle(address: 0x0400, value: 0xEA, operation: "fetch"),
+            ]
+        )
+
+        XCTAssertThrowsError(try runProcessorJSONCase(
+            test,
+            sourcePath: "/tmp/processor-json/ea.json",
+            index: 7,
+            strictCycleCount: true
+        )) { error in
+            XCTAssertTrue(String(describing: error).contains("bad-operation"))
+            XCTAssertTrue(String(describing: error).contains("cycle 0"))
+            XCTAssertTrue(String(describing: error).contains("fetch"))
+        }
+    }
+
+    func testProcessorJSONRejectsInvalidFinalRAMBeforeExecution() throws {
+        let test = ProcessorJSONCase(
+            name: "bad-final-ram",
+            initial: ProcessorJSONState(
+                pc: 0x0400,
+                s: 0xFD,
+                a: 0x00,
+                x: 0x00,
+                y: 0x00,
+                p: 0x24,
+                ram: [[0x0400, 0xEA]]
+            ),
+            final: ProcessorJSONState(
+                pc: 0x0401,
+                s: 0xFD,
+                a: 0x00,
+                x: 0x00,
+                y: 0x00,
+                p: 0x24,
+                ram: [[0x10000, 0x00]]
+            ),
+            cycles: [
+                ProcessorJSONCycle(address: 0x0400, value: 0xEA, operation: "read"),
+            ]
+        )
+
+        XCTAssertThrowsError(try runProcessorJSONCase(
+            test,
+            sourcePath: "/tmp/processor-json/ea.json",
+            index: 8,
+            strictCycleCount: true
+        )) { error in
+            XCTAssertTrue(String(describing: error).contains("bad-final-ram"))
+            XCTAssertTrue(String(describing: error).contains("final.ram[0].address"))
+            XCTAssertTrue(String(describing: error).contains("not a 16-bit address"))
+        }
     }
 
     func testProcessorJSONStartAndLimitBoundExecution() throws {
@@ -202,8 +346,94 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
         XCTAssertEqual(aggregate.files, 1)
         XCTAssertEqual(aggregate.executed, 1)
         XCTAssertEqual(aggregate.failed, 1)
+        XCTAssertEqual(aggregate.outcome, "failed")
+        XCTAssertEqual(aggregate.acceptanceFailures, 1)
         XCTAssertTrue(aggregate.failureSummary.contains("second-fails"))
         XCTAssertTrue(aggregate.summaries[0].sourcePath.hasSuffix("a9.json"))
+    }
+
+    func testProcessorJSONInputFilesCanSelectDeterministicShard() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for opcode in ["00", "01", "02", "03", "04"] {
+            try writeProcessorJSONFixture(
+                [processorJSONNOPCase(name: opcode, pc: 0x0400)],
+                to: directory.appendingPathComponent("\(opcode).json")
+            )
+        }
+
+        let urls = try processorJSONInputFiles(from: [
+            "SWIFT64_PROCESSOR_JSON_TEST_DIR": directory.path,
+            "SWIFT64_PROCESSOR_JSON_OPCODES": "all",
+            "SWIFT64_PROCESSOR_JSON_SHARD_INDEX": "1",
+            "SWIFT64_PROCESSOR_JSON_SHARD_COUNT": "2",
+        ])
+
+        XCTAssertEqual(urls.map { $0.deletingPathExtension().lastPathComponent }, ["01", "03"])
+    }
+
+    func testProcessorJSONInputFilesRejectInvalidShardSelection() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try writeProcessorJSONFixture(
+            [processorJSONNOPCase(name: "nop", pc: 0x0400)],
+            to: directory.appendingPathComponent("ea.json")
+        )
+
+        XCTAssertThrowsError(try processorJSONInputFiles(from: [
+            "SWIFT64_PROCESSOR_JSON_TEST_DIR": directory.path,
+            "SWIFT64_PROCESSOR_JSON_OPCODES": "all",
+            "SWIFT64_PROCESSOR_JSON_SHARD_INDEX": "2",
+            "SWIFT64_PROCESSOR_JSON_SHARD_COUNT": "2",
+        ])) { error in
+            XCTAssertTrue(String(describing: error).contains("SHARD_INDEX"))
+        }
+    }
+
+    func testProcessorJSONRunConfigurationCapturesShardAndOpcodeSelection() {
+        let configuration = processorJSONRunConfiguration(from: [
+            "SWIFT64_PROCESSOR_JSON_TEST_DIR": "/tmp/6502/v1",
+            "SWIFT64_PROCESSOR_JSON_OPCODES": "ea,a9",
+            "SWIFT64_PROCESSOR_JSON_SHARD_INDEX": "1",
+            "SWIFT64_PROCESSOR_JSON_SHARD_COUNT": "4",
+        ], failFast: true)
+
+        XCTAssertEqual(configuration.testDirectory, "/tmp/6502/v1")
+        XCTAssertEqual(configuration.opcodeSelection, "ea,a9")
+        XCTAssertEqual(configuration.shardIndex, 1)
+        XCTAssertEqual(configuration.shardCount, 4)
+        XCTAssertTrue(configuration.failFast)
+    }
+
+    func testProcessorJSONAggregateSummaryFingerprintsSelectedInputFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = directory.appendingPathComponent("ea.json")
+        let second = directory.appendingPathComponent("a9.json")
+        try writeProcessorJSONFixture([processorJSONNOPCase(name: "first", pc: 0x0400)], to: first)
+        try writeProcessorJSONFixture([processorJSONNOPCase(name: "second", pc: 0x0500)], to: second)
+
+        let summary = try runProcessorJSONInputs(
+            urls: [second, first],
+            startIndex: 0,
+            limit: nil,
+            strictCycleCount: false,
+            recordPassingCases: false,
+            failFast: false
+        )
+
+        XCTAssertEqual(summary.selectedInputFiles, ["a9.json", "ea.json"])
+        XCTAssertEqual(summary.inputFNV1A64.count, 16)
+        XCTAssertEqual(summary.inputFNV1A64, try processorJSONInputFingerprint(urls: [first, second]))
     }
 
     func testOptInProcessorJSONSingleStepVectors() throws {
@@ -223,7 +453,8 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
             limit: limit,
             strictCycleCount: strictCycleCount,
             recordPassingCases: recordPassingCases,
-            failFast: failFast
+            failFast: failFast,
+            configuration: processorJSONRunConfiguration(from: environment, failFast: failFast)
         )
         try writeProcessorJSONAggregateSummary(aggregate, to: resultURL)
 
@@ -275,21 +506,36 @@ private struct ProcessorJSONCycle: Codable, Equatable {
 }
 
 private struct ProcessorJSONAggregateSummary: Codable, Equatable {
-    var formatVersion: Int = 1
+    var formatVersion: Int = 4
     var runnerName: String = "CPU6502ProcessorJSONTests"
+    let configuration: ProcessorJSONRunConfiguration
+    let inputFNV1A64: String
+    let selectedInputFiles: [String]
     let files: Int
     let totalInFiles: Int
     let executed: Int
     let passed: Int
     let failed: Int
+    let outcome: String
+    let acceptanceFailures: Int
     let summaries: [ProcessorJSONRunSummary]
 
-    init(summaries: [ProcessorJSONRunSummary]) {
+    init(
+        summaries: [ProcessorJSONRunSummary],
+        configuration: ProcessorJSONRunConfiguration = ProcessorJSONRunConfiguration(),
+        inputFNV1A64: String = processorJSONFNV1A64([]),
+        selectedInputFiles: [String] = []
+    ) {
+        self.configuration = configuration
+        self.inputFNV1A64 = inputFNV1A64
+        self.selectedInputFiles = selectedInputFiles
         self.files = summaries.count
         self.totalInFiles = summaries.reduce(0) { $0 + $1.totalInFile }
         self.executed = summaries.reduce(0) { $0 + $1.executed }
         self.passed = summaries.reduce(0) { $0 + $1.passed }
         self.failed = summaries.reduce(0) { $0 + $1.failed }
+        self.outcome = self.failed == 0 ? "passed" : "failed"
+        self.acceptanceFailures = self.failed
         self.summaries = summaries
     }
 
@@ -304,8 +550,33 @@ private struct ProcessorJSONAggregateSummary: Codable, Equatable {
     }
 }
 
+private struct ProcessorJSONRunConfiguration: Codable, Equatable {
+    let testPath: String?
+    let testDirectory: String?
+    let opcodeSelection: String?
+    let shardIndex: Int?
+    let shardCount: Int?
+    let failFast: Bool
+
+    init(
+        testPath: String? = nil,
+        testDirectory: String? = nil,
+        opcodeSelection: String? = nil,
+        shardIndex: Int? = nil,
+        shardCount: Int? = nil,
+        failFast: Bool = false
+    ) {
+        self.testPath = testPath
+        self.testDirectory = testDirectory
+        self.opcodeSelection = opcodeSelection
+        self.shardIndex = shardIndex
+        self.shardCount = shardCount
+        self.failFast = failFast
+    }
+}
+
 private struct ProcessorJSONRunSummary: Codable, Equatable {
-    var formatVersion: Int = 1
+    var formatVersion: Int = 2
     var runnerName: String = "CPU6502ProcessorJSONTests"
     let sourcePath: String
     let totalInFile: Int
@@ -316,6 +587,8 @@ private struct ProcessorJSONRunSummary: Codable, Equatable {
     let executed: Int
     let passed: Int
     let failed: Int
+    let outcome: String
+    let acceptanceFailures: Int
     let firstFailure: ProcessorJSONFailure?
     let records: [ProcessorJSONRecord]
 }
@@ -352,18 +625,61 @@ private func processorJSONInputFiles(from environment: [String: String]) throws 
         throw XCTSkip("Set SWIFT64_PROCESSOR_JSON_OPCODES to a comma-separated opcode list, such as 69,EA.")
     }
 
+    let urls: [URL]
     if opcodeList.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "all" {
-        return try processorJSONAllInputFiles(in: URL(fileURLWithPath: directory))
+        urls = try processorJSONAllInputFiles(in: URL(fileURLWithPath: directory))
+    } else {
+        urls = opcodeList
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .map { opcode in
+                let fileName = opcode.hasSuffix(".json") ? opcode : "\(opcode).json"
+                return URL(fileURLWithPath: directory).appendingPathComponent(fileName)
+            }
     }
 
-    return opcodeList
-        .split(separator: ",")
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-        .filter { !$0.isEmpty }
-        .map { opcode in
-            let fileName = opcode.hasSuffix(".json") ? opcode : "\(opcode).json"
-            return URL(fileURLWithPath: directory).appendingPathComponent(fileName)
-        }
+    return try processorJSONShard(urls, environment: environment)
+}
+
+private func processorJSONShard(_ urls: [URL], environment: [String: String]) throws -> [URL] {
+    guard environment["SWIFT64_PROCESSOR_JSON_SHARD_INDEX"] != nil ||
+        environment["SWIFT64_PROCESSOR_JSON_SHARD_COUNT"] != nil else {
+        return urls
+    }
+
+    guard let shardIndexString = environment["SWIFT64_PROCESSOR_JSON_SHARD_INDEX"],
+          let shardCountString = environment["SWIFT64_PROCESSOR_JSON_SHARD_COUNT"],
+          let shardIndex = Int(shardIndexString),
+          let shardCount = Int(shardCountString),
+          shardCount > 0,
+          shardIndex >= 0,
+          shardIndex < shardCount else {
+        throw ProcessorJSONError("SWIFT64_PROCESSOR_JSON_SHARD_INDEX must be zero-based and less than SWIFT64_PROCESSOR_JSON_SHARD_COUNT")
+    }
+
+    return urls.enumerated()
+        .filter { offset, _ in offset % shardCount == shardIndex }
+        .map(\.element)
+}
+
+private func processorJSONRunConfiguration(
+    from environment: [String: String],
+    failFast: Bool
+) -> ProcessorJSONRunConfiguration {
+    ProcessorJSONRunConfiguration(
+        testPath: nonEmptyEnvironmentValue("SWIFT64_PROCESSOR_JSON_TEST_PATH", in: environment),
+        testDirectory: nonEmptyEnvironmentValue("SWIFT64_PROCESSOR_JSON_TEST_DIR", in: environment),
+        opcodeSelection: nonEmptyEnvironmentValue("SWIFT64_PROCESSOR_JSON_OPCODES", in: environment),
+        shardIndex: Int(environment["SWIFT64_PROCESSOR_JSON_SHARD_INDEX"] ?? ""),
+        shardCount: Int(environment["SWIFT64_PROCESSOR_JSON_SHARD_COUNT"] ?? ""),
+        failFast: failFast
+    )
+}
+
+private func nonEmptyEnvironmentValue(_ key: String, in environment: [String: String]) -> String? {
+    guard let value = environment[key], !value.isEmpty else { return nil }
+    return value
 }
 
 private func processorJSONAllInputFiles(in directory: URL) throws -> [URL] {
@@ -396,12 +712,19 @@ private func runProcessorJSONInputs(
     limit: Int?,
     strictCycleCount: Bool,
     recordPassingCases: Bool,
-    failFast: Bool
+    failFast: Bool,
+    configuration: ProcessorJSONRunConfiguration = ProcessorJSONRunConfiguration()
 ) throws -> ProcessorJSONAggregateSummary {
-    var summaries: [ProcessorJSONRunSummary] = []
-    summaries.reserveCapacity(urls.count)
+    let sortedURLs = urls.sorted { lhs, rhs in
+        lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent) == .orderedAscending
+    }
+    let inputFNV1A64 = try processorJSONInputFingerprint(urls: sortedURLs)
+    let selectedInputFiles = sortedURLs.map(\.lastPathComponent)
 
-    for url in urls {
+    var summaries: [ProcessorJSONRunSummary] = []
+    summaries.reserveCapacity(sortedURLs.count)
+
+    for url in sortedURLs {
         let cases = try decodeProcessorJSONCases(at: url)
         let summary = try runProcessorJSONCases(
             cases,
@@ -417,7 +740,27 @@ private func runProcessorJSONInputs(
         }
     }
 
-    return ProcessorJSONAggregateSummary(summaries: summaries)
+    return ProcessorJSONAggregateSummary(
+        summaries: summaries,
+        configuration: configuration,
+        inputFNV1A64: inputFNV1A64,
+        selectedInputFiles: selectedInputFiles
+    )
+}
+
+private func processorJSONInputFingerprint(urls: [URL]) throws -> String {
+    var hash: UInt64 = 0xcbf29ce484222325
+    for url in urls.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+        for byte in url.lastPathComponent.utf8 {
+            processorJSONFNV1A64Update(&hash, byte)
+        }
+        processorJSONFNV1A64Update(&hash, 0)
+        for byte in try Data(contentsOf: url) {
+            processorJSONFNV1A64Update(&hash, byte)
+        }
+        processorJSONFNV1A64Update(&hash, 0)
+    }
+    return String(format: "%016llX", hash)
 }
 
 private func runProcessorJSONCases(
@@ -489,6 +832,8 @@ private func runProcessorJSONCases(
         executed: executed,
         passed: passed,
         failed: failed,
+        outcome: failed == 0 ? "passed" : "failed",
+        acceptanceFailures: failed,
         firstFailure: firstFailure,
         records: retainedRecords
     )
@@ -500,6 +845,8 @@ private func runProcessorJSONCase(
     index: Int,
     strictCycleCount: Bool
 ) throws -> ProcessorJSONRecord {
+    try validateProcessorJSONCase(test, sourcePath: sourcePath, index: index)
+
     let bus = ProcessorJSONRAMBus()
     try applyProcessorJSONRAM(test.initial.ram, to: bus)
 
@@ -511,7 +858,7 @@ private func runProcessorJSONCase(
     cpu.y = try UInt8(processorJSONValue: test.initial.y, field: "initial.y")
     cpu.p = try UInt8(processorJSONValue: test.initial.p, field: "initial.p")
 
-    let elapsedCycles = runOneProcessorJSONInstruction(cpu)
+    let elapsedCycles = runOneProcessorJSONInstruction(cpu, bus: bus)
     let mismatches = try processorJSONMismatches(
         test,
         cpu: cpu,
@@ -531,8 +878,53 @@ private func runProcessorJSONCase(
     )
 }
 
-private func runOneProcessorJSONInstruction(_ cpu: CPU6502) -> Int {
+private func validateProcessorJSONCase(
+    _ test: ProcessorJSONCase,
+    sourcePath: String,
+    index: Int
+) throws {
+    let prefix = "\(sourcePath) case \(index) \(test.name)"
+    _ = try UInt16(processorJSONValue: test.initial.pc, field: "\(prefix) initial.pc")
+    _ = try UInt8(processorJSONValue: test.initial.s, field: "\(prefix) initial.s")
+    _ = try UInt8(processorJSONValue: test.initial.a, field: "\(prefix) initial.a")
+    _ = try UInt8(processorJSONValue: test.initial.x, field: "\(prefix) initial.x")
+    _ = try UInt8(processorJSONValue: test.initial.y, field: "\(prefix) initial.y")
+    _ = try UInt8(processorJSONValue: test.initial.p, field: "\(prefix) initial.p")
+    _ = try UInt16(processorJSONValue: test.final.pc, field: "\(prefix) final.pc")
+    _ = try UInt8(processorJSONValue: test.final.s, field: "\(prefix) final.s")
+    _ = try UInt8(processorJSONValue: test.final.a, field: "\(prefix) final.a")
+    _ = try UInt8(processorJSONValue: test.final.x, field: "\(prefix) final.x")
+    _ = try UInt8(processorJSONValue: test.final.y, field: "\(prefix) final.y")
+    _ = try UInt8(processorJSONValue: test.final.p, field: "\(prefix) final.p")
+
+    try validateProcessorJSONRAM(test.initial.ram, label: "\(prefix) initial.ram")
+    try validateProcessorJSONRAM(test.final.ram, label: "\(prefix) final.ram")
+
+    for (cycleIndex, cycle) in test.cycles.enumerated() {
+        let operation = cycle.operation.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard operation == "read" || operation == "write" else {
+            throw ProcessorJSONError("\(prefix) cycle \(cycleIndex) has invalid operation \(cycle.operation)")
+        }
+        _ = try UInt16(processorJSONValue: cycle.address, field: "\(prefix) cycles[\(cycleIndex)].address")
+        _ = try UInt8(processorJSONValue: cycle.value, field: "\(prefix) cycles[\(cycleIndex)].value")
+    }
+}
+
+private func validateProcessorJSONRAM(_ ram: [[Int]], label: String) throws {
+    for (entryIndex, pair) in ram.enumerated() {
+        guard pair.count == 2 else {
+            throw ProcessorJSONError("\(label)[\(entryIndex)] must contain address and value")
+        }
+        _ = try UInt16(processorJSONValue: pair[0], field: "\(label)[\(entryIndex)].address")
+        _ = try UInt8(processorJSONValue: pair[1], field: "\(label)[\(entryIndex)].value")
+    }
+}
+
+private func runOneProcessorJSONInstruction(_ cpu: CPU6502, bus: ProcessorJSONRAMBus) -> Int {
     var elapsedCycles = 0
+    bus.cycles.removeAll(keepingCapacity: true)
+    bus.isRecording = true
+    defer { bus.isRecording = false }
     repeat {
         _ = cpu.tick()
         elapsedCycles += 1
@@ -583,8 +975,56 @@ private func processorJSONMismatches(
     if strictCycleCount && elapsedCycles != test.cycles.count {
         mismatches.append("cycles expected \(test.cycles.count) got \(elapsedCycles)")
     }
+    if strictCycleCount {
+        try appendProcessorJSONBusCycleMismatches(
+            expectedCycles: test.cycles,
+            actualCycles: bus.cycles,
+            to: &mismatches
+        )
+    }
 
     return mismatches
+}
+
+private func appendProcessorJSONBusCycleMismatches(
+    expectedCycles: [ProcessorJSONCycle],
+    actualCycles: [ProcessorJSONBusCycle],
+    to mismatches: inout [String]
+) throws {
+    let comparedCount = min(expectedCycles.count, actualCycles.count)
+    for index in 0..<comparedCount {
+        let expected = expectedCycles[index]
+        let actual = actualCycles[index]
+        let expectedAddress = try UInt16(processorJSONValue: expected.address, field: "cycles.address")
+        let expectedValue = try UInt8(processorJSONValue: expected.value, field: "cycles.value")
+        let expectedOperation = processorJSONCycleOperation(expected.operation)
+        if actual.address != expectedAddress ||
+            actual.value != expectedValue ||
+            actual.operation != expectedOperation {
+            mismatches.append(
+                "cycle \(index) \(expectedOperation) \(hex16(expectedAddress)) expected \(hex8(expectedValue)) got \(actual.operation) \(hex16(actual.address)) \(hex8(actual.value))"
+            )
+        }
+    }
+
+    if actualCycles.count > expectedCycles.count {
+        for index in expectedCycles.count..<actualCycles.count {
+            let actual = actualCycles[index]
+            mismatches.append("cycle \(index) unexpected \(actual.operation) \(hex16(actual.address)) \(hex8(actual.value))")
+        }
+    }
+    if expectedCycles.count > actualCycles.count {
+        for index in actualCycles.count..<expectedCycles.count {
+            let expected = expectedCycles[index]
+            let expectedAddress = try UInt16(processorJSONValue: expected.address, field: "cycles.address")
+            let expectedValue = try UInt8(processorJSONValue: expected.value, field: "cycles.value")
+            mismatches.append("cycle \(index) missing \(processorJSONCycleOperation(expected.operation)) \(hex16(expectedAddress)) \(hex8(expectedValue))")
+        }
+    }
+}
+
+private func processorJSONCycleOperation(_ operation: String) -> String {
+    operation.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 }
 
 private func processorJSONExpectsJammedCPU(_ test: ProcessorJSONCase) -> Bool {
@@ -646,6 +1086,19 @@ private func writeProcessorJSONAggregateSummary(
 private func writeProcessorJSONFixture(_ cases: [ProcessorJSONCase], to url: URL) throws {
     let encoder = JSONEncoder()
     try encoder.encode(cases).write(to: url, options: .atomic)
+}
+
+private func processorJSONFNV1A64<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+    var hash: UInt64 = 0xcbf29ce484222325
+    for byte in bytes {
+        processorJSONFNV1A64Update(&hash, byte)
+    }
+    return String(format: "%016llX", hash)
+}
+
+private func processorJSONFNV1A64Update(_ hash: inout UInt64, _ byte: UInt8) {
+    hash ^= UInt64(byte)
+    hash = hash &* 0x100000001b3
 }
 
 private func processorJSONNOPCase(name: String, pc: Int) -> ProcessorJSONCase {

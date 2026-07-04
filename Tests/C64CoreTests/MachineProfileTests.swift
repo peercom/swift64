@@ -119,6 +119,14 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 1_022_727.0, accuracy: 0.000001)
     }
 
+    func testMachineProfileCarriesRAMPowerOnPattern() {
+        XCTAssertEqual(MachineProfile.palC64.memoryPowerOnPattern, .alternating64ByteBlocks)
+        XCTAssertEqual(MemoryPowerOnPattern.alternating64ByteBlocks.byte(at: 0x003F), 0x00)
+        XCTAssertEqual(MemoryPowerOnPattern.alternating64ByteBlocks.byte(at: 0x0040), 0xFF)
+        XCTAssertEqual(MemoryPowerOnPattern.allZero.byte(at: 0x0040), 0x00)
+        XCTAssertEqual(MemoryPowerOnPattern.allOne.byte(at: 0x0040), 0xFF)
+    }
+
     func testDriveROMLoadPreservesSelectedCompatDriveProfile() {
         let c64 = C64(machineProfile: .palC64With1541II)
         c64.trueDriveEmulationMode = .compat1541

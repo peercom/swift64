@@ -5,6 +5,23 @@ public enum C64VideoStandard: String, Equatable {
     case ntsc
 }
 
+public enum MemoryPowerOnPattern: String, Equatable {
+    case alternating64ByteBlocks
+    case allZero
+    case allOne
+
+    public func byte(at address: Int) -> UInt8 {
+        switch self {
+        case .alternating64ByteBlocks:
+            return (address & 0x40) == 0 ? 0x00 : 0xFF
+        case .allZero:
+            return 0x00
+        case .allOne:
+            return 0xFF
+        }
+    }
+}
+
 public struct MachineProfile: Equatable {
     public let name: String
     public let videoStandard: C64VideoStandard
@@ -14,6 +31,7 @@ public struct MachineProfile: Equatable {
     public let sidClockHz: Double
     public let driveModel: Drive1541.DriveModel
     public let driveClockHz: Double
+    public let memoryPowerOnPattern: MemoryPowerOnPattern
 
     public init(
         name: String,
@@ -23,7 +41,8 @@ public struct MachineProfile: Equatable {
         sidModel: SID.Model,
         sidClockHz: Double,
         driveModel: Drive1541.DriveModel,
-        driveClockHz: Double
+        driveClockHz: Double,
+        memoryPowerOnPattern: MemoryPowerOnPattern = .alternating64ByteBlocks
     ) {
         self.name = name
         self.videoStandard = videoStandard
@@ -33,6 +52,7 @@ public struct MachineProfile: Equatable {
         self.sidClockHz = sidClockHz
         self.driveModel = driveModel
         self.driveClockHz = driveClockHz
+        self.memoryPowerOnPattern = memoryPowerOnPattern
     }
 
     public var standardDriveClockRatio: Double {

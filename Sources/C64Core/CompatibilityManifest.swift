@@ -60,6 +60,8 @@ public enum CompatibilityDriveMode: String, Decodable, Equatable {
 
 public enum CompatibilityFailureCategory: String, Decodable, Equatable {
     case cpu
+    case vic
+    case sid
     case drive
     case media
     case protectedMedia
@@ -74,6 +76,45 @@ public enum CompatibilityFailureCategory: String, Decodable, Equatable {
     case cia
     case emulator
     case timeout
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "cpu": self = .cpu
+        case "vic": self = .vic
+        case "sid": self = .sid
+        case "drive": self = .drive
+        case "media": self = .media
+        case "protectedMedia": self = .protectedMedia
+        case "cartridge": self = .cartridge
+        case "app": self = .app
+        case "pc": self = .pc
+        case "ram": self = .ram
+        case "screen": self = .screen
+        case "tape": self = .tape
+        case "video": self = .vic
+        case "audio": self = .sid
+        case "cia": self = .cia
+        case "emulator": self = .emulator
+        case "timeout": self = .timeout
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown compatibility failure category '\(rawValue)'"
+            )
+        }
+    }
+}
+
+public enum CompatibilityRoadmapPhase: String, Decodable, Equatable {
+    case phase2CPUMemoryBus
+    case phase3VICII
+    case phase4DriveMedia
+    case phase5SID
+    case phase6CIAInputTape
+    case phase7CartridgeExpansion
+    case phase8AppDistribution
 }
 
 public struct CompatibilityExpectedFailure: Decodable, Equatable {
@@ -244,6 +285,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let driveMode: CompatibilityDriveMode?
     public let commands: [String]
     public let actions: [CompatibilityAction]
+    public let hasExplicitActions: Bool
     public let maxCycles: Int?
     public let pcStart: Int?
     public let pcEnd: Int?
@@ -273,6 +315,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let colorRAMHash: String?
     public let framebufferHash: String?
     public let screenshotName: String?
+    public let roadmapPhase: CompatibilityRoadmapPhase?
     public let expectedFailure: CompatibilityExpectedFailure?
 
     private enum CodingKeys: String, CodingKey {
@@ -314,6 +357,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case colorRAMHash
         case framebufferHash
         case screenshotName
+        case roadmapPhase
         case expectedFailure
     }
 
@@ -354,6 +398,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         colorRAMHash: String? = nil,
         framebufferHash: String? = nil,
         screenshotName: String? = nil,
+        roadmapPhase: CompatibilityRoadmapPhase? = nil,
         expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
         self.id = id
@@ -364,6 +409,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.driveMode = driveMode
         self.commands = [command]
         self.actions = [.typeText(command)]
+        self.hasExplicitActions = false
         self.maxCycles = maxCycles
         self.pcStart = pcStart
         self.pcEnd = pcEnd
@@ -393,6 +439,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.colorRAMHash = colorRAMHash
         self.framebufferHash = framebufferHash
         self.screenshotName = screenshotName
+        self.roadmapPhase = roadmapPhase
         self.expectedFailure = expectedFailure
     }
 
@@ -434,6 +481,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         colorRAMHash: String? = nil,
         framebufferHash: String? = nil,
         screenshotName: String? = nil,
+        roadmapPhase: CompatibilityRoadmapPhase? = nil,
         expectedFailure: CompatibilityExpectedFailure? = nil
     ) {
         self.id = id
@@ -444,6 +492,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.driveMode = driveMode
         self.commands = commands
         self.actions = actions ?? commands.map { .typeText($0) }
+        self.hasExplicitActions = actions?.isEmpty == false
         self.maxCycles = maxCycles
         self.pcStart = pcStart
         self.pcEnd = pcEnd
@@ -473,6 +522,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.colorRAMHash = colorRAMHash
         self.framebufferHash = framebufferHash
         self.screenshotName = screenshotName
+        self.roadmapPhase = roadmapPhase
         self.expectedFailure = expectedFailure
     }
 
@@ -513,6 +563,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
             )
         }
         actions = decodedActions ?? commands.map { .typeText($0) }
+        hasExplicitActions = decodedActions?.isEmpty == false
         maxCycles = try container.decodeIfPresent(Int.self, forKey: .maxCycles)
         pcStart = try container.decodeIfPresent(Int.self, forKey: .pcStart)
         pcEnd = try container.decodeIfPresent(Int.self, forKey: .pcEnd)
@@ -548,6 +599,7 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         colorRAMHash = try container.decodeIfPresent(String.self, forKey: .colorRAMHash)
         framebufferHash = try container.decodeIfPresent(String.self, forKey: .framebufferHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
+        roadmapPhase = try container.decodeIfPresent(CompatibilityRoadmapPhase.self, forKey: .roadmapPhase)
         expectedFailure = try container.decodeIfPresent(CompatibilityExpectedFailure.self, forKey: .expectedFailure)
     }
 

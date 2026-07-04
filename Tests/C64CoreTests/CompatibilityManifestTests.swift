@@ -2,6 +2,52 @@ import XCTest
 @testable import C64Core
 
 final class CompatibilityManifestTests: XCTestCase {
+    func testFailureCategoryDecodesPreservationSubsystemNamesAndLegacyAliases() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "id": "sid-filter",
+              "file": "sid.prg",
+              "mediaType": "prg",
+              "commands": ["RUN"],
+              "expectedFailure": { "category": "sid", "reason": "SID audio signature" }
+            },
+            {
+              "id": "vic-raster",
+              "file": "raster.prg",
+              "mediaType": "prg",
+              "commands": ["RUN"],
+              "expectedFailure": { "category": "vic", "reason": "VIC raster mismatch" }
+            },
+            {
+              "id": "legacy-audio",
+              "file": "legacy-audio.prg",
+              "mediaType": "prg",
+              "commands": ["RUN"],
+              "expectedFailure": { "category": "audio", "reason": "old manifest" }
+            },
+            {
+              "id": "legacy-video",
+              "file": "legacy-video.prg",
+              "mediaType": "prg",
+              "commands": ["RUN"],
+              "expectedFailure": { "category": "video", "reason": "old manifest" }
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones.map { $0.expectedFailure?.category }, [
+            .sid,
+            .vic,
+            .sid,
+            .vic,
+        ])
+    }
+
     func testManifestDecodesPreservationMilestoneFields() throws {
         let json = """
         {
@@ -11,6 +57,7 @@ final class CompatibilityManifestTests: XCTestCase {
               "name": "Great Giana Sisters title screen",
               "file": "demo.g64",
               "mediaType": "g64",
+              "roadmapPhase": "phase4DriveMedia",
               "machineProfile": "ntscC64",
               "driveMode": "standard1541",
               "commands": ["LOAD\\"*\\",8,1", "RUN"],
@@ -280,10 +327,12 @@ final class CompatibilityManifestTests: XCTestCase {
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
         let milestone = try XCTUnwrap(manifest.milestones.first)
 
+        XCTAssertTrue(milestone.hasExplicitActions)
         XCTAssertEqual(milestone.id, "giana-title-compat1541")
         XCTAssertEqual(milestone.name, "Great Giana Sisters title screen")
         XCTAssertEqual(milestone.file, "demo.g64")
         XCTAssertEqual(milestone.mediaType, .g64)
+        XCTAssertEqual(milestone.roadmapPhase, .phase4DriveMedia)
         XCTAssertEqual(milestone.machineProfile, .ntscC64)
         XCTAssertEqual(milestone.machineProfile?.profile, .ntscC64)
         XCTAssertEqual(milestone.driveMode, .standard1541)
@@ -563,6 +612,7 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(milestone.weakBitRanges, [])
         XCTAssertEqual(milestone.speedZoneRanges, [])
         XCTAssertEqual(milestone.actions, [.typeText("LOAD\"$\",8")])
+        XCTAssertFalse(milestone.hasExplicitActions)
         XCTAssertEqual(milestone.command, "LOAD\"$\",8")
         XCTAssertNil(milestone.pcRange)
         XCTAssertNil(milestone.driveStatus)
@@ -715,6 +765,22 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
     }
 
+    func testManifestRejectsInvalidRoadmapPhase() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "typo.g64",
+              "roadmapPhase": "phase4DriveMeda",
+              "commands": ["LOAD\\"*\\",8,1"]
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
     func testManifestDecodesActionsOnlyMilestone() throws {
         let json = """
         {
@@ -737,6 +803,7 @@ final class CompatibilityManifestTests: XCTestCase {
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
         let milestone = try XCTUnwrap(manifest.milestones.first)
 
+        XCTAssertTrue(milestone.hasExplicitActions)
         XCTAssertEqual(milestone.commands, ["RUN"])
         XCTAssertEqual(milestone.actions, [
             .typeText("RUN"),

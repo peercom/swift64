@@ -14,8 +14,33 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneScreenshotDirEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR"
     private let milestoneScreenshotFailuresEnv = "SWIFT64_LOCAL_MILESTONE_SCREENSHOT_FAILURES"
     private let milestoneSummaryEnv = "SWIFT64_LOCAL_MILESTONE_SUMMARY_JSON"
+    private let milestonePhaseFilterEnv = "SWIFT64_LOCAL_MILESTONE_PHASES"
+    private let milestoneIDFilterEnv = "SWIFT64_LOCAL_MILESTONE_IDS"
+    private let milestoneMediaLimitEnv = "SWIFT64_LOCAL_MILESTONE_MEDIA_LIMIT"
+    private let milestoneShardIndexEnv = "SWIFT64_LOCAL_MILESTONE_SHARD_INDEX"
+    private let milestoneShardCountEnv = "SWIFT64_LOCAL_MILESTONE_SHARD_COUNT"
+    private let milestoneRequirePhaseFilterMatchesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_PHASES"
+    private let milestoneRequireIDFilterMatchesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_IDS_MATCH"
+    private let milestoneRequireManifestEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MANIFEST"
+    private let milestoneRequireRoadmapPhasesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ROADMAP_PHASES"
+    private let milestoneRequireIDsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_IDS"
+    private let milestoneRequireExpectedFailureNotesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_EXPECTED_FAILURE_NOTES"
+    private let milestoneRequireExpectedFailureReasonsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_EXPECTED_FAILURE_REASONS"
+    private let milestoneRequireMaxCyclesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MAX_CYCLES"
+    private let milestoneRequireExplicitActionsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ACTIONS"
+    private let milestoneRequireObservableExpectationsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_OBSERVABLES"
+    private let milestoneRequireFramebufferScreenshotsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_FRAMEBUFFER_SCREENSHOTS"
+    private let milestoneRequireMediaTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MEDIA_TYPES"
+    private let milestoneRequireMachineProfilesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MACHINE_PROFILES"
+    private let milestoneRequireDriveModesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_DRIVE_MODES"
+    private let milestoneRequireSIDModelsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_SID_MODELS"
+    private let milestoneRequireSIDAccuracyModesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_SID_ACCURACY_MODES"
+    private let milestoneRequireObservableTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_OBSERVABLE_TYPES"
+    private let milestoneRequireFailureCategoriesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_FAILURE_CATEGORIES"
+    private let milestoneRequireActionTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ACTION_TYPES"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
     private let milestoneFailOnUnexpectedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED"
+    private let milestoneFailPhasesEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_PHASES"
     private let milestoneRequireAllMediaEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ALL_MEDIA"
     private let milestoneRunIDEnv = "SWIFT64_LOCAL_MILESTONE_RUN_ID"
 
@@ -193,6 +218,628 @@ final class LocalDiskMatrixTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testMilestoneClassifierUsesPreservationSubsystemCategories() {
+        XCTAssertEqual(
+            MilestoneResultCategory.classify(passed: false, reason: "SID audio RMS mismatch"),
+            .sid
+        )
+        XCTAssertEqual(
+            MilestoneResultCategory.classify(passed: false, reason: "sid.voice[0].frequency $0000 != $1234"),
+            .sid
+        )
+        XCTAssertEqual(
+            MilestoneResultCategory.classify(passed: false, reason: "VIC $D011 $00 != $3B"),
+            .vic
+        )
+        XCTAssertEqual(
+            MilestoneResultCategory.classify(passed: false, reason: "raster IRQ line drift"),
+            .vic
+        )
+    }
+
+    func testMilestoneRoadmapPhaseRollupMapsCategories() {
+        XCTAssertEqual(MilestoneRoadmapPhase.gateablePhases, [
+            MilestoneRoadmapPhase.phase2CPUMemoryBus,
+            MilestoneRoadmapPhase.phase3VICII,
+            MilestoneRoadmapPhase.phase4DriveMedia,
+            MilestoneRoadmapPhase.phase5SID,
+            MilestoneRoadmapPhase.phase6CIAInputTape,
+            MilestoneRoadmapPhase.phase7CartridgeExpansion,
+            MilestoneRoadmapPhase.phase8AppDistribution,
+        ])
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.pass.rawValue),
+            MilestoneRoadmapPhase.passed
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.pc.rawValue),
+            MilestoneRoadmapPhase.phase2CPUMemoryBus
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.vic.rawValue),
+            MilestoneRoadmapPhase.phase3VICII
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.video.rawValue),
+            MilestoneRoadmapPhase.phase3VICII
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.protectedMedia.rawValue),
+            MilestoneRoadmapPhase.phase4DriveMedia
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.sid.rawValue),
+            MilestoneRoadmapPhase.phase5SID
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.audio.rawValue),
+            MilestoneRoadmapPhase.phase5SID
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.tape.rawValue),
+            MilestoneRoadmapPhase.phase6CIAInputTape
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.cartridge.rawValue),
+            MilestoneRoadmapPhase.phase7CartridgeExpansion
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.app.rawValue),
+            MilestoneRoadmapPhase.phase8AppDistribution
+        )
+        XCTAssertEqual(
+            MilestoneRoadmapPhase.phaseName(forCategory: MilestoneResultCategory.timeout.rawValue),
+            MilestoneRoadmapPhase.unclassified
+        )
+    }
+
+    func testMilestoneFailurePhaseSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestonePhaseSelection(
+            " phase4DriveMedia, phase5SID, phase4DriveMedia, phase5SIDD, , phase3VICII, phase5SIDD "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            MilestoneRoadmapPhase.phase4DriveMedia,
+            MilestoneRoadmapPhase.phase5SID,
+            MilestoneRoadmapPhase.phase3VICII,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "phase5SIDD",
+        ])
+    }
+
+    func testMilestoneIDSelectionTrimsAndDeduplicatesNames() {
+        let selection = Self.parseMilestoneIDSelection(
+            " giana-title, sid-filter, giana-title, , vic-proof, sid-filter "
+        )
+
+        XCTAssertEqual(selection, [
+            "giana-title",
+            "sid-filter",
+            "vic-proof",
+        ])
+    }
+
+    func testMilestoneShardSelectionParsesZeroBasedShard() {
+        let selection = Self.parseMilestoneShardSelection(indexValue: " 1 ", countValue: " 3 ")
+
+        XCTAssertEqual(selection.index, 1)
+        XCTAssertEqual(selection.count, 3)
+        XCTAssertNil(selection.invalidReason)
+        XCTAssertTrue(selection.isActive)
+
+        let disabled = Self.parseMilestoneShardSelection(indexValue: nil, countValue: nil)
+        XCTAssertNil(disabled.index)
+        XCTAssertNil(disabled.count)
+        XCTAssertFalse(disabled.isActive)
+
+        let invalid = Self.parseMilestoneShardSelection(indexValue: "3", countValue: "3")
+        XCTAssertEqual(invalid.index, 3)
+        XCTAssertEqual(invalid.count, 3)
+        XCTAssertEqual(invalid.invalidReason, "invalidShard:index=3,count=3")
+    }
+
+    func testMilestoneRequiredMediaSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneMediaTypeSelection(
+            " prg, g64, d64, prg, tap, wav, , crt, wav "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            CompatibilityMediaType.prg.rawValue,
+            CompatibilityMediaType.g64.rawValue,
+            CompatibilityMediaType.d64.rawValue,
+            CompatibilityMediaType.tap.rawValue,
+            CompatibilityMediaType.crt.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "wav",
+        ])
+    }
+
+    func testMilestoneRequiredMachineProfileSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneMachineProfileSelection(
+            " palC64, ntscC64, palC64C, palC64, c128, , ntscC64C, c128 "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            CompatibilityMachineProfile.palC64.rawValue,
+            CompatibilityMachineProfile.ntscC64.rawValue,
+            CompatibilityMachineProfile.palC64C.rawValue,
+            CompatibilityMachineProfile.ntscC64C.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "c128",
+        ])
+    }
+
+    func testMilestoneRequiredDriveModeSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneDriveModeSelection(
+            " compat1541, standard1541, fastLoad, compat1541, turbo, , standard1541, turbo "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            CompatibilityDriveMode.compat1541.rawValue,
+            CompatibilityDriveMode.standard1541.rawValue,
+            CompatibilityDriveMode.fastLoad.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "turbo",
+        ])
+    }
+
+    func testMilestoneRequiredSIDModelSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneSIDModelSelection(
+            " mos6581, mos8580, mos6581, mos6582, , mos8580, mos6582 "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            SID.Model.mos6581.rawValue,
+            SID.Model.mos8580.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "mos6582",
+        ])
+    }
+
+    func testMilestoneRequiredSIDAccuracyModeSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneSIDAccuracyModeSelection(
+            " fast, compatibility, fast, resid, , compatibility, resid "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            SID.AccuracyMode.fast.rawValue,
+            SID.AccuracyMode.compatibility.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "resid",
+        ])
+    }
+
+    func testMilestoneRequiredObservableTypeSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneObservableTypeSelection(
+            " sid, vic, drive, sid, raster, , framebuffer, raster "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            MilestoneObservableType.sid,
+            MilestoneObservableType.vic,
+            MilestoneObservableType.drive,
+            MilestoneObservableType.framebuffer,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "raster",
+        ])
+    }
+
+    func testMilestoneRequiredFailureCategorySelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneFailureCategorySelection(
+            " sid, vic, protectedMedia, sid, video, , cartridge, video "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            CompatibilityFailureCategory.sid.rawValue,
+            CompatibilityFailureCategory.vic.rawValue,
+            CompatibilityFailureCategory.protectedMedia.rawValue,
+            CompatibilityFailureCategory.cartridge.rawValue,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "video",
+        ])
+    }
+
+    func testMilestoneRequiredActionTypeSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneActionTypeSelection(
+            " typeText, waitCycles, joystickDown, typeText, mouseDown, , startTape, mouseDown "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            MilestoneActionType.typeText,
+            MilestoneActionType.waitCycles,
+            MilestoneActionType.joystickDown,
+            MilestoneActionType.startTape,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "mouseDown",
+        ])
+    }
+
+    func testManifestMilestonePhaseFilterKeepsOnlyExplicitSelectedPhases() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "drive",
+              "file": "drive.g64",
+              "media": "g64",
+              "roadmapPhase": "phase4DriveMedia",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "id": "sid",
+              "file": "sid.prg",
+              "media": "prg",
+              "roadmapPhase": "phase5SID",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "id": "legacy",
+              "file": "legacy.d64",
+              "media": "d64",
+              "commands": ["LOAD\\"$\\",8"]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(
+            Self.phaseFilteredManifestEntries(
+                manifest.milestones,
+                selectedPhaseNames: [MilestoneRoadmapPhase.phase5SID]
+            ).map(\.id),
+            ["sid"]
+        )
+        XCTAssertEqual(
+            Self.phaseFilteredManifestEntries(
+                manifest.milestones,
+                selectedPhaseNames: []
+            ).map(\.id),
+            ["drive", "sid", "legacy"]
+        )
+        let selected = Self.phaseFilteredManifestEntries(
+            manifest.milestones,
+            selectedPhaseNames: [
+                MilestoneRoadmapPhase.phase5SID,
+                MilestoneRoadmapPhase.phase6CIAInputTape,
+            ]
+        )
+        let counts = Self.phaseCounts(
+            for: selected,
+            selectedPhaseNames: [
+                MilestoneRoadmapPhase.phase5SID,
+                MilestoneRoadmapPhase.phase6CIAInputTape,
+            ]
+        )
+        XCTAssertEqual(counts[MilestoneRoadmapPhase.phase5SID], 1)
+        XCTAssertEqual(counts[MilestoneRoadmapPhase.phase6CIAInputTape], 0)
+        XCTAssertEqual(Self.phaseCounts(for: manifest.milestones)[MilestoneRoadmapPhase.phase4DriveMedia], 1)
+        XCTAssertEqual(Self.phaseCounts(for: manifest.milestones)[MilestoneRoadmapPhase.phase5SID], 1)
+        XCTAssertEqual(Self.untaggedPhaseCount(in: manifest.milestones), 1)
+        XCTAssertEqual(Self.unnamedMilestoneCount(in: manifest.milestones), 0)
+    }
+
+    func testManifestMilestoneIDFilterKeepsOnlyExplicitSelectedIDs() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "drive",
+              "file": "drive.g64",
+              "media": "g64",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "id": "sid",
+              "file": "sid.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "id": "   ",
+              "file": "blank.d64",
+              "media": "d64",
+              "commands": ["LOAD\\"$\\",8"]
+            },
+            {
+              "file": "missing-id.tap",
+              "media": "tap",
+              "commands": ["LOAD"]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(
+            Self.idFilteredManifestEntries(
+                manifest.milestones,
+                selectedIDs: ["sid", "missing", "drive"]
+            ).map(\.id),
+            ["drive", "sid"]
+        )
+        XCTAssertEqual(
+            Self.idFilteredManifestEntries(
+                manifest.milestones,
+                selectedIDs: []
+            ).map(\.file),
+            ["drive.g64", "sid.prg", "blank.d64", "missing-id.tap"]
+        )
+        XCTAssertEqual(
+            Self.shardedManifestEntries(
+                manifest.milestones,
+                shardSelection: MilestoneShardSelection(index: 1, count: 2)
+            ).map(\.file),
+            ["sid.prg", "missing-id.tap"]
+        )
+        XCTAssertEqual(
+            Self.shardedManifestEntries(
+                manifest.milestones,
+                shardSelection: MilestoneShardSelection(index: 0, count: 1)
+            ).map(\.file),
+            ["drive.g64", "sid.prg", "blank.d64", "missing-id.tap"]
+        )
+    }
+
+    func testManifestMilestoneIDCoverageCountsMissingAndBlankIDs() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "named",
+              "file": "named.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "id": "   ",
+              "file": "blank-id.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"]
+            },
+            {
+              "file": "missing-id.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.unnamedMilestoneCount(in: manifest.milestones), 2)
+    }
+
+    func testManifestExpectedFailureCoverageCountsMissingAndBlankNotes() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "explained",
+              "file": "explained.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "sid",
+                "note": "Needs measured filter curve"
+              }
+            },
+            {
+              "id": "blank",
+              "file": "blank.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "vic",
+                "note": "   "
+              }
+            },
+            {
+              "id": "missing",
+              "file": "missing.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "drive"
+              }
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.expectedFailureCount(in: manifest.milestones), 3)
+        XCTAssertEqual(Self.expectedFailuresWithoutNotesCount(in: manifest.milestones), 2)
+    }
+
+    func testManifestExpectedFailureCoverageCountsMissingAndBlankReasonMarkers() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "specific",
+              "file": "specific.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "drive",
+                "reasonContains": ["GCR reads"]
+              }
+            },
+            {
+              "id": "blank",
+              "file": "blank.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "vic",
+                "reasonContains": ["   "]
+              }
+            },
+            {
+              "id": "missing",
+              "file": "missing.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "expectedFailure": {
+                "category": "sid"
+              }
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.expectedFailureCount(in: manifest.milestones), 3)
+        XCTAssertEqual(Self.expectedFailuresWithoutReasonMarkersCount(in: manifest.milestones), 2)
+    }
+
+    func testManifestMilestoneMaxCycleCoverageCountsMissingBudgets() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "bounded",
+              "file": "bounded.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "maxCycles": 1200000
+            },
+            {
+              "id": "implicit",
+              "file": "implicit.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.milestonesWithoutMaxCyclesCount(in: manifest.milestones), 1)
+    }
+
+    func testManifestExplicitActionCoverageCountsLegacyCommandMilestones() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "scripted",
+              "file": "scripted.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "actions": [
+                { "type": "text", "text": "LOAD\\"*\\",8,1" },
+                { "type": "wait", "cycles": 1200000 }
+              ]
+            },
+            {
+              "id": "legacy-command",
+              "file": "legacy-command.prg",
+              "media": "prg",
+              "command": "LOAD\\"*\\",8,1"
+            },
+            {
+              "id": "legacy-commands",
+              "file": "legacy-commands.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1", "RUN"]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.milestonesWithoutExplicitActionsCount(in: manifest.milestones), 2)
+    }
+
+    func testManifestObservableExpectationCoverageCountsScriptOnlyMilestones() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "pc-proof",
+              "file": "pc-proof.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "pcRanges": [
+                { "start": 2049, "end": 2303 }
+              ]
+            },
+            {
+              "id": "screen-proof",
+              "file": "screen-proof.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "screenTextContains": ["READY."]
+            },
+            {
+              "id": "script-only",
+              "file": "script-only.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "maxCycles": 1200000,
+              "screenshotName": "not-proof"
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.milestonesWithoutObservableExpectationsCount(in: manifest.milestones), 1)
+    }
+
+    func testManifestFramebufferProofCoverageCountsMissingAndBlankScreenshotNames() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "named-framebuffer",
+              "file": "named-framebuffer.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "0011223344556677",
+              "screenshotName": "title-proof"
+            },
+            {
+              "id": "missing-screenshot",
+              "file": "missing-screenshot.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "1122334455667788"
+            },
+            {
+              "id": "blank-screenshot",
+              "file": "blank-screenshot.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "2233445566778899",
+              "screenshotName": "   "
+            },
+            {
+              "id": "screen-ram-only",
+              "file": "screen-ram-only.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "screenRAMHash": "33445566778899AA"
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.framebufferHashMilestonesWithoutScreenshotNamesCount(in: manifest.milestones), 2)
+    }
+
     func testManifestWeakBitRangesApplyAfterDiskMount() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -335,24 +982,86 @@ final class LocalDiskMatrixTests: XCTestCase {
     func testLocalDiskImagesNamedMilestonesWhenEnabled() throws {
         try requireEnvironment(milestoneEnv)
 
-        let milestoneLoad = try localMilestoneLoadResult()
+        let resultLogURL = milestoneResultLogURL()
+        let manifestHash = activeMilestoneManifestHash()
+        let screenshotDirectoryURL = milestoneScreenshotDirectoryURL()
+        let screenshotFailuresEnabled = shouldWriteFailedMilestoneScreenshots
+        let summaryURL = milestoneSummaryURL()
+        let runID = milestoneRunID()
+        let requiredMediaTypeSelection = milestoneRequiredMediaTypeSelection
+        let requiredMachineProfileSelection = milestoneRequiredMachineProfileSelection
+        let requiredDriveModeSelection = milestoneRequiredDriveModeSelection
+        let requiredSIDModelSelection = milestoneRequiredSIDModelSelection
+        let requiredSIDAccuracyModeSelection = milestoneRequiredSIDAccuracyModeSelection
+        let requiredObservableTypeSelection = milestoneRequiredObservableTypeSelection
+        let requiredFailureCategorySelection = milestoneRequiredFailureCategorySelection
+        let requiredActionTypeSelection = milestoneRequiredActionTypeSelection
+
+        let milestoneLoad: MilestoneLoadResult
+        do {
+            milestoneLoad = try localMilestoneLoadResult()
+        } catch let error as ManifestValidationError {
+            var validationSummary = MilestoneRunSummary()
+            validationSummary.configureRun(
+                runID: runID,
+                manifestURL: activeMilestoneManifestURL(),
+                manifestHash: manifestHash,
+                resultLogURL: resultLogURL,
+                screenshotDirectoryURL: screenshotDirectoryURL,
+                resumeEnabled: shouldResumeMilestoneResults,
+                strictManifestResumeEnabled: shouldResumeOnlyMatchingManifest,
+                screenshotFailuresEnabled: screenshotFailuresEnabled,
+                milestoneLimit: localMilestoneLimit,
+                manifestValidationErrors: error.errors,
+                manifestMilestoneCount: nil,
+                selectedMilestoneCount: 0,
+                missingMediaFiles: [],
+                requireAllManifestMedia: shouldRequireAllMilestoneMedia,
+                requiredManifestMediaTypes: requiredMediaTypeSelection.valid,
+                invalidRequiredManifestMediaTypes: requiredMediaTypeSelection.invalid,
+                requiredManifestMachineProfiles: requiredMachineProfileSelection.valid,
+                invalidRequiredManifestMachineProfiles: requiredMachineProfileSelection.invalid,
+                requiredManifestDriveModes: requiredDriveModeSelection.valid,
+                invalidRequiredManifestDriveModes: requiredDriveModeSelection.invalid,
+                requiredManifestSIDModels: requiredSIDModelSelection.valid,
+                invalidRequiredManifestSIDModels: requiredSIDModelSelection.invalid,
+                requiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.valid,
+                invalidRequiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.invalid,
+                requiredManifestObservableTypes: requiredObservableTypeSelection.valid,
+                invalidRequiredManifestObservableTypes: requiredObservableTypeSelection.invalid,
+                requiredManifestFailureCategories: requiredFailureCategorySelection.valid,
+                invalidRequiredManifestFailureCategories: requiredFailureCategorySelection.invalid,
+                requiredManifestActionTypes: requiredActionTypeSelection.valid,
+                invalidRequiredManifestActionTypes: requiredActionTypeSelection.invalid,
+                requireManifest: shouldRequireMilestoneManifest,
+                requireTaggedManifestPhases: shouldRequireRoadmapPhasesForManifestMilestones,
+                requireManifestMilestoneIDs: shouldRequireIDsForManifestMilestones,
+                requireExpectedFailureNotes: shouldRequireExpectedFailureNotesForManifestMilestones,
+                requireExpectedFailureReasonMarkers: shouldRequireExpectedFailureReasonsForManifestMilestones,
+                requireExplicitMaxCycles: shouldRequireMaxCyclesForManifestMilestones,
+                requireExplicitActions: shouldRequireExplicitActionsForManifestMilestones,
+                requireObservableExpectations: shouldRequireObservableExpectationsForManifestMilestones,
+                requireFramebufferScreenshots: shouldRequireFramebufferScreenshotsForManifestMilestones,
+                failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
+                failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures,
+                failPhaseNames: milestoneFailurePhaseSelection.valid,
+                invalidFailPhaseNames: milestoneFailurePhaseSelection.invalid
+            )
+            validationSummary.refreshDerivedFields()
+            try writeMilestoneRunSummary(validationSummary, to: summaryURL)
+            throw error
+        }
         let milestones = milestoneLoad.milestones
         guard !milestones.isEmpty else {
             throw XCTSkip("No local milestone disks found under C64/DISKS")
         }
 
-        let resultLogURL = milestoneResultLogURL()
-        let manifestHash = activeMilestoneManifestHash()
         let passedMilestones = shouldResumeMilestoneResults
             ? try passedMilestoneKeys(
                 from: resultLogURL,
                 matchingManifestHash: shouldResumeOnlyMatchingManifest ? manifestHash : nil
             )
             : []
-        let screenshotDirectoryURL = milestoneScreenshotDirectoryURL()
-        let screenshotFailuresEnabled = shouldWriteFailedMilestoneScreenshots
-        let summaryURL = milestoneSummaryURL()
-        let runID = milestoneRunID()
         var summaries: [String] = []
         var runSummary = MilestoneRunSummary()
         runSummary.configureRun(
@@ -365,12 +1074,80 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: shouldResumeOnlyMatchingManifest,
             screenshotFailuresEnabled: screenshotFailuresEnabled,
             milestoneLimit: localMilestoneLimit,
+            milestoneShardIndex: milestoneLoad.milestoneShardIndex,
+            milestoneShardCount: milestoneLoad.milestoneShardCount,
+            preShardMilestoneCount: milestoneLoad.preShardMilestoneCount,
+            postShardMilestoneCount: milestoneLoad.postShardMilestoneCount,
+            invalidShardConfiguration: milestoneLoad.invalidShardConfiguration,
             manifestMilestoneCount: milestoneLoad.manifestMilestoneCount,
+            manifestPhaseCounts: milestoneLoad.manifestPhaseCounts,
+            manifestMediaCounts: milestoneLoad.manifestMediaCounts,
+            manifestMachineProfileCounts: milestoneLoad.manifestMachineProfileCounts,
+            manifestDriveModeCounts: milestoneLoad.manifestDriveModeCounts,
+            manifestSIDModelCounts: milestoneLoad.manifestSIDModelCounts,
+            manifestSIDAccuracyModeCounts: milestoneLoad.manifestSIDAccuracyModeCounts,
+            manifestObservableTypeCounts: milestoneLoad.manifestObservableTypeCounts,
+            manifestExpectedFailureCategoryCounts: milestoneLoad.manifestExpectedFailureCategoryCounts,
+            manifestActionTypeCounts: milestoneLoad.manifestActionTypeCounts,
+            manifestUntaggedMilestoneCount: milestoneLoad.manifestUntaggedMilestoneCount,
+            manifestUnnamedMilestoneCount: milestoneLoad.manifestUnnamedMilestoneCount,
+            manifestExpectedFailureCount: milestoneLoad.manifestExpectedFailureCount,
+            manifestExpectedFailuresWithoutNotesCount: milestoneLoad.manifestExpectedFailuresWithoutNotesCount,
+            manifestExpectedFailuresWithoutReasonMarkersCount: milestoneLoad.manifestExpectedFailuresWithoutReasonMarkersCount,
+            manifestMilestonesWithoutMaxCyclesCount: milestoneLoad.manifestMilestonesWithoutMaxCyclesCount,
+            manifestMilestonesWithoutExplicitActionsCount: milestoneLoad.manifestMilestonesWithoutExplicitActionsCount,
+            manifestMilestonesWithoutObservableExpectationsCount: milestoneLoad.manifestMilestonesWithoutObservableExpectationsCount,
+            manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: milestoneLoad.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
+            phaseFilteredMilestoneCount: milestoneLoad.phaseFilteredMilestoneCount,
             selectedMilestoneCount: milestones.count,
+            selectedMilestoneKeys: milestones.map(\.resultKey),
+            selectedMediaCounts: milestoneLoad.selectedMediaCounts,
+            selectedMachineProfileCounts: milestoneLoad.selectedMachineProfileCounts,
+            selectedDriveModeCounts: milestoneLoad.selectedDriveModeCounts,
+            selectedSIDModelCounts: milestoneLoad.selectedSIDModelCounts,
+            selectedSIDAccuracyModeCounts: milestoneLoad.selectedSIDAccuracyModeCounts,
+            selectedObservableTypeCounts: milestoneLoad.selectedObservableTypeCounts,
+            selectedExpectedFailureCategoryCounts: milestoneLoad.selectedExpectedFailureCategoryCounts,
+            selectedActionTypeCounts: milestoneLoad.selectedActionTypeCounts,
             missingMediaFiles: milestoneLoad.missingMediaFiles,
             requireAllManifestMedia: shouldRequireAllMilestoneMedia,
+            requiredManifestMediaTypes: requiredMediaTypeSelection.valid,
+            invalidRequiredManifestMediaTypes: requiredMediaTypeSelection.invalid,
+            requiredManifestMachineProfiles: requiredMachineProfileSelection.valid,
+            invalidRequiredManifestMachineProfiles: requiredMachineProfileSelection.invalid,
+            requiredManifestDriveModes: requiredDriveModeSelection.valid,
+            invalidRequiredManifestDriveModes: requiredDriveModeSelection.invalid,
+            requiredManifestSIDModels: requiredSIDModelSelection.valid,
+            invalidRequiredManifestSIDModels: requiredSIDModelSelection.invalid,
+            requiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.valid,
+            invalidRequiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.invalid,
+            requiredManifestObservableTypes: requiredObservableTypeSelection.valid,
+            invalidRequiredManifestObservableTypes: requiredObservableTypeSelection.invalid,
+            requiredManifestFailureCategories: requiredFailureCategorySelection.valid,
+            invalidRequiredManifestFailureCategories: requiredFailureCategorySelection.invalid,
+            requiredManifestActionTypes: requiredActionTypeSelection.valid,
+            invalidRequiredManifestActionTypes: requiredActionTypeSelection.invalid,
+            selectedPhaseNames: milestoneLoad.selectedPhaseNames,
+            invalidSelectedPhaseNames: milestoneLoad.invalidSelectedPhaseNames,
+            selectedPhaseCounts: milestoneLoad.selectedPhaseCounts,
+            missingSelectedPhaseNames: milestoneLoad.missingSelectedPhaseNames,
+            selectedMilestoneIDs: milestoneLoad.selectedMilestoneIDs,
+            missingSelectedMilestoneIDs: milestoneLoad.missingSelectedMilestoneIDs,
+            requireSelectedPhases: shouldRequireSelectedMilestonePhases,
+            requireSelectedMilestoneIDs: shouldRequireSelectedMilestoneIDs,
+            requireManifest: shouldRequireMilestoneManifest,
+            requireTaggedManifestPhases: shouldRequireRoadmapPhasesForManifestMilestones,
+            requireManifestMilestoneIDs: shouldRequireIDsForManifestMilestones,
+            requireExpectedFailureNotes: shouldRequireExpectedFailureNotesForManifestMilestones,
+            requireExpectedFailureReasonMarkers: shouldRequireExpectedFailureReasonsForManifestMilestones,
+            requireExplicitMaxCycles: shouldRequireMaxCyclesForManifestMilestones,
+            requireExplicitActions: shouldRequireExplicitActionsForManifestMilestones,
+            requireObservableExpectations: shouldRequireObservableExpectationsForManifestMilestones,
+            requireFramebufferScreenshots: shouldRequireFramebufferScreenshotsForManifestMilestones,
             failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
-            failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures
+            failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures,
+            failPhaseNames: milestoneFailurePhaseSelection.valid,
+            invalidFailPhaseNames: milestoneFailurePhaseSelection.invalid
         )
         for milestone in milestones {
             if passedMilestones.contains(milestone.resultKey) {
@@ -439,6 +1216,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         if shouldFailOnUnexpectedMilestoneFailures {
             assertNoUnexpectedMilestoneFailures(runSummary)
         }
+        XCTAssertTrue(runSummary.phaseAcceptanceFailures.isEmpty, runSummary.phaseAcceptanceFailureSummary)
         print("Local named milestone matrix:\n" + summaries.joined(separator: "\n") + "\n" + runSummary.consoleSummary)
     }
 
@@ -1112,6 +1890,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
         milestone.id = "demo-loader"
         milestone.name = "Demo Loader"
+        milestone.roadmapPhase = MilestoneRoadmapPhase.phase5SID
         milestone.sidAudioSignature = CompatibilitySIDAudioSignature(sampleCount: 3)
         milestone.lowLevelTracks = [
             CompatibilityLowLevelTrackExpectation(halfTrack: 34)
@@ -1199,6 +1978,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""actionSummary":["LOAD\"*\",8,1","RUN"]"#))
         XCTAssertTrue(log.contains(#""maxCycles":1"#))
         XCTAssertTrue(log.contains(#""category":"#))
+        XCTAssertTrue(log.contains(#""roadmapPhase":"#))
         XCTAssertTrue(log.contains(#""finalPC":"#))
         XCTAssertTrue(log.contains(#""finalSIDAccuracyMode":"compatibility""#))
         XCTAssertTrue(log.contains(#""finalSIDModel":"mos6581""#))
@@ -1219,6 +1999,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         XCTAssertEqual(records.last?.screenshotPath, "/tmp/swift64-screens/demo.ppm")
         XCTAssertEqual(records.last?.formatVersion, MilestoneResultRecord.currentFormatVersion)
+        XCTAssertEqual(records.last?.roadmapPhase, MilestoneRoadmapPhase.phase5SID)
         XCTAssertNil(records.last?.skipped)
         XCTAssertEqual(records.last?.runID, runID)
         XCTAssertEqual(records.last?.manifestHash, currentManifestHash)
@@ -1419,6 +2200,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.expectedFailureReasonContains)
         XCTAssertNil(legacyRecord.expectedFailureMatched)
         XCTAssertNil(legacyRecord.expectedFailureMismatches)
+        XCTAssertNil(legacyRecord.roadmapPhase)
         XCTAssertNil(legacyRecord.mediaType)
         XCTAssertNil(legacyRecord.milestoneID)
         XCTAssertNil(legacyRecord.milestoneName)
@@ -1503,6 +2285,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(skippedRecord.skipped, true)
         XCTAssertEqual(skippedRecord.passed, false)
         XCTAssertEqual(skippedRecord.category, "skipped")
+        XCTAssertEqual(skippedRecord.roadmapPhase, MilestoneRoadmapPhase.phase5SID)
         XCTAssertEqual(skippedRecord.runID, runID)
         XCTAssertEqual(skippedRecord.manifestHash, currentManifestHash)
         XCTAssertNil(skippedRecord.expectedFailureMatched)
@@ -1546,14 +2329,178 @@ final class LocalDiskMatrixTests: XCTestCase {
             strictManifestResumeEnabled: true,
             screenshotFailuresEnabled: true,
             milestoneLimit: 5,
+            milestoneShardIndex: 1,
+            milestoneShardCount: 3,
+            preShardMilestoneCount: 9,
+            postShardMilestoneCount: 4,
+            manifestValidationErrors: [],
             manifestMilestoneCount: 7,
+            manifestPhaseCounts: [
+                MilestoneRoadmapPhase.phase4DriveMedia: 4,
+                MilestoneRoadmapPhase.phase5SID: 2,
+            ],
+            manifestMediaCounts: [
+                CompatibilityMediaType.g64.rawValue: 5,
+                CompatibilityMediaType.prg.rawValue: 2,
+            ],
+            manifestMachineProfileCounts: [
+                CompatibilityMachineProfile.palC64.rawValue: 5,
+                CompatibilityMachineProfile.ntscC64.rawValue: 2,
+            ],
+            manifestDriveModeCounts: [
+                CompatibilityDriveMode.compat1541.rawValue: 5,
+                CompatibilityDriveMode.fastLoad.rawValue: 2,
+            ],
+            manifestSIDModelCounts: [
+                SID.Model.mos6581.rawValue: 4,
+            ],
+            manifestSIDAccuracyModeCounts: [
+                SID.AccuracyMode.fast.rawValue: 4,
+            ],
+            manifestObservableTypeCounts: [
+                MilestoneObservableType.drive: 5,
+                MilestoneObservableType.sid: 2,
+                MilestoneObservableType.vic: 1,
+            ],
+            manifestExpectedFailureCategoryCounts: [
+                CompatibilityFailureCategory.drive.rawValue: 2,
+                CompatibilityFailureCategory.sid.rawValue: 1,
+            ],
+            manifestActionTypeCounts: [
+                MilestoneActionType.typeText: 7,
+                MilestoneActionType.waitCycles: 2,
+                MilestoneActionType.joystickDown: 1,
+            ],
+            manifestUntaggedMilestoneCount: 1,
+            manifestUnnamedMilestoneCount: 2,
+            manifestExpectedFailureCount: 3,
+            manifestExpectedFailuresWithoutNotesCount: 2,
+            manifestExpectedFailuresWithoutReasonMarkersCount: 1,
+            manifestMilestonesWithoutMaxCyclesCount: 2,
+            manifestMilestonesWithoutExplicitActionsCount: 3,
+            manifestMilestonesWithoutObservableExpectationsCount: 3,
+            manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 2,
+            phaseFilteredMilestoneCount: 4,
             selectedMilestoneCount: 3,
+            selectedMilestoneKeys: [milestone.resultKey],
+            selectedMediaCounts: [
+                CompatibilityMediaType.g64.rawValue: 3,
+            ],
+            selectedMachineProfileCounts: [
+                CompatibilityMachineProfile.palC64.rawValue: 3,
+            ],
+            selectedDriveModeCounts: [
+                CompatibilityDriveMode.compat1541.rawValue: 3,
+            ],
+            selectedSIDModelCounts: [
+                SID.Model.mos6581.rawValue: 3,
+            ],
+            selectedSIDAccuracyModeCounts: [
+                SID.AccuracyMode.fast.rawValue: 3,
+            ],
+            selectedObservableTypeCounts: [
+                MilestoneObservableType.drive: 3,
+                MilestoneObservableType.sid: 1,
+            ],
+            selectedExpectedFailureCategoryCounts: [
+                CompatibilityFailureCategory.drive.rawValue: 1,
+            ],
+            selectedActionTypeCounts: [
+                MilestoneActionType.typeText: 3,
+                MilestoneActionType.waitCycles: 1,
+            ],
             missingMediaFiles: ["missing.g64"],
             requireAllManifestMedia: true,
+            requiredManifestMediaTypes: [
+                CompatibilityMediaType.prg.rawValue,
+                CompatibilityMediaType.g64.rawValue,
+                CompatibilityMediaType.tap.rawValue,
+            ],
+            invalidRequiredManifestMediaTypes: ["wav"],
+            requiredManifestMachineProfiles: [
+                CompatibilityMachineProfile.palC64.rawValue,
+                CompatibilityMachineProfile.ntscC64.rawValue,
+                CompatibilityMachineProfile.ntscC64C.rawValue,
+            ],
+            invalidRequiredManifestMachineProfiles: ["c128"],
+            requiredManifestDriveModes: [
+                CompatibilityDriveMode.compat1541.rawValue,
+                CompatibilityDriveMode.fastLoad.rawValue,
+                CompatibilityDriveMode.standard1541.rawValue,
+            ],
+            invalidRequiredManifestDriveModes: ["turbo"],
+            requiredManifestSIDModels: [
+                SID.Model.mos6581.rawValue,
+                SID.Model.mos8580.rawValue,
+            ],
+            invalidRequiredManifestSIDModels: ["mos6582"],
+            requiredManifestSIDAccuracyModes: [
+                SID.AccuracyMode.fast.rawValue,
+                SID.AccuracyMode.compatibility.rawValue,
+            ],
+            invalidRequiredManifestSIDAccuracyModes: ["resid"],
+            requiredManifestObservableTypes: [
+                MilestoneObservableType.drive,
+                MilestoneObservableType.sid,
+                MilestoneObservableType.framebuffer,
+            ],
+            invalidRequiredManifestObservableTypes: ["raster"],
+            requiredManifestFailureCategories: [
+                CompatibilityFailureCategory.drive.rawValue,
+                CompatibilityFailureCategory.sid.rawValue,
+                CompatibilityFailureCategory.vic.rawValue,
+            ],
+            invalidRequiredManifestFailureCategories: ["video"],
+            requiredManifestActionTypes: [
+                MilestoneActionType.typeText,
+                MilestoneActionType.waitCycles,
+                MilestoneActionType.startTape,
+            ],
+            invalidRequiredManifestActionTypes: ["mouseDown"],
+            selectedPhaseNames: [
+                MilestoneRoadmapPhase.phase4DriveMedia,
+                MilestoneRoadmapPhase.phase5SID,
+            ],
+            invalidSelectedPhaseNames: ["phase5SIDD"],
+            selectedPhaseCounts: [
+                MilestoneRoadmapPhase.phase4DriveMedia: 4,
+                MilestoneRoadmapPhase.phase5SID: 0,
+            ],
+            missingSelectedPhaseNames: [
+                MilestoneRoadmapPhase.phase5SID,
+            ],
+            selectedMilestoneIDs: [
+                "giana-title",
+                "sid-filter",
+                "missing-id",
+            ],
+            missingSelectedMilestoneIDs: [
+                "missing-id",
+            ],
+            requireSelectedPhases: true,
+            requireSelectedMilestoneIDs: true,
+            requireManifest: true,
+            requireTaggedManifestPhases: true,
+            requireManifestMilestoneIDs: true,
+            requireExpectedFailureNotes: true,
+            requireExpectedFailureReasonMarkers: true,
+            requireExplicitMaxCycles: true,
+            requireExplicitActions: true,
+            requireObservableExpectations: true,
+            requireFramebufferScreenshots: true,
             failOnUnclassified: true,
-            failOnUnexpected: true
+            failOnUnexpected: true,
+            failPhaseNames: [
+                MilestoneRoadmapPhase.phase2CPUMemoryBus,
+                MilestoneRoadmapPhase.phase4DriveMedia
+            ],
+            invalidFailPhaseNames: ["phase4DriveMeda"]
         )
-        summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(for: milestone, c64: C64()))
+        summary.record(MatrixRunResult(passed: true, elapsedCycles: 10, reason: "named milestone reached").record(
+            for: milestone,
+            c64: C64(),
+            screenshotURL: URL(fileURLWithPath: "/tmp/screens/pass.ppm")
+        ))
         summary.record(MatrixRunResult(passed: false, elapsedCycles: 20, reason: "PC $0801 not in $C000-$C0FF").record(
             for: milestone,
             c64: C64(),
@@ -1565,7 +2512,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             expectedFailureMatched: false,
             expectedFailureMismatches: ["category drive != pc"]
         ))
-        summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(for: milestone, c64: C64()))
+        summary.record(MatrixRunResult(passed: false, elapsedCycles: 30, reason: "unexpected fallback path").record(
+            for: milestone,
+            c64: C64(),
+            screenshotURL: URL(fileURLWithPath: "/tmp/screens/fail.ppm")
+        ))
         summary.recordSkipped(milestone)
 
         try writeMilestoneRunSummary(summary, to: url)
@@ -1589,17 +2540,240 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.resumeEnabled, true)
         XCTAssertEqual(decoded.strictManifestResumeEnabled, true)
         XCTAssertEqual(decoded.screenshotFailuresEnabled, true)
+        XCTAssertEqual(decoded.screenshotsWrittenCount, 2)
+        XCTAssertEqual(decoded.passedScreenshotCount, 1)
+        XCTAssertEqual(decoded.failedScreenshotCount, 1)
         XCTAssertEqual(decoded.milestoneLimit, 5)
+        XCTAssertEqual(decoded.milestoneShardIndex, 1)
+        XCTAssertEqual(decoded.milestoneShardCount, 3)
+        XCTAssertEqual(decoded.preShardMilestoneCount, 9)
+        XCTAssertEqual(decoded.postShardMilestoneCount, 4)
+        XCTAssertEqual(decoded.manifestValidationErrors, [])
+        XCTAssertNil(decoded.invalidShardConfiguration)
         XCTAssertEqual(decoded.manifestMilestoneCount, 7)
+        XCTAssertEqual(decoded.manifestPhaseCounts, [
+            MilestoneRoadmapPhase.phase4DriveMedia: 4,
+            MilestoneRoadmapPhase.phase5SID: 2,
+        ])
+        XCTAssertEqual(decoded.manifestMediaCounts, [
+            CompatibilityMediaType.g64.rawValue: 5,
+            CompatibilityMediaType.prg.rawValue: 2,
+        ])
+        XCTAssertEqual(decoded.manifestMachineProfileCounts, [
+            CompatibilityMachineProfile.palC64.rawValue: 5,
+            CompatibilityMachineProfile.ntscC64.rawValue: 2,
+        ])
+        XCTAssertEqual(decoded.manifestDriveModeCounts, [
+            CompatibilityDriveMode.compat1541.rawValue: 5,
+            CompatibilityDriveMode.fastLoad.rawValue: 2,
+        ])
+        XCTAssertEqual(decoded.manifestSIDModelCounts, [
+            SID.Model.mos6581.rawValue: 4,
+        ])
+        XCTAssertEqual(decoded.manifestSIDAccuracyModeCounts, [
+            SID.AccuracyMode.fast.rawValue: 4,
+        ])
+        XCTAssertEqual(decoded.manifestObservableTypeCounts, [
+            MilestoneObservableType.drive: 5,
+            MilestoneObservableType.sid: 2,
+            MilestoneObservableType.vic: 1,
+        ])
+        XCTAssertEqual(decoded.manifestExpectedFailureCategoryCounts, [
+            CompatibilityFailureCategory.drive.rawValue: 2,
+            CompatibilityFailureCategory.sid.rawValue: 1,
+        ])
+        XCTAssertEqual(decoded.manifestActionTypeCounts, [
+            MilestoneActionType.typeText: 7,
+            MilestoneActionType.waitCycles: 2,
+            MilestoneActionType.joystickDown: 1,
+        ])
+        XCTAssertEqual(decoded.manifestUntaggedMilestoneCount, 1)
+        XCTAssertEqual(decoded.manifestUnnamedMilestoneCount, 2)
+        XCTAssertEqual(decoded.manifestExpectedFailureCount, 3)
+        XCTAssertEqual(decoded.manifestExpectedFailuresWithoutNotesCount, 2)
+        XCTAssertEqual(decoded.manifestExpectedFailuresWithoutReasonMarkersCount, 1)
+        XCTAssertEqual(decoded.manifestMilestonesWithoutMaxCyclesCount, 2)
+        XCTAssertEqual(decoded.manifestMilestonesWithoutExplicitActionsCount, 3)
+        XCTAssertEqual(decoded.manifestMilestonesWithoutObservableExpectationsCount, 3)
+        XCTAssertEqual(decoded.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount, 2)
+        XCTAssertEqual(decoded.phaseFilteredMilestoneCount, 4)
         XCTAssertEqual(decoded.selectedMilestoneCount, 3)
+        XCTAssertEqual(decoded.selectedMilestoneKeys, [milestone.resultKey])
+        XCTAssertEqual(decoded.selectedMediaCounts, [
+            CompatibilityMediaType.g64.rawValue: 3,
+        ])
+        XCTAssertEqual(decoded.selectedMachineProfileCounts, [
+            CompatibilityMachineProfile.palC64.rawValue: 3,
+        ])
+        XCTAssertEqual(decoded.selectedDriveModeCounts, [
+            CompatibilityDriveMode.compat1541.rawValue: 3,
+        ])
+        XCTAssertEqual(decoded.selectedSIDModelCounts, [
+            SID.Model.mos6581.rawValue: 3,
+        ])
+        XCTAssertEqual(decoded.selectedSIDAccuracyModeCounts, [
+            SID.AccuracyMode.fast.rawValue: 3,
+        ])
+        XCTAssertEqual(decoded.selectedObservableTypeCounts, [
+            MilestoneObservableType.drive: 3,
+            MilestoneObservableType.sid: 1,
+        ])
+        XCTAssertEqual(decoded.selectedExpectedFailureCategoryCounts, [
+            CompatibilityFailureCategory.drive.rawValue: 1,
+        ])
+        XCTAssertEqual(decoded.selectedActionTypeCounts, [
+            MilestoneActionType.typeText: 3,
+            MilestoneActionType.waitCycles: 1,
+        ])
         XCTAssertEqual(decoded.missingMediaFiles, ["missing.g64"])
         XCTAssertEqual(decoded.requireAllManifestMedia, true)
+        XCTAssertEqual(decoded.requiredManifestMediaTypes, [
+            CompatibilityMediaType.prg.rawValue,
+            CompatibilityMediaType.g64.rawValue,
+            CompatibilityMediaType.tap.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestMediaTypes, ["wav"])
+        XCTAssertEqual(decoded.missingRequiredManifestMediaTypes, [
+            CompatibilityMediaType.tap.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestMachineProfiles, [
+            CompatibilityMachineProfile.palC64.rawValue,
+            CompatibilityMachineProfile.ntscC64.rawValue,
+            CompatibilityMachineProfile.ntscC64C.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestMachineProfiles, ["c128"])
+        XCTAssertEqual(decoded.missingRequiredManifestMachineProfiles, [
+            CompatibilityMachineProfile.ntscC64C.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestDriveModes, [
+            CompatibilityDriveMode.compat1541.rawValue,
+            CompatibilityDriveMode.fastLoad.rawValue,
+            CompatibilityDriveMode.standard1541.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestDriveModes, ["turbo"])
+        XCTAssertEqual(decoded.missingRequiredManifestDriveModes, [
+            CompatibilityDriveMode.standard1541.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestSIDModels, [
+            SID.Model.mos6581.rawValue,
+            SID.Model.mos8580.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestSIDModels, ["mos6582"])
+        XCTAssertEqual(decoded.missingRequiredManifestSIDModels, [
+            SID.Model.mos8580.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestSIDAccuracyModes, [
+            SID.AccuracyMode.fast.rawValue,
+            SID.AccuracyMode.compatibility.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestSIDAccuracyModes, ["resid"])
+        XCTAssertEqual(decoded.missingRequiredManifestSIDAccuracyModes, [
+            SID.AccuracyMode.compatibility.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestObservableTypes, [
+            MilestoneObservableType.drive,
+            MilestoneObservableType.sid,
+            MilestoneObservableType.framebuffer,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestObservableTypes, ["raster"])
+        XCTAssertEqual(decoded.missingRequiredManifestObservableTypes, [
+            MilestoneObservableType.framebuffer,
+        ])
+        XCTAssertEqual(decoded.requiredManifestFailureCategories, [
+            CompatibilityFailureCategory.drive.rawValue,
+            CompatibilityFailureCategory.sid.rawValue,
+            CompatibilityFailureCategory.vic.rawValue,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestFailureCategories, ["video"])
+        XCTAssertEqual(decoded.missingRequiredManifestFailureCategories, [
+            CompatibilityFailureCategory.vic.rawValue,
+        ])
+        XCTAssertEqual(decoded.requiredManifestActionTypes, [
+            MilestoneActionType.typeText,
+            MilestoneActionType.waitCycles,
+            MilestoneActionType.startTape,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestActionTypes, ["mouseDown"])
+        XCTAssertEqual(decoded.missingRequiredManifestActionTypes, [
+            MilestoneActionType.startTape,
+        ])
+        XCTAssertEqual(decoded.selectedPhaseNames, [
+            MilestoneRoadmapPhase.phase4DriveMedia,
+            MilestoneRoadmapPhase.phase5SID,
+        ])
+        XCTAssertEqual(decoded.invalidSelectedPhaseNames, ["phase5SIDD"])
+        XCTAssertEqual(decoded.selectedPhaseCounts, [
+            MilestoneRoadmapPhase.phase4DriveMedia: 4,
+            MilestoneRoadmapPhase.phase5SID: 0,
+        ])
+        XCTAssertEqual(decoded.missingSelectedPhaseNames, [
+            MilestoneRoadmapPhase.phase5SID,
+        ])
+        XCTAssertEqual(decoded.selectedMilestoneIDs, [
+            "giana-title",
+            "sid-filter",
+            "missing-id",
+        ])
+        XCTAssertEqual(decoded.missingSelectedMilestoneIDs, [
+            "missing-id",
+        ])
+        XCTAssertEqual(decoded.requireSelectedPhases, true)
+        XCTAssertEqual(decoded.requireSelectedMilestoneIDs, true)
+        XCTAssertEqual(decoded.requireManifest, true)
+        XCTAssertEqual(decoded.requireTaggedManifestPhases, true)
+        XCTAssertEqual(decoded.requireManifestMilestoneIDs, true)
+        XCTAssertEqual(decoded.requireExpectedFailureNotes, true)
+        XCTAssertEqual(decoded.requireExpectedFailureReasonMarkers, true)
+        XCTAssertEqual(decoded.requireExplicitMaxCycles, true)
+        XCTAssertEqual(decoded.requireExplicitActions, true)
+        XCTAssertEqual(decoded.requireObservableExpectations, true)
+        XCTAssertEqual(decoded.requireFramebufferScreenshots, true)
         XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.failOnUnexpected, true)
+        XCTAssertEqual(decoded.failPhaseNames, [
+            MilestoneRoadmapPhase.phase2CPUMemoryBus,
+            MilestoneRoadmapPhase.phase4DriveMedia
+        ])
+        XCTAssertEqual(decoded.invalidFailPhaseNames, ["phase4DriveMeda"])
         XCTAssertEqual(decoded.outcome, "acceptanceFailed")
-        XCTAssertEqual(decoded.acceptanceFailures, ["unclassifiedFailures", "unexpectedFailures"])
+        XCTAssertEqual(decoded.phaseAcceptanceFailures, [
+            "\(MilestoneRoadmapPhase.phase4DriveMedia):\(MilestonePhaseOutcome.expectedFailureDrift)"
+        ])
+        XCTAssertEqual(decoded.acceptanceFailures, [
+            "unclassifiedFailures",
+            "unexpectedFailures",
+            "phase:\(MilestoneRoadmapPhase.phase4DriveMedia):\(MilestonePhaseOutcome.expectedFailureDrift)",
+            "invalidPhase:phase4DriveMeda",
+            "invalidSelectedPhase:phase5SIDD",
+            "invalidRequiredMediaType:wav",
+            "missingRequiredMediaType:tap",
+            "invalidRequiredMachineProfile:c128",
+            "missingRequiredMachineProfile:ntscC64C",
+            "invalidRequiredDriveMode:turbo",
+            "missingRequiredDriveMode:standard1541",
+            "invalidRequiredSIDModel:mos6582",
+            "missingRequiredSIDModel:mos8580",
+            "invalidRequiredSIDAccuracyMode:resid",
+            "missingRequiredSIDAccuracyMode:compatibility",
+            "invalidRequiredObservableType:raster",
+            "missingRequiredObservableType:framebuffer",
+            "invalidRequiredFailureCategory:video",
+            "missingRequiredFailureCategory:vic",
+            "invalidRequiredActionType:mouseDown",
+            "missingRequiredActionType:startTape",
+            "missingSelectedPhase:\(MilestoneRoadmapPhase.phase5SID)",
+            "missingSelectedMilestoneID:missing-id",
+            "untaggedManifestMilestones:1",
+            "unnamedManifestMilestones:2",
+            "expectedFailuresWithoutNotes:2",
+            "expectedFailuresWithoutReasonMarkers:1",
+            "milestonesWithoutMaxCycles:2",
+            "milestonesWithoutExplicitActions:3",
+            "milestonesWithoutObservableExpectations:3",
+            "framebufferHashMilestonesWithoutScreenshotNames:2"
+        ])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
-        XCTAssertEqual(decoded.formatVersion, 1)
+        XCTAssertEqual(decoded.formatVersion, 33)
         XCTAssertEqual(decoded.totalElapsedCycles, 85)
         XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
@@ -1607,6 +2781,66 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.categories["pc"], 1)
         XCTAssertEqual(decoded.categories["drive"], 1)
         XCTAssertEqual(decoded.categories["emulator"], 1)
+        XCTAssertEqual(decoded.phaseCounts[MilestoneRoadmapPhase.passed], 1)
+        XCTAssertEqual(decoded.phaseCounts[MilestoneRoadmapPhase.phase2CPUMemoryBus], 1)
+        XCTAssertEqual(decoded.phaseCounts[MilestoneRoadmapPhase.phase4DriveMedia], 1)
+        XCTAssertEqual(decoded.phaseCounts[MilestoneRoadmapPhase.unclassified], 1)
+        XCTAssertEqual(decoded.phaseCounts[MilestoneRoadmapPhase.skipped], 1)
+        XCTAssertEqual(decoded.phaseBreakdown[MilestoneRoadmapPhase.passed], MilestonePhaseBreakdown(
+            total: 1,
+            passed: 1
+        ))
+        XCTAssertEqual(decoded.phaseBreakdown[MilestoneRoadmapPhase.phase2CPUMemoryBus], MilestonePhaseBreakdown(
+            total: 1,
+            failed: 1,
+            expectedFailures: 1
+        ))
+        XCTAssertEqual(decoded.phaseBreakdown[MilestoneRoadmapPhase.phase4DriveMedia], MilestonePhaseBreakdown(
+            total: 1,
+            failed: 1,
+            unexpectedFailures: 1,
+            expectedFailureDrift: 1
+        ))
+        XCTAssertEqual(decoded.phaseBreakdown[MilestoneRoadmapPhase.unclassified], MilestonePhaseBreakdown(
+            total: 1,
+            failed: 1,
+            unexpectedFailures: 1,
+            unclassifiedFailures: 1
+        ))
+        XCTAssertEqual(decoded.phaseBreakdown[MilestoneRoadmapPhase.skipped], MilestonePhaseBreakdown(
+            total: 1,
+            skipped: 1
+        ))
+        XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.passed], MilestonePhaseOutcome.passed)
+        XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.phase2CPUMemoryBus], MilestonePhaseOutcome.expectedFailures)
+        XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.phase4DriveMedia], MilestonePhaseOutcome.expectedFailureDrift)
+        XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.unclassified], MilestonePhaseOutcome.unclassifiedFailures)
+        XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.skipped], MilestonePhaseOutcome.skipped)
+        XCTAssertEqual(decoded.phaseFailureDetails[MilestoneRoadmapPhase.phase2CPUMemoryBus], [
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "pc",
+                reason: "PC $0801 not in $C000-$C0FF",
+                elapsedCycles: 20
+            )
+        ])
+        XCTAssertEqual(decoded.phaseFailureDetails[MilestoneRoadmapPhase.phase4DriveMedia], [
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: "drive",
+                reason: "GCR reads 0 < 64",
+                elapsedCycles: 25
+            )
+        ])
+        XCTAssertEqual(decoded.phaseExpectedFailureDriftDetails[MilestoneRoadmapPhase.phase4DriveMedia], [
+            MilestoneExpectedFailureDriftSummary(
+                key: milestone.resultKey,
+                category: "drive",
+                reason: "GCR reads 0 < 64",
+                elapsedCycles: 25,
+                mismatches: ["category drive != pc"]
+            )
+        ])
         XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey, milestone.resultKey, milestone.resultKey])
         XCTAssertEqual(decoded.failedMilestoneDetails, [
             MilestoneFailureSummary(
@@ -1678,9 +2912,105 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("GCR reads 0 < 64"))
         XCTAssertTrue(decoded.expectedFailureDriftSummary.contains("category drive != pc"))
         XCTAssertFalse(decoded.expectedFailureDriftSummary.contains("unexpected fallback path"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains(MilestoneRoadmapPhase.phase4DriveMedia))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains(MilestonePhaseOutcome.expectedFailureDrift))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalid:phase4DriveMeda"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidSelected:phase5SIDD"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingSelected:phase5SID"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredMedia:wav"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredMedia:tap"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredProfile:c128"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredProfile:ntscC64C"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredDrive:turbo"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredDrive:standard1541"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredSIDModel:mos6582"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredSIDModel:mos8580"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredSIDAccuracy:resid"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredSIDAccuracy:compatibility"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredObservable:raster"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredObservable:framebuffer"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredFailureCategory:video"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredFailureCategory:vic"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredAction:mouseDown"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredAction:startTape"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingSelectedID:missing-id"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=5"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("selected=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phaseFiltered=4"))
+        XCTAssertTrue(decoded.consoleSummary.contains("preShard=9"))
+        XCTAssertTrue(decoded.consoleSummary.contains("postShard=4"))
+        XCTAssertTrue(decoded.consoleSummary.contains("shardIndex=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("shardCount=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidShard=[none]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestPhaseCounts=[phase4DriveMedia=4 phase5SID=2]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestMediaCounts=[g64=5 prg=2]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedMediaCounts=[g64=3]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestMachineProfiles=[ntscC64=2 palC64=5]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedMachineProfiles=[palC64=3]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestDriveModes=[compat1541=5 fastLoad=2]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedDriveModes=[compat1541=3]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestSIDModels=[mos6581=4]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedSIDModels=[mos6581=3]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestSIDAccuracyModes=[fast=4]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedSIDAccuracyModes=[fast=3]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestObservableTypes=[drive=5 sid=2 vic=1]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedObservableTypes=[drive=3 sid=1]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestExpectedFailureCategories=[drive=2 sid=1]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedExpectedFailureCategories=[drive=1]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestActionTypes=[joystickDown=1 typeText=7 waitCycles=2]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedActionTypes=[typeText=3 waitCycles=1]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredMedia=[prg g64 tap]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredMedia=[wav]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredMedia=[tap]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredProfiles=[palC64 ntscC64 ntscC64C]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredProfiles=[c128]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredProfiles=[ntscC64C]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredDriveModes=[compat1541 fastLoad standard1541]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredDriveModes=[turbo]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredDriveModes=[standard1541]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredSIDModels=[mos6581 mos8580]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredSIDModels=[mos6582]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredSIDModels=[mos8580]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredSIDAccuracyModes=[fast compatibility]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredSIDAccuracyModes=[resid]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredSIDAccuracyModes=[compatibility]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredObservableTypes=[drive sid framebuffer]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredObservableTypes=[raster]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredObservableTypes=[framebuffer]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredFailureCategories=[drive sid vic]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredFailureCategories=[video]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredFailureCategories=[vic]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requiredActionTypes=[typeText waitCycles startTape]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidRequiredActionTypes=[mouseDown]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingRequiredActionTypes=[startTape]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestUntagged=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestUnnamed=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("manifestExpectedFailures=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("expectedFailuresWithoutNotes=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("expectedFailuresWithoutReasons=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("screenshots=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("passedScreenshots=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("failedScreenshots=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutMaxCycles=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutExplicitActions=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutObservables=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("framebufferProofsWithoutScreenshots=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireManifest=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireTaggedPhases=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireIDs=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireExpectedFailureNotes=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireExpectedFailureReasons=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireMaxCycles=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireActions=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireObservables=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requireFramebufferScreenshots=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedPhases=[phase4DriveMedia phase5SID]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedPhaseCounts=[phase4DriveMedia=4 phase5SID=0]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidSelectedPhases=[phase5SIDD]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingSelectedPhases=[phase5SID]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("selectedIDs=[giana-title sid-filter missing-id]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingSelectedIDs=[missing-id]"))
         XCTAssertTrue(decoded.consoleSummary.contains("missingMedia=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("expectedFailures=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("unexpectedFailures=2"))
@@ -1690,6 +3020,15 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("drive=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("pc=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("emulator=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phases=["))
+        XCTAssertTrue(decoded.consoleSummary.contains("phase2CPUMemoryBus=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phase4DriveMedia=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("unclassified=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phaseAcceptanceFailures=["))
+        XCTAssertTrue(decoded.consoleSummary.contains("phase4DriveMedia:expectedFailureDrift"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalid:phase4DriveMeda"))
+        XCTAssertTrue(decoded.consoleSummary.contains("invalidSelected:phase5SIDD"))
+        XCTAssertTrue(decoded.consoleSummary.contains("missingSelected:phase5SID"))
         XCTAssertTrue(decoded.consoleSummary.contains("cycles=85"))
     }
 
@@ -1743,6 +3082,29 @@ final class LocalDiskMatrixTests: XCTestCase {
         gated.refreshDerivedFields()
         XCTAssertEqual(gated.outcome, "acceptanceFailed")
         XCTAssertEqual(gated.acceptanceFailures, ["unexpectedFailures"])
+
+        var missingManifest = MilestoneRunSummary()
+        missingManifest.configureRun(
+            runID: nil,
+            manifestURL: nil,
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            manifestMilestoneCount: nil,
+            selectedMilestoneCount: 0,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            requireManifest: true,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+        missingManifest.refreshDerivedFields()
+        XCTAssertEqual(missingManifest.outcome, "acceptanceFailed")
+        XCTAssertEqual(missingManifest.acceptanceFailures, ["missingManifest"])
     }
 
     func testMilestoneRunSummaryAcceptanceGateIgnoresCategorizedFailures() {
@@ -1771,6 +3133,123 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertFalse(summary.hasUnclassifiedFailures)
         XCTAssertEqual(summary.unclassifiedFailureSummary, "No unclassified milestone failures.")
         XCTAssertTrue(summary.hasUnexpectedFailures)
+    }
+
+    func testMilestoneRunSummaryCanGateMissingSelectedMilestoneIDs() {
+        var summary = MilestoneRunSummary()
+        summary.configureRun(
+            runID: nil,
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            manifestMilestoneCount: 2,
+            selectedMilestoneCount: 0,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            selectedMilestoneIDs: ["giana-title", "sid-filter"],
+            missingSelectedMilestoneIDs: ["sid-filter"],
+            requireSelectedMilestoneIDs: true,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+
+        summary.refreshDerivedFields()
+
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
+        XCTAssertEqual(summary.acceptanceFailures, ["missingSelectedMilestoneID:sid-filter"])
+        XCTAssertTrue(summary.consoleSummary.contains("selectedIDs=[giana-title sid-filter]"))
+        XCTAssertTrue(summary.consoleSummary.contains("missingSelectedIDs=[sid-filter]"))
+    }
+
+    func testMilestoneRunSummaryGatesInvalidShardConfiguration() {
+        var summary = MilestoneRunSummary()
+        summary.configureRun(
+            runID: nil,
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            milestoneShardIndex: 4,
+            milestoneShardCount: 2,
+            preShardMilestoneCount: 5,
+            postShardMilestoneCount: 5,
+            invalidShardConfiguration: "invalidShard:index=4,count=2",
+            manifestMilestoneCount: 5,
+            selectedMilestoneCount: 5,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+
+        summary.refreshDerivedFields()
+
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
+        XCTAssertEqual(summary.acceptanceFailures, ["invalidShard:index=4,count=2"])
+        XCTAssertTrue(summary.consoleSummary.contains("invalidShard=[invalidShard:index=4,count=2]"))
+    }
+
+    func testMilestoneRunSummaryGatesManifestValidationErrors() {
+        var summary = MilestoneRunSummary()
+        summary.configureRun(
+            runID: nil,
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            manifestValidationErrors: [
+                "duplicate milestone id giana-title for a.g64 and b.g64"
+            ],
+            manifestMilestoneCount: 2,
+            selectedMilestoneCount: 0,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+
+        summary.refreshDerivedFields()
+
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
+        XCTAssertEqual(summary.acceptanceFailures, [
+            "manifestValidation:duplicate milestone id giana-title for a.g64 and b.g64"
+        ])
+        XCTAssertTrue(summary.consoleSummary.contains("manifestValidation=[duplicate milestone id giana-title for a.g64 and b.g64]"))
+    }
+
+    func testManifestMilestoneLimitAppliesAfterShardSelection() throws {
+        let manifestJSON = """
+        {"milestones":[
+          {"id":"a","file":"a.g64","mediaType":"g64","driveMode":"compat1541","roadmapPhase":"phase4DriveMedia","actions":[{"type":"typeText","text":"LOAD\\"*\\",8,1"}]},
+          {"id":"b","file":"b.g64","mediaType":"g64","driveMode":"compat1541","roadmapPhase":"phase4DriveMedia","actions":[{"type":"typeText","text":"LOAD\\"*\\",8,1"}]},
+          {"id":"c","file":"c.g64","mediaType":"g64","driveMode":"compat1541","roadmapPhase":"phase4DriveMedia","actions":[{"type":"typeText","text":"LOAD\\"*\\",8,1"}]},
+          {"id":"d","file":"d.g64","mediaType":"g64","driveMode":"compat1541","roadmapPhase":"phase4DriveMedia","actions":[{"type":"typeText","text":"LOAD\\"*\\",8,1"}]}
+        ]}
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+        let sharded = Self.shardedManifestEntries(
+            manifest.milestones,
+            shardSelection: MilestoneShardSelection(index: 0, count: 2)
+        )
+        let limited = Self.limitedManifestEntries(sharded, limit: 1)
+
+        XCTAssertEqual(sharded.map(\.id), ["a", "c"])
+        XCTAssertEqual(limited.map(\.id), ["a"])
+        XCTAssertTrue(Self.limitedManifestEntries(sharded, limit: nil).map(\.id) == ["a", "c"])
+        XCTAssertTrue(Self.limitedManifestEntries(sharded, limit: 0).isEmpty)
     }
 
     func testMilestoneManifestHashUsesStableContentFingerprint() throws {
@@ -2115,7 +3594,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
+        XCTAssertEqual(result.category, .sid)
         XCTAssertTrue(result.reason.contains("SID audio.mean"))
     }
 
@@ -2148,7 +3627,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
+        XCTAssertEqual(result.category, .sid)
         XCTAssertTrue(result.reason.contains("SID audio.rootMeanSquare"))
     }
 
@@ -2185,7 +3664,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
+        XCTAssertEqual(result.category, .sid)
         XCTAssertTrue(result.reason.contains("SID audio.highBandRootMeanSquare"))
         XCTAssertTrue(result.reason.contains("SID audio.crestFactor"))
     }
@@ -2289,7 +3768,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
+        XCTAssertEqual(result.category, .sid)
         XCTAssertTrue(result.reason.contains("SID audio.state.accuracyMode"))
         XCTAssertTrue(result.reason.contains("SID audio.state.sampleCycleCounter"))
         XCTAssertTrue(result.reason.contains("SID audio.state.cyclesPerSample"))
@@ -2408,7 +3887,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .audio)
+        XCTAssertEqual(result.category, .sid)
         XCTAssertTrue(result.reason.contains("SID voice1.frequency"))
         XCTAssertTrue(result.reason.contains("SID voice1.envelopeOutput"))
         XCTAssertTrue(result.reason.contains("SID voice1.envelopeState"))
@@ -2534,7 +4013,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let result = runUntilMilestone(c64, milestone: milestone)
 
         XCTAssertFalse(result.passed)
-        XCTAssertEqual(result.category, .video)
+        XCTAssertEqual(result.category, .vic)
         XCTAssertTrue(result.reason.contains("VIC $D020"))
     }
 
@@ -2782,10 +4261,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "RAM $0801 00 != 01").category, .ram)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "color RAM $0000 00 != 01").category, .screen)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "screen hash abc != def").category, .screen)
-        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "VIC $D020 06 != 02 mask 0F").category, .video)
-        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID $D418 0F != 10 mask FF").category, .audio)
-        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID audio.sum 0.000000 != 1.000000").category, .audio)
-        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID voice1.frequency $1234 != $2345").category, .audio)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "VIC $D020 06 != 02 mask 0F").category, .vic)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID $D418 0F != 10 mask FF").category, .sid)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID audio.sum 0.000000 != 1.000000").category, .sid)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID voice1.frequency $1234 != $2345").category, .sid)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CIA1 $DC0E 01 != 00 mask 01").category, .cia)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "CPU.A $00 != $01").category, .cpu)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "named milestone timeout").category, .timeout)
@@ -2862,10 +4341,16 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     func testManifestMilestoneValidationRejectsDuplicateIDs() {
-        var first = validationMilestone(file: "first.g64", commands: [#"LOAD"*",8,1"#])
-        first.id = "giana-title"
-        var second = validationMilestone(file: "second.g64", commands: [#"LOAD"$",8"#])
-        second.id = "giana-title"
+        let first = CompatibilityMilestone(
+            id: "giana-title",
+            file: "first.g64",
+            command: #"LOAD"*",8,1"#
+        )
+        let second = CompatibilityMilestone(
+            id: "giana-title",
+            file: "second.g64",
+            command: #"LOAD"$",8"#
+        )
 
         let errors = manifestMilestoneValidationErrors([first, second])
 
@@ -2876,8 +4361,8 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     func testManifestMilestoneValidationRejectsDuplicateResultKeys() {
-        let first = validationMilestone(file: "demo.g64", commands: [#"LOAD"*",8,1"#])
-        let second = validationMilestone(file: "demo.g64", commands: [#"LOAD"*",8,1"#])
+        let first = CompatibilityMilestone(file: "demo.g64", command: #"LOAD"*",8,1"#)
+        let second = CompatibilityMilestone(file: "demo.g64", command: #"LOAD"*",8,1"#)
 
         let errors = manifestMilestoneValidationErrors([first, second])
 
@@ -2888,10 +4373,68 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     func testManifestMilestoneValidationAllowsDistinctModes() {
-        let fastLoad = validationMilestone(file: "demo.g64", driveMode: .fastLoad, commands: [#"LOAD"*",8,1"#])
-        let trueDrive = validationMilestone(file: "demo.g64", driveMode: .compat1541, commands: [#"LOAD"*",8,1"#])
+        let fastLoad = CompatibilityMilestone(
+            file: "demo.g64",
+            driveMode: .fastLoad,
+            command: #"LOAD"*",8,1"#
+        )
+        let trueDrive = CompatibilityMilestone(
+            file: "demo.g64",
+            driveMode: .compat1541,
+            command: #"LOAD"*",8,1"#
+        )
 
         XCTAssertTrue(manifestMilestoneValidationErrors([fastLoad, trueDrive]).isEmpty)
+    }
+
+    func testManifestMilestoneValidationRunsBeforeMediaResolution() {
+        let first = CompatibilityMilestone(
+            id: "missing-duplicate",
+            file: "missing-a.g64",
+            command: #"LOAD"*",8,1"#
+        )
+        let second = CompatibilityMilestone(
+            id: "missing-duplicate",
+            file: "missing-b.g64",
+            command: #"LOAD"*",8,1"#
+        )
+
+        let errors = manifestMilestoneValidationErrors([first, second])
+
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(errors[0].contains("missing-a.g64"), errors[0])
+        XCTAssertTrue(errors[0].contains("missing-b.g64"), errors[0])
+    }
+
+    func testManifestMilestoneValidationCoversEntriesOutsideCurrentFilter() {
+        let selectedPhase = CompatibilityMilestone(
+            id: "unique-drive",
+            file: "selected.g64",
+            command: #"LOAD"*",8,1"#,
+            roadmapPhase: .phase4DriveMedia
+        )
+        let hiddenFirst = CompatibilityMilestone(
+            id: "duplicate-hidden-by-phase-filter",
+            file: "hidden-a.prg",
+            command: "RUN",
+            roadmapPhase: .phase5SID
+        )
+        let hiddenSecond = CompatibilityMilestone(
+            id: "duplicate-hidden-by-phase-filter",
+            file: "hidden-b.prg",
+            command: "RUN",
+            roadmapPhase: .phase5SID
+        )
+        let phaseFiltered = Self.phaseFilteredManifestEntries(
+            [selectedPhase, hiddenFirst, hiddenSecond],
+            selectedPhaseNames: [MilestoneRoadmapPhase.phase4DriveMedia]
+        )
+
+        XCTAssertTrue(manifestMilestoneValidationErrors(phaseFiltered).isEmpty)
+        XCTAssertEqual(
+            manifestMilestoneValidationErrors([selectedPhase, hiddenFirst, hiddenSecond]).count,
+            1
+        )
     }
 
     func testManifestMissingMediaFilesAreReported() {
@@ -3054,12 +4597,488 @@ final class LocalDiskMatrixTests: XCTestCase {
         ProcessInfo.processInfo.environment[milestoneFailOnUnexpectedEnv] == "1"
     }
 
+    private var milestoneFailurePhaseSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestonePhaseSelection(ProcessInfo.processInfo.environment[milestoneFailPhasesEnv])
+    }
+
+    private var milestoneSelectedPhaseSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestonePhaseSelection(ProcessInfo.processInfo.environment[milestonePhaseFilterEnv])
+    }
+
+    private var milestoneRequiredMediaTypeSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneMediaTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireMediaTypesEnv])
+    }
+
+    private var milestoneRequiredMachineProfileSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneMachineProfileSelection(ProcessInfo.processInfo.environment[milestoneRequireMachineProfilesEnv])
+    }
+
+    private var milestoneRequiredDriveModeSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneDriveModeSelection(ProcessInfo.processInfo.environment[milestoneRequireDriveModesEnv])
+    }
+
+    private var milestoneRequiredSIDModelSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneSIDModelSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDModelsEnv])
+    }
+
+    private var milestoneRequiredSIDAccuracyModeSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneSIDAccuracyModeSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDAccuracyModesEnv])
+    }
+
+    private var milestoneRequiredObservableTypeSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneObservableTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireObservableTypesEnv])
+    }
+
+    private var milestoneRequiredFailureCategorySelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneFailureCategorySelection(ProcessInfo.processInfo.environment[milestoneRequireFailureCategoriesEnv])
+    }
+
+    private var milestoneRequiredActionTypeSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneActionTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireActionTypesEnv])
+    }
+
+    private static func parseMilestonePhaseSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let phaseNames = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for phaseName in phaseNames {
+            if MilestoneRoadmapPhase.gateablePhases.contains(phaseName) {
+                if seenValid.insert(phaseName).inserted {
+                    valid.append(phaseName)
+                }
+            } else if seenInvalid.insert(phaseName).inserted {
+                invalid.append(phaseName)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneIDSelection(_ value: String?) -> [String] {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        var selectedIDs: [String] = []
+        var seenIDs = Set<String>()
+        let ids = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for id in ids where seenIDs.insert(id).inserted {
+            selectedIDs.append(id)
+        }
+        return selectedIDs
+    }
+
+    private static func parseMilestoneShardSelection(indexValue: String?, countValue: String?) -> MilestoneShardSelection {
+        let trimmedIndex = indexValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedCount = countValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedIndex.isEmpty || !trimmedCount.isEmpty else {
+            return MilestoneShardSelection()
+        }
+        guard let shardIndex = Int(trimmedIndex),
+              let shardCount = Int(trimmedCount),
+              shardCount > 0,
+              shardIndex >= 0,
+              shardIndex < shardCount else {
+            return MilestoneShardSelection(
+                index: Int(trimmedIndex),
+                count: Int(trimmedCount),
+                invalidReason: "invalidShard:index=\(trimmedIndex.isEmpty ? "missing" : trimmedIndex),count=\(trimmedCount.isEmpty ? "missing" : trimmedCount)"
+            )
+        }
+        return MilestoneShardSelection(index: shardIndex, count: shardCount)
+    }
+
+    private static func parseMilestoneMediaTypeSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedMediaTypes = Set(compatibilityMediaTypeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let mediaTypes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        for mediaType in mediaTypes {
+            if acceptedMediaTypes.contains(mediaType) {
+                if seenValid.insert(mediaType).inserted {
+                    valid.append(mediaType)
+                }
+            } else if seenInvalid.insert(mediaType).inserted {
+                invalid.append(mediaType)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneMachineProfileSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedProfiles = Set(compatibilityMachineProfileNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let profiles = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for profile in profiles {
+            if acceptedProfiles.contains(profile) {
+                if seenValid.insert(profile).inserted {
+                    valid.append(profile)
+                }
+            } else if seenInvalid.insert(profile).inserted {
+                invalid.append(profile)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneDriveModeSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedDriveModes = Set(compatibilityDriveModeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let driveModes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for driveMode in driveModes {
+            if acceptedDriveModes.contains(driveMode) {
+                if seenValid.insert(driveMode).inserted {
+                    valid.append(driveMode)
+                }
+            } else if seenInvalid.insert(driveMode).inserted {
+                invalid.append(driveMode)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneSIDModelSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedModels = Set(sidModelNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let models = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for model in models {
+            if acceptedModels.contains(model) {
+                if seenValid.insert(model).inserted {
+                    valid.append(model)
+                }
+            } else if seenInvalid.insert(model).inserted {
+                invalid.append(model)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneSIDAccuracyModeSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedModes = Set(sidAccuracyModeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let modes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for mode in modes {
+            if acceptedModes.contains(mode) {
+                if seenValid.insert(mode).inserted {
+                    valid.append(mode)
+                }
+            } else if seenInvalid.insert(mode).inserted {
+                invalid.append(mode)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneObservableTypeSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedTypes = Set(milestoneObservableTypeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let observableTypes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for observableType in observableTypes {
+            if acceptedTypes.contains(observableType) {
+                if seenValid.insert(observableType).inserted {
+                    valid.append(observableType)
+                }
+            } else if seenInvalid.insert(observableType).inserted {
+                invalid.append(observableType)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneFailureCategorySelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedCategories = Set(milestoneFailureCategoryNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let categories = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for category in categories {
+            if acceptedCategories.contains(category) {
+                if seenValid.insert(category).inserted {
+                    valid.append(category)
+                }
+            } else if seenInvalid.insert(category).inserted {
+                invalid.append(category)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private static func parseMilestoneActionTypeSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedTypes = Set(milestoneActionTypeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let actionTypes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for actionType in actionTypes {
+            if acceptedTypes.contains(actionType) {
+                if seenValid.insert(actionType).inserted {
+                    valid.append(actionType)
+                }
+            } else if seenInvalid.insert(actionType).inserted {
+                invalid.append(actionType)
+            }
+        }
+        return (valid, invalid)
+    }
+
+    private enum MilestoneActionType {
+        static let typeText = "typeText"
+        static let waitCycles = "waitCycles"
+        static let joystickDown = "joystickDown"
+        static let joystickUp = "joystickUp"
+        static let keyDown = "keyDown"
+        static let keyUp = "keyUp"
+        static let startTape = "startTape"
+        static let stopTape = "stopTape"
+    }
+
+    private static let milestoneActionTypeNames = [
+        MilestoneActionType.typeText,
+        MilestoneActionType.waitCycles,
+        MilestoneActionType.joystickDown,
+        MilestoneActionType.joystickUp,
+        MilestoneActionType.keyDown,
+        MilestoneActionType.keyUp,
+        MilestoneActionType.startTape,
+        MilestoneActionType.stopTape,
+    ]
+
+    private enum MilestoneObservableType {
+        static let pc = "pc"
+        static let drive = "drive"
+        static let media = "media"
+        static let lowLevelTrack = "lowLevelTrack"
+        static let tape = "tape"
+        static let ram = "ram"
+        static let colorRAM = "colorRAM"
+        static let cpu = "cpu"
+        static let sid = "sid"
+        static let vic = "vic"
+        static let cia = "cia"
+        static let screen = "screen"
+        static let framebuffer = "framebuffer"
+    }
+
+    private static let milestoneObservableTypeNames = [
+        MilestoneObservableType.pc,
+        MilestoneObservableType.drive,
+        MilestoneObservableType.media,
+        MilestoneObservableType.lowLevelTrack,
+        MilestoneObservableType.tape,
+        MilestoneObservableType.ram,
+        MilestoneObservableType.colorRAM,
+        MilestoneObservableType.cpu,
+        MilestoneObservableType.sid,
+        MilestoneObservableType.vic,
+        MilestoneObservableType.cia,
+        MilestoneObservableType.screen,
+        MilestoneObservableType.framebuffer,
+    ]
+
+    private static let milestoneFailureCategoryNames = [
+        CompatibilityFailureCategory.cpu.rawValue,
+        CompatibilityFailureCategory.vic.rawValue,
+        CompatibilityFailureCategory.sid.rawValue,
+        CompatibilityFailureCategory.drive.rawValue,
+        CompatibilityFailureCategory.media.rawValue,
+        CompatibilityFailureCategory.protectedMedia.rawValue,
+        CompatibilityFailureCategory.cartridge.rawValue,
+        CompatibilityFailureCategory.app.rawValue,
+        CompatibilityFailureCategory.pc.rawValue,
+        CompatibilityFailureCategory.ram.rawValue,
+        CompatibilityFailureCategory.screen.rawValue,
+        CompatibilityFailureCategory.tape.rawValue,
+        CompatibilityFailureCategory.cia.rawValue,
+        CompatibilityFailureCategory.emulator.rawValue,
+        CompatibilityFailureCategory.timeout.rawValue,
+    ]
+
+    private static let compatibilityMediaTypeNames = [
+        CompatibilityMediaType.prg.rawValue,
+        CompatibilityMediaType.d64.rawValue,
+        CompatibilityMediaType.g64.rawValue,
+        CompatibilityMediaType.nib.rawValue,
+        CompatibilityMediaType.nbz.rawValue,
+        CompatibilityMediaType.p64.rawValue,
+        CompatibilityMediaType.t64.rawValue,
+        CompatibilityMediaType.tap.rawValue,
+        CompatibilityMediaType.crt.rawValue,
+    ]
+
+    private static let compatibilityMachineProfileNames = [
+        CompatibilityMachineProfile.palC64.rawValue,
+        CompatibilityMachineProfile.palC64C.rawValue,
+        CompatibilityMachineProfile.palC64With1541II.rawValue,
+        CompatibilityMachineProfile.palC64CWith1541II.rawValue,
+        CompatibilityMachineProfile.ntscC64.rawValue,
+        CompatibilityMachineProfile.ntscC64C.rawValue,
+        CompatibilityMachineProfile.ntscC64With1541II.rawValue,
+        CompatibilityMachineProfile.ntscC64CWith1541II.rawValue,
+    ]
+
+    private static let compatibilityDriveModeNames = [
+        CompatibilityDriveMode.fastLoad.rawValue,
+        CompatibilityDriveMode.compat1541.rawValue,
+        CompatibilityDriveMode.standard1541.rawValue,
+    ]
+
+    private static let sidModelNames = [
+        SID.Model.mos6581.rawValue,
+        SID.Model.mos8580.rawValue,
+    ]
+
+    private static let sidAccuracyModeNames = [
+        SID.AccuracyMode.fast.rawValue,
+        SID.AccuracyMode.compatibility.rawValue,
+    ]
+
     private var shouldRequireAllMilestoneMedia: Bool {
         ProcessInfo.processInfo.environment[milestoneRequireAllMediaEnv] == "1"
     }
 
+    private var shouldRequireSelectedMilestonePhases: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequirePhaseFilterMatchesEnv] == "1"
+    }
+
+    private var shouldRequireSelectedMilestoneIDs: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireIDFilterMatchesEnv] == "1"
+    }
+
+    private var shouldRequireMilestoneManifest: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireManifestEnv] == "1"
+    }
+
+    private var shouldRequireRoadmapPhasesForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireRoadmapPhasesEnv] == "1"
+    }
+
+    private var shouldRequireIDsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireIDsEnv] == "1"
+    }
+
+    private var shouldRequireExpectedFailureNotesForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureNotesEnv] == "1"
+    }
+
+    private var shouldRequireExpectedFailureReasonsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureReasonsEnv] == "1"
+    }
+
+    private var shouldRequireMaxCyclesForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireMaxCyclesEnv] == "1"
+    }
+
+    private var shouldRequireExplicitActionsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireExplicitActionsEnv] == "1"
+    }
+
+    private var shouldRequireObservableExpectationsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireObservableExpectationsEnv] == "1"
+    }
+
+    private var shouldRequireFramebufferScreenshotsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequireFramebufferScreenshotsEnv] == "1"
+    }
+
     private var localMilestoneLimit: Int? {
         Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_LIMIT"] ?? "")
+    }
+
+    private var milestoneSelectedIDSelection: [String] {
+        Self.parseMilestoneIDSelection(ProcessInfo.processInfo.environment[milestoneIDFilterEnv])
+    }
+
+    private var milestoneShardSelection: MilestoneShardSelection {
+        Self.parseMilestoneShardSelection(
+            indexValue: ProcessInfo.processInfo.environment[milestoneShardIndexEnv],
+            countValue: ProcessInfo.processInfo.environment[milestoneShardCountEnv]
+        )
     }
 
     private func milestoneRunID() -> String {
@@ -3302,87 +5321,169 @@ final class LocalDiskMatrixTests: XCTestCase {
         )
     }
 
-    private func validationMilestone(
-        file: String,
-        machineProfile: CompatibilityMachineProfile = .palC64,
-        driveMode: CompatibilityDriveMode = .compat1541,
-        commands: [String]
-    ) -> LocalMilestone {
-        LocalMilestone(
-            url: URL(fileURLWithPath: "/tmp/\(file)"),
-            mediaType: .g64,
-            machineProfile: machineProfile,
-            driveMode: driveMode,
-            commands: commands,
-            maxCycles: 1,
-            pcRanges: [],
-            minGCRReads: 0,
-            minByteReady: 0,
-            driveStatus: nil,
-            mediaStatus: nil,
-            ramSignatures: [],
-            colorRAMSignatures: [],
-            screenRAMHash: nil,
-            colorRAMHash: nil,
-            screenshotName: nil
-        )
-    }
-
     private func localMilestoneLoadResult() throws -> MilestoneLoadResult {
-        let urls = try localMediaURLs(limitEnv: "SWIFT64_LOCAL_MILESTONE_LIMIT", extensions: Self.milestoneMediaExtensions)
+        let urls = try localMediaURLs(limitEnv: milestoneMediaLimitEnv, extensions: Self.milestoneMediaExtensions)
         let manifestLoad = try loadManifestMilestones(urls: urls)
         if !manifestLoad.milestones.isEmpty {
             return manifestLoad
+        }
+        if !manifestLoad.selectedMilestoneIDs.isEmpty {
+            return manifestLoad
+        }
+        let phaseSelection = milestoneSelectedPhaseSelection
+        if !phaseSelection.valid.isEmpty && !phaseSelection.valid.contains(MilestoneRoadmapPhase.phase4DriveMedia) {
+            return MilestoneLoadResult(
+                selectedPhaseNames: phaseSelection.valid,
+                invalidSelectedPhaseNames: phaseSelection.invalid,
+                selectedPhaseCounts: Dictionary(uniqueKeysWithValues: phaseSelection.valid.map { ($0, 0) }),
+                missingSelectedPhaseNames: phaseSelection.valid
+            )
         }
 
         guard let giana = urls.first(where: {
             $0.lastPathComponent.lowercased().contains("great_giana_sisters")
             && $0.pathExtension.lowercased() == "g64"
         }) else {
-            return MilestoneLoadResult()
+            return MilestoneLoadResult(
+                phaseFilteredMilestoneCount: phaseSelection.valid.isEmpty ? nil : 0,
+                selectedPhaseNames: phaseSelection.valid,
+                invalidSelectedPhaseNames: phaseSelection.invalid,
+                selectedPhaseCounts: Dictionary(uniqueKeysWithValues: phaseSelection.valid.map { ($0, 0) }),
+                missingSelectedPhaseNames: phaseSelection.valid
+            )
         }
 
+        let fallbackPhaseCounts = phaseSelection.valid.isEmpty
+            ? [:]
+            : [MilestoneRoadmapPhase.phase4DriveMedia: 1]
+        let fallbackMilestones = Self.limitedMilestones([
+            LocalMilestone(
+                url: giana,
+                mediaType: .g64,
+                machineProfile: .palC64,
+                driveMode: .compat1541,
+                commands: [#"LOAD"*",8,1"#],
+                maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
+                pcRanges: [],
+                minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
+                minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
+                driveStatus: nil,
+                mediaStatus: nil,
+                ramSignatures: [],
+                colorRAMSignatures: [],
+                cpuRegisters: nil,
+                sidModel: nil,
+                sidRegisters: [],
+                sidVoiceStates: [],
+                vicRegisters: [],
+                cia1Registers: [],
+                cia2Registers: [],
+                screenTextContains: [],
+                screenRAMHash: nil,
+                colorRAMHash: nil,
+                screenshotName: nil,
+                roadmapPhase: MilestoneRoadmapPhase.phase4DriveMedia,
+                expectedFailure: nil
+            )
+        ], limit: localMilestoneLimit)
         return MilestoneLoadResult(
-            milestones: [
-                LocalMilestone(
-                    url: giana,
-                    mediaType: .g64,
-                    machineProfile: .palC64,
-                    driveMode: .compat1541,
-                    commands: [#"LOAD"*",8,1"#],
-                    maxCycles: Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MAX_CYCLES"] ?? "") ?? 1_500_000,
-                    pcRanges: [],
-                    minGCRReads: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_GCR_READS"] ?? "") ?? 0),
-                    minByteReady: UInt64(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_MILESTONE_MIN_BYTE_READY"] ?? "") ?? 256),
-                    driveStatus: nil,
-                    mediaStatus: nil,
-                    ramSignatures: [],
-                    colorRAMSignatures: [],
-                    cpuRegisters: nil,
-                    sidModel: nil,
-                    sidRegisters: [],
-                    sidVoiceStates: [],
-                    vicRegisters: [],
-                    cia1Registers: [],
-                    cia2Registers: [],
-                    screenTextContains: [],
-                    screenRAMHash: nil,
-                    colorRAMHash: nil,
-                    screenshotName: nil,
-                    expectedFailure: nil
-                )
-            ]
+            milestones: fallbackMilestones,
+            postShardMilestoneCount: 1,
+            manifestPhaseCounts: [MilestoneRoadmapPhase.phase4DriveMedia: 1],
+            manifestMediaCounts: [CompatibilityMediaType.g64.rawValue: 1],
+            manifestMachineProfileCounts: [CompatibilityMachineProfile.palC64.rawValue: 1],
+            manifestDriveModeCounts: [CompatibilityDriveMode.compat1541.rawValue: 1],
+            manifestObservableTypeCounts: [MilestoneObservableType.drive: 1],
+            manifestActionTypeCounts: [MilestoneActionType.typeText: 1],
+            manifestUntaggedMilestoneCount: 0,
+            manifestUnnamedMilestoneCount: 0,
+            manifestExpectedFailureCount: 0,
+            manifestExpectedFailuresWithoutNotesCount: 0,
+            manifestExpectedFailuresWithoutReasonMarkersCount: 0,
+            manifestMilestonesWithoutMaxCyclesCount: 0,
+            manifestMilestonesWithoutExplicitActionsCount: 0,
+            manifestMilestonesWithoutObservableExpectationsCount: 0,
+            manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 0,
+            phaseFilteredMilestoneCount: phaseSelection.valid.isEmpty ? nil : 1,
+            selectedMediaCounts: Self.mediaCounts(for: fallbackMilestones),
+            selectedMachineProfileCounts: Self.machineProfileCounts(for: fallbackMilestones),
+            selectedDriveModeCounts: Self.driveModeCounts(for: fallbackMilestones),
+            selectedObservableTypeCounts: Self.observableTypeCounts(for: fallbackMilestones),
+            selectedActionTypeCounts: Self.actionTypeCounts(for: fallbackMilestones),
+            selectedPhaseNames: phaseSelection.valid,
+            invalidSelectedPhaseNames: phaseSelection.invalid,
+            selectedPhaseCounts: fallbackPhaseCounts,
+            missingSelectedPhaseNames: phaseSelection.valid.filter {
+                fallbackPhaseCounts[$0, default: 0] == 0
+            }
         )
     }
 
     private func loadManifestMilestones(urls: [URL]) throws -> MilestoneLoadResult {
         let manifestURL = localDiskRoot.appendingPathComponent("compatibility.json")
+        let idSelection = milestoneSelectedIDSelection
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            return MilestoneLoadResult()
+            return MilestoneLoadResult(
+                selectedMilestoneIDs: idSelection,
+                missingSelectedMilestoneIDs: idSelection
+            )
         }
 
         let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
-        let milestones = manifest.milestones.compactMap { entry -> LocalMilestone? in
+        let validationErrors = manifestMilestoneValidationErrors(manifest.milestones)
+        guard validationErrors.isEmpty else {
+            throw ManifestValidationError(errors: validationErrors)
+        }
+        let phaseSelection = milestoneSelectedPhaseSelection
+        let shardSelection = milestoneShardSelection
+        let manifestPhaseCounts = Self.phaseCounts(for: manifest.milestones)
+        let manifestMediaCounts = Self.mediaCounts(for: manifest.milestones)
+        let manifestMachineProfileCounts = Self.machineProfileCounts(for: manifest.milestones)
+        let manifestDriveModeCounts = Self.driveModeCounts(for: manifest.milestones)
+        let manifestSIDModelCounts = Self.sidModelCounts(for: manifest.milestones)
+        let manifestSIDAccuracyModeCounts = Self.sidAccuracyModeCounts(for: manifest.milestones)
+        let manifestObservableTypeCounts = Self.observableTypeCounts(for: manifest.milestones)
+        let manifestExpectedFailureCategoryCounts = Self.expectedFailureCategoryCounts(for: manifest.milestones)
+        let manifestActionTypeCounts = Self.actionTypeCounts(for: manifest.milestones)
+        let manifestUntaggedMilestoneCount = Self.untaggedPhaseCount(in: manifest.milestones)
+        let manifestUnnamedMilestoneCount = Self.unnamedMilestoneCount(in: manifest.milestones)
+        let manifestExpectedFailureCount = Self.expectedFailureCount(in: manifest.milestones)
+        let manifestExpectedFailuresWithoutNotesCount = Self.expectedFailuresWithoutNotesCount(in: manifest.milestones)
+        let manifestExpectedFailuresWithoutReasonMarkersCount = Self.expectedFailuresWithoutReasonMarkersCount(in: manifest.milestones)
+        let manifestMilestonesWithoutMaxCyclesCount = Self.milestonesWithoutMaxCyclesCount(in: manifest.milestones)
+        let manifestMilestonesWithoutExplicitActionsCount = Self.milestonesWithoutExplicitActionsCount(in: manifest.milestones)
+        let manifestMilestonesWithoutObservableExpectationsCount = Self.milestonesWithoutObservableExpectationsCount(in: manifest.milestones)
+        let manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = Self.framebufferHashMilestonesWithoutScreenshotNamesCount(in: manifest.milestones)
+        let phaseFilteredEntries = Self.phaseFilteredManifestEntries(
+            manifest.milestones,
+            selectedPhaseNames: phaseSelection.valid
+        )
+        let idFilteredEntries = Self.idFilteredManifestEntries(
+            phaseFilteredEntries,
+            selectedIDs: idSelection
+        )
+        let selectedEntries = Self.shardedManifestEntries(
+            idFilteredEntries,
+            shardSelection: shardSelection
+        )
+        let limitedSelectedEntries = Self.limitedManifestEntries(
+            selectedEntries,
+            limit: localMilestoneLimit
+        )
+        let selectedPhaseCounts = Self.phaseCounts(
+            for: phaseFilteredEntries,
+            selectedPhaseNames: phaseSelection.valid
+        )
+        let missingSelectedPhaseNames = phaseSelection.valid.filter {
+            selectedPhaseCounts[$0, default: 0] == 0
+        }
+        let availableSelectedIDs = Set(phaseFilteredEntries.compactMap { entry in
+            entry.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty })
+        let missingSelectedMilestoneIDs = idSelection.filter {
+            !availableSelectedIDs.contains($0)
+        }
+        let milestones = limitedSelectedEntries.compactMap { entry -> LocalMilestone? in
             guard let url = manifestMediaURL(for: entry, urls: urls) else {
                 return nil
             }
@@ -3418,6 +5519,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 colorRAMHash: entry.colorRAMHash,
                 framebufferHash: entry.framebufferHash,
                 screenshotName: entry.screenshotName,
+                roadmapPhase: entry.roadmapPhase?.rawValue,
                 expectedFailure: entry.expectedFailure
             )
             milestone.id = entry.id
@@ -3428,11 +5530,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             milestone.speedZoneRanges = entry.speedZoneRanges
             return milestone
         }
-        let validationErrors = manifestMilestoneValidationErrors(milestones)
-        guard validationErrors.isEmpty else {
-            throw ManifestValidationError(errors: validationErrors)
-        }
-        let missingMediaFiles = missingManifestMediaFiles(manifest.milestones, urls: urls)
+        let missingMediaFiles = missingManifestMediaFiles(limitedSelectedEntries, urls: urls)
         if shouldRequireAllMilestoneMedia && !missingMediaFiles.isEmpty {
             throw ManifestValidationError(errors: [
                 "missing manifest media files: \(missingMediaFiles.joined(separator: ", "))"
@@ -3441,12 +5539,479 @@ final class LocalDiskMatrixTests: XCTestCase {
         return MilestoneLoadResult(
             milestones: milestones,
             manifestMilestoneCount: manifest.milestones.count,
-            missingMediaFiles: missingMediaFiles
+            milestoneShardIndex: shardSelection.index,
+            milestoneShardCount: shardSelection.count,
+            preShardMilestoneCount: idFilteredEntries.count,
+            postShardMilestoneCount: selectedEntries.count,
+            invalidShardConfiguration: shardSelection.invalidReason,
+            manifestPhaseCounts: manifestPhaseCounts,
+            manifestMediaCounts: manifestMediaCounts,
+            manifestMachineProfileCounts: manifestMachineProfileCounts,
+            manifestDriveModeCounts: manifestDriveModeCounts,
+            manifestSIDModelCounts: manifestSIDModelCounts,
+            manifestSIDAccuracyModeCounts: manifestSIDAccuracyModeCounts,
+            manifestObservableTypeCounts: manifestObservableTypeCounts,
+            manifestExpectedFailureCategoryCounts: manifestExpectedFailureCategoryCounts,
+            manifestActionTypeCounts: manifestActionTypeCounts,
+            manifestUntaggedMilestoneCount: manifestUntaggedMilestoneCount,
+            manifestUnnamedMilestoneCount: manifestUnnamedMilestoneCount,
+            manifestExpectedFailureCount: manifestExpectedFailureCount,
+            manifestExpectedFailuresWithoutNotesCount: manifestExpectedFailuresWithoutNotesCount,
+            manifestExpectedFailuresWithoutReasonMarkersCount: manifestExpectedFailuresWithoutReasonMarkersCount,
+            manifestMilestonesWithoutMaxCyclesCount: manifestMilestonesWithoutMaxCyclesCount,
+            manifestMilestonesWithoutExplicitActionsCount: manifestMilestonesWithoutExplicitActionsCount,
+            manifestMilestonesWithoutObservableExpectationsCount: manifestMilestonesWithoutObservableExpectationsCount,
+            manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
+            phaseFilteredMilestoneCount: phaseFilteredEntries.count,
+            selectedMediaCounts: Self.mediaCounts(for: milestones),
+            selectedMachineProfileCounts: Self.machineProfileCounts(for: milestones),
+            selectedDriveModeCounts: Self.driveModeCounts(for: milestones),
+            selectedSIDModelCounts: Self.sidModelCounts(for: milestones),
+            selectedSIDAccuracyModeCounts: Self.sidAccuracyModeCounts(for: milestones),
+            selectedObservableTypeCounts: Self.observableTypeCounts(for: milestones),
+            selectedExpectedFailureCategoryCounts: Self.expectedFailureCategoryCounts(for: milestones),
+            selectedActionTypeCounts: Self.actionTypeCounts(for: milestones),
+            missingMediaFiles: missingMediaFiles,
+            selectedPhaseNames: phaseSelection.valid,
+            invalidSelectedPhaseNames: phaseSelection.invalid,
+            selectedPhaseCounts: selectedPhaseCounts,
+            missingSelectedPhaseNames: missingSelectedPhaseNames,
+            selectedMilestoneIDs: idSelection,
+            missingSelectedMilestoneIDs: missingSelectedMilestoneIDs
         )
     }
 
     private func manifestMediaURL(for entry: CompatibilityMilestone, urls: [URL]) -> URL? {
         urls.first { $0.lastPathComponent == entry.file || $0.path.contains(entry.file) }
+    }
+
+    private static func phaseFilteredManifestEntries(
+        _ entries: [CompatibilityMilestone],
+        selectedPhaseNames: [String]
+    ) -> [CompatibilityMilestone] {
+        guard !selectedPhaseNames.isEmpty else {
+            return entries
+        }
+        return entries.filter { entry in
+            guard let phase = entry.roadmapPhase?.rawValue else {
+                return false
+            }
+            return selectedPhaseNames.contains(phase)
+        }
+    }
+
+    private static func idFilteredManifestEntries(
+        _ entries: [CompatibilityMilestone],
+        selectedIDs: [String]
+    ) -> [CompatibilityMilestone] {
+        guard !selectedIDs.isEmpty else {
+            return entries
+        }
+        let selectedIDSet = Set(selectedIDs)
+        return entries.filter { entry in
+            guard let id = entry.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !id.isEmpty else {
+                return false
+            }
+            return selectedIDSet.contains(id)
+        }
+    }
+
+    private static func shardedManifestEntries(
+        _ entries: [CompatibilityMilestone],
+        shardSelection: MilestoneShardSelection
+    ) -> [CompatibilityMilestone] {
+        guard shardSelection.invalidReason == nil,
+              shardSelection.isActive,
+              let shardIndex = shardSelection.index,
+              let shardCount = shardSelection.count else {
+            return entries
+        }
+        return entries.enumerated().compactMap { offset, entry in
+            offset % shardCount == shardIndex ? entry : nil
+        }
+    }
+
+    private static func limitedManifestEntries(
+        _ entries: [CompatibilityMilestone],
+        limit: Int?
+    ) -> [CompatibilityMilestone] {
+        guard let limit else {
+            return entries
+        }
+        return Array(entries.prefix(max(0, limit)))
+    }
+
+    private static func limitedMilestones(
+        _ milestones: [LocalMilestone],
+        limit: Int?
+    ) -> [LocalMilestone] {
+        guard let limit else {
+            return milestones
+        }
+        return Array(milestones.prefix(max(0, limit)))
+    }
+
+    private static func phaseCounts(
+        for entries: [CompatibilityMilestone],
+        selectedPhaseNames: [String] = []
+    ) -> [String: Int] {
+        var counts = Dictionary(uniqueKeysWithValues: selectedPhaseNames.map { ($0, 0) })
+        for entry in entries {
+            guard let phase = entry.roadmapPhase?.rawValue else {
+                continue
+            }
+            counts[phase, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func mediaCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            counts[mediaTypeName(for: entry), default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func mediaCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            counts[milestone.mediaType.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func machineProfileCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            let profileName = entry.machineProfile?.rawValue ?? CompatibilityMachineProfile.palC64.rawValue
+            counts[profileName, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func machineProfileCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            counts[milestone.machineProfile.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func driveModeCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            let driveModeName = entry.driveMode?.rawValue ?? CompatibilityDriveMode.compat1541.rawValue
+            counts[driveModeName, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func driveModeCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            counts[milestone.driveMode.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func sidModelCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            guard let sidModel = entry.sidModel else {
+                continue
+            }
+            counts[sidModel.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func sidModelCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            guard let sidModel = milestone.sidModel else {
+                continue
+            }
+            counts[sidModel.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func sidAccuracyModeCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            guard let sidAccuracyMode = entry.sidAccuracyMode else {
+                continue
+            }
+            counts[sidAccuracyMode.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func sidAccuracyModeCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            guard let sidAccuracyMode = milestone.sidAccuracyMode else {
+                continue
+            }
+            counts[sidAccuracyMode.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func observableTypeCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            for observableType in observableTypes(for: entry) {
+                counts[observableType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func observableTypeCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            for observableType in observableTypes(for: milestone) {
+                counts[observableType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func expectedFailureCategoryCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            guard let category = entry.expectedFailure?.category else {
+                continue
+            }
+            counts[category.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func expectedFailureCategoryCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            guard let category = milestone.expectedFailure?.category else {
+                continue
+            }
+            counts[category.rawValue, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func actionTypeCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            let actions = entry.actions.isEmpty
+                ? entry.commands.map { CompatibilityAction.typeText($0) }
+                : entry.actions
+            for actionType in Set(actions.map(actionTypeName(for:))) {
+                counts[actionType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func actionTypeCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            for actionType in Set(milestone.scheduledActions.map(actionTypeName(for:))) {
+                counts[actionType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func actionTypeName(for action: CompatibilityAction) -> String {
+        switch action {
+        case .typeText:
+            return MilestoneActionType.typeText
+        case .waitCycles:
+            return MilestoneActionType.waitCycles
+        case .joystickDown:
+            return MilestoneActionType.joystickDown
+        case .joystickUp:
+            return MilestoneActionType.joystickUp
+        case .keyDown:
+            return MilestoneActionType.keyDown
+        case .keyUp:
+            return MilestoneActionType.keyUp
+        case .startTape:
+            return MilestoneActionType.startTape
+        case .stopTape:
+            return MilestoneActionType.stopTape
+        }
+    }
+
+    private static func observableTypes(for entry: CompatibilityMilestone) -> [String] {
+        var types: [String] = []
+        if !entry.expectedPCRanges.isEmpty {
+            types.append(MilestoneObservableType.pc)
+        }
+        if entry.minGCRReads != nil || entry.minByteReady != nil || entry.driveStatus != nil {
+            types.append(MilestoneObservableType.drive)
+        }
+        if entry.mediaStatus != nil || !entry.weakBitRanges.isEmpty || !entry.speedZoneRanges.isEmpty {
+            types.append(MilestoneObservableType.media)
+        }
+        if !entry.lowLevelTracks.isEmpty {
+            types.append(MilestoneObservableType.lowLevelTrack)
+        }
+        if entry.tapeStatus != nil {
+            types.append(MilestoneObservableType.tape)
+        }
+        if !entry.ramSignatures.isEmpty {
+            types.append(MilestoneObservableType.ram)
+        }
+        if !entry.colorRAMSignatures.isEmpty || entry.colorRAMHash != nil {
+            types.append(MilestoneObservableType.colorRAM)
+        }
+        if entry.cpuRegisters != nil {
+            types.append(MilestoneObservableType.cpu)
+        }
+        if !entry.sidRegisters.isEmpty
+            || entry.sidAudioSignature != nil
+            || entry.sidAudioState != nil
+            || !entry.sidVoiceStates.isEmpty {
+            types.append(MilestoneObservableType.sid)
+        }
+        if !entry.vicRegisters.isEmpty {
+            types.append(MilestoneObservableType.vic)
+        }
+        if !entry.cia1Registers.isEmpty || !entry.cia2Registers.isEmpty {
+            types.append(MilestoneObservableType.cia)
+        }
+        if !entry.screenTextContains.isEmpty || entry.screenRAMHash != nil {
+            types.append(MilestoneObservableType.screen)
+        }
+        if entry.framebufferHash != nil {
+            types.append(MilestoneObservableType.framebuffer)
+        }
+        return types
+    }
+
+    private static func observableTypes(for milestone: LocalMilestone) -> [String] {
+        var types: [String] = []
+        if !milestone.pcRanges.isEmpty {
+            types.append(MilestoneObservableType.pc)
+        }
+        if milestone.minGCRReads > 0 || milestone.minByteReady > 0 || milestone.driveStatus != nil {
+            types.append(MilestoneObservableType.drive)
+        }
+        if milestone.mediaStatus != nil || !milestone.weakBitRanges.isEmpty || !milestone.speedZoneRanges.isEmpty {
+            types.append(MilestoneObservableType.media)
+        }
+        if !milestone.lowLevelTracks.isEmpty {
+            types.append(MilestoneObservableType.lowLevelTrack)
+        }
+        if milestone.tapeStatus != nil {
+            types.append(MilestoneObservableType.tape)
+        }
+        if !milestone.ramSignatures.isEmpty {
+            types.append(MilestoneObservableType.ram)
+        }
+        if !milestone.colorRAMSignatures.isEmpty || milestone.colorRAMHash != nil {
+            types.append(MilestoneObservableType.colorRAM)
+        }
+        if milestone.cpuRegisters != nil {
+            types.append(MilestoneObservableType.cpu)
+        }
+        if !milestone.sidRegisters.isEmpty
+            || milestone.sidAudioSignature != nil
+            || milestone.sidAudioState != nil
+            || !milestone.sidVoiceStates.isEmpty {
+            types.append(MilestoneObservableType.sid)
+        }
+        if !milestone.vicRegisters.isEmpty {
+            types.append(MilestoneObservableType.vic)
+        }
+        if !milestone.cia1Registers.isEmpty || !milestone.cia2Registers.isEmpty {
+            types.append(MilestoneObservableType.cia)
+        }
+        if !milestone.screenTextContains.isEmpty || milestone.screenRAMHash != nil {
+            types.append(MilestoneObservableType.screen)
+        }
+        if milestone.framebufferHash != nil {
+            types.append(MilestoneObservableType.framebuffer)
+        }
+        return types
+    }
+
+    private static func mediaTypeName(for entry: CompatibilityMilestone) -> String {
+        if let mediaType = entry.mediaType {
+            return mediaType.rawValue
+        }
+        switch URL(fileURLWithPath: entry.file).pathExtension.lowercased() {
+        case "prg": return CompatibilityMediaType.prg.rawValue
+        case "g64": return CompatibilityMediaType.g64.rawValue
+        case "nib": return CompatibilityMediaType.nib.rawValue
+        case "nbz": return CompatibilityMediaType.nbz.rawValue
+        case "p64": return CompatibilityMediaType.p64.rawValue
+        case "t64": return CompatibilityMediaType.t64.rawValue
+        case "tap": return CompatibilityMediaType.tap.rawValue
+        case "crt": return CompatibilityMediaType.crt.rawValue
+        default: return CompatibilityMediaType.d64.rawValue
+        }
+    }
+
+    private static func untaggedPhaseCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { $0.roadmapPhase == nil }.count
+    }
+
+    private static func unnamedMilestoneCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            entry.id?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }.count
+    }
+
+    private static func expectedFailureCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { $0.expectedFailure != nil }.count
+    }
+
+    private static func expectedFailuresWithoutNotesCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            guard let expectedFailure = entry.expectedFailure else {
+                return false
+            }
+            return expectedFailure.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }.count
+    }
+
+    private static func expectedFailuresWithoutReasonMarkersCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            guard let expectedFailure = entry.expectedFailure else {
+                return false
+            }
+            return !expectedFailure.reasonContains.contains {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }.count
+    }
+
+    private static func milestonesWithoutMaxCyclesCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { $0.maxCycles == nil }.count
+    }
+
+    private static func milestonesWithoutExplicitActionsCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { !$0.hasExplicitActions }.count
+    }
+
+    private static func milestonesWithoutObservableExpectationsCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { !hasObservableExpectation($0) }.count
+    }
+
+    private static func framebufferHashMilestonesWithoutScreenshotNamesCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            guard entry.framebufferHash != nil else { return false }
+            return entry.screenshotName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }.count
+    }
+
+    private static func hasObservableExpectation(_ entry: CompatibilityMilestone) -> Bool {
+        !observableTypes(for: entry).isEmpty
     }
 
     private func missingManifestMediaFiles(_ entries: [CompatibilityMilestone], urls: [URL]) -> [String] {
@@ -4762,6 +7327,7 @@ private struct MatrixRunResult {
             elapsedCycles: elapsedCycles,
             reason: reason,
             category: category.rawValue,
+            roadmapPhase: milestone.roadmapPhase ?? MilestoneRoadmapPhase.phaseName(forCategory: category.rawValue),
             finalPC: hex16(c64.cpu.pc),
             finalA: hex8(c64.cpu.a),
             finalX: hex8(c64.cpu.x),
@@ -4920,6 +7486,8 @@ private struct MatrixRunResult {
 private enum MilestoneResultCategory: String {
     case pass
     case cpu
+    case vic
+    case sid
     case drive
     case media
     case protectedMedia
@@ -4929,6 +7497,7 @@ private enum MilestoneResultCategory: String {
     case ram
     case screen
     case tape
+    // Legacy result names kept for decoding older JSONL/summary files.
     case video
     case audio
     case cia
@@ -4937,7 +7506,13 @@ private enum MilestoneResultCategory: String {
 
     static func classify(passed: Bool, reason: String) -> MilestoneResultCategory {
         guard !passed else { return .pass }
-        let lower = reason.lowercased()
+        let rawLower = reason.lowercased()
+        let lower: String
+        if let timeoutStateRange = rawLower.range(of: "; timeout state") {
+            lower = String(rawLower[..<timeoutStateRange.lowerBound])
+        } else {
+            lower = rawLower
+        }
         if lower.contains("cpu") || lower.contains("jam") || lower.contains("$ffff") {
             return .cpu
         }
@@ -4963,18 +7538,20 @@ private enum MilestoneResultCategory: String {
             || lower.contains("release bundle") {
             return .app
         }
-        if lower.contains("weakbit")
+        if lower.contains("drive.minweakbitreads")
+            || lower.contains("media.weakbit")
             || lower.contains("weak bit")
             || lower.contains("weak-bit")
             || lower.contains("variable speed")
             || lower.contains("variable-speed")
-            || lower.contains("variablespeed")
-            || lower.contains("speedzone")
+            || lower.contains("drive.minvariablespeedzonesamples")
+            || lower.contains("drive.requiredvariablespeedzones")
+            || lower.contains("media.variablespeedzone")
             || lower.contains("speed zone")
             || lower.contains("speed-zone")
-            || lower.contains("requiredvariablespeedzones")
-            || lower.contains("gcrwrite")
-            || lower.contains("gcr write")
+            || lower.contains("drive.mingcrwrites")
+            || lower.contains("drive.mingcrwritesplices")
+            || lower.contains("drive.mingcrwriteerasebits")
             || lower.contains("write head") {
             return .protectedMedia
         }
@@ -4997,11 +7574,23 @@ private enum MilestoneResultCategory: String {
             || lower.contains("color ram $") {
             return .screen
         }
-        if lower.contains("vic $") {
-            return .video
+        if lower.contains("vic $")
+            || lower.contains("vic.")
+            || lower.contains("raster")
+            || lower.contains("badline")
+            || lower.contains("bad line")
+            || lower.contains("sprite dma")
+            || lower.contains("border") {
+            return .vic
         }
-        if lower.contains("sid $") || lower.contains("sid audio") || lower.contains("sid voice") {
-            return .audio
+        if lower.contains("sid $")
+            || lower.contains("sid.")
+            || lower.contains("sid audio")
+            || lower.contains("sid voice")
+            || lower.contains("osc3")
+            || lower.contains("env3")
+            || lower.contains("filter cutoff") {
+            return .sid
         }
         if lower.contains("cia1 $") || lower.contains("cia2 $") {
             return .cia
@@ -5013,6 +7602,60 @@ private enum MilestoneResultCategory: String {
             return .timeout
         }
         return .emulator
+    }
+}
+
+private enum MilestoneRoadmapPhase {
+    static let passed = "passed"
+    static let skipped = "skipped"
+    static let phase2CPUMemoryBus = "phase2CPUMemoryBus"
+    static let phase3VICII = "phase3VICII"
+    static let phase4DriveMedia = "phase4DriveMedia"
+    static let phase5SID = "phase5SID"
+    static let phase6CIAInputTape = "phase6CIAInputTape"
+    static let phase7CartridgeExpansion = "phase7CartridgeExpansion"
+    static let phase8AppDistribution = "phase8AppDistribution"
+    static let unclassified = "unclassified"
+
+    static let gateablePhases: Set<String> = [
+        phase2CPUMemoryBus,
+        phase3VICII,
+        phase4DriveMedia,
+        phase5SID,
+        phase6CIAInputTape,
+        phase7CartridgeExpansion,
+        phase8AppDistribution,
+    ]
+
+    static func phaseName(forCategory category: String) -> String {
+        switch category {
+        case MilestoneResultCategory.pass.rawValue:
+            return passed
+        case MilestoneResultCategory.cpu.rawValue,
+             MilestoneResultCategory.pc.rawValue,
+             MilestoneResultCategory.ram.rawValue:
+            return phase2CPUMemoryBus
+        case MilestoneResultCategory.vic.rawValue,
+             MilestoneResultCategory.video.rawValue,
+             MilestoneResultCategory.screen.rawValue:
+            return phase3VICII
+        case MilestoneResultCategory.drive.rawValue,
+             MilestoneResultCategory.media.rawValue,
+             MilestoneResultCategory.protectedMedia.rawValue:
+            return phase4DriveMedia
+        case MilestoneResultCategory.sid.rawValue,
+             MilestoneResultCategory.audio.rawValue:
+            return phase5SID
+        case MilestoneResultCategory.cia.rawValue,
+             MilestoneResultCategory.tape.rawValue:
+            return phase6CIAInputTape
+        case MilestoneResultCategory.cartridge.rawValue:
+            return phase7CartridgeExpansion
+        case MilestoneResultCategory.app.rawValue:
+            return phase8AppDistribution
+        default:
+            return unclassified
+        }
     }
 }
 
@@ -5206,6 +7849,7 @@ private struct LocalMilestone {
     let colorRAMHash: String?
     var framebufferHash: String? = nil
     let screenshotName: String?
+    var roadmapPhase: String? = nil
     var expectedFailure: CompatibilityExpectedFailure? = nil
 
     var commandSummary: String {
@@ -5250,7 +7894,8 @@ private struct LocalMilestone {
             passed: false,
             elapsedCycles: 0,
             reason: reason,
-            category: "skipped"
+            category: "skipped",
+            roadmapPhase: roadmapPhase ?? MilestoneRoadmapPhase.skipped
         )
     }
 }
@@ -5258,7 +7903,62 @@ private struct LocalMilestone {
 private struct MilestoneLoadResult {
     var milestones: [LocalMilestone] = []
     var manifestMilestoneCount: Int? = nil
+    var milestoneShardIndex: Int? = nil
+    var milestoneShardCount: Int? = nil
+    var preShardMilestoneCount: Int? = nil
+    var postShardMilestoneCount: Int? = nil
+    var invalidShardConfiguration: String? = nil
+    var manifestPhaseCounts: [String: Int] = [:]
+    var manifestMediaCounts: [String: Int] = [:]
+    var manifestMachineProfileCounts: [String: Int] = [:]
+    var manifestDriveModeCounts: [String: Int] = [:]
+    var manifestSIDModelCounts: [String: Int] = [:]
+    var manifestSIDAccuracyModeCounts: [String: Int] = [:]
+    var manifestObservableTypeCounts: [String: Int] = [:]
+    var manifestExpectedFailureCategoryCounts: [String: Int] = [:]
+    var manifestActionTypeCounts: [String: Int] = [:]
+    var manifestUntaggedMilestoneCount: Int = 0
+    var manifestUnnamedMilestoneCount: Int = 0
+    var manifestExpectedFailureCount: Int = 0
+    var manifestExpectedFailuresWithoutNotesCount: Int = 0
+    var manifestExpectedFailuresWithoutReasonMarkersCount: Int = 0
+    var manifestMilestonesWithoutMaxCyclesCount: Int = 0
+    var manifestMilestonesWithoutExplicitActionsCount: Int = 0
+    var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
+    var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
+    var phaseFilteredMilestoneCount: Int? = nil
+    var selectedMediaCounts: [String: Int] = [:]
+    var selectedMachineProfileCounts: [String: Int] = [:]
+    var selectedDriveModeCounts: [String: Int] = [:]
+    var selectedSIDModelCounts: [String: Int] = [:]
+    var selectedSIDAccuracyModeCounts: [String: Int] = [:]
+    var selectedObservableTypeCounts: [String: Int] = [:]
+    var selectedExpectedFailureCategoryCounts: [String: Int] = [:]
+    var selectedActionTypeCounts: [String: Int] = [:]
     var missingMediaFiles: [String] = []
+    var selectedPhaseNames: [String] = []
+    var invalidSelectedPhaseNames: [String] = []
+    var selectedPhaseCounts: [String: Int] = [:]
+    var missingSelectedPhaseNames: [String] = []
+    var selectedMilestoneIDs: [String] = []
+    var missingSelectedMilestoneIDs: [String] = []
+}
+
+private struct MilestoneShardSelection {
+    var index: Int?
+    var count: Int?
+    var invalidReason: String?
+
+    init(index: Int? = nil, count: Int? = nil, invalidReason: String? = nil) {
+        self.index = index
+        self.count = count
+        self.invalidReason = invalidReason
+    }
+
+    var isActive: Bool {
+        guard let count else { return false }
+        return count > 1
+    }
 }
 
 private struct ManifestValidationError: Error, CustomStringConvertible, LocalizedError {
@@ -5273,30 +7973,47 @@ private struct ManifestValidationError: Error, CustomStringConvertible, Localize
     }
 }
 
-private func manifestMilestoneValidationErrors(_ milestones: [LocalMilestone]) -> [String] {
+private func manifestMilestoneValidationErrors(_ milestones: [CompatibilityMilestone]) -> [String] {
     var errors: [String] = []
-    var milestonesByID: [String: LocalMilestone] = [:]
-    var milestonesByKey: [MilestoneResultKey: LocalMilestone] = [:]
+    var milestonesByID: [String: CompatibilityMilestone] = [:]
+    var milestonesByKey: [MilestoneResultKey: CompatibilityMilestone] = [:]
 
     for milestone in milestones {
         if let id = milestone.id?.trimmingCharacters(in: .whitespacesAndNewlines),
            !id.isEmpty {
             if let previous = milestonesByID[id] {
-                errors.append("duplicate milestone id \(id) for \(previous.url.lastPathComponent) and \(milestone.url.lastPathComponent)")
+                errors.append("duplicate milestone id \(id) for \(previous.file) and \(milestone.file)")
             } else {
                 milestonesByID[id] = milestone
             }
         }
 
-        let key = milestone.resultKey
+        let key = milestoneResultKey(for: milestone)
         if let previous = milestonesByKey[key] {
-            errors.append("duplicate milestone key \(milestoneResultKeySummary(key)) for \(previous.url.lastPathComponent) and \(milestone.url.lastPathComponent)")
+            errors.append("duplicate milestone key \(milestoneResultKeySummary(key)) for \(previous.file) and \(milestone.file)")
         } else {
             milestonesByKey[key] = milestone
         }
     }
 
     return errors
+}
+
+private func milestoneResultKey(for milestone: CompatibilityMilestone) -> MilestoneResultKey {
+    MilestoneResultKey(
+        id: milestone.id,
+        file: URL(fileURLWithPath: milestone.file).lastPathComponent,
+        commandSummary: milestoneCommandSummary(milestone),
+        machineProfile: (milestone.machineProfile ?? .palC64).rawValue,
+        driveMode: (milestone.driveMode ?? .compat1541).rawValue
+    )
+}
+
+private func milestoneCommandSummary(_ milestone: CompatibilityMilestone) -> String {
+    if !milestone.commands.isEmpty {
+        return milestone.commands.joined(separator: " | ")
+    }
+    return milestone.actions.map(\.summary).joined(separator: " | ")
 }
 
 private func milestoneResultKeySummary(_ key: MilestoneResultKey) -> String {
@@ -5334,7 +8051,7 @@ private struct LowLevelTrackRecord: Codable, Equatable {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 30
+    static let currentFormatVersion = 31
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -5357,6 +8074,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let elapsedCycles: UInt64
     let reason: String
     let category: String?
+    let roadmapPhase: String?
     let finalPC: String?
     let finalA: String?
     let finalX: String?
@@ -5467,6 +8185,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         elapsedCycles: UInt64,
         reason: String,
         category: String? = nil,
+        roadmapPhase: String? = nil,
         finalPC: String? = nil,
         finalA: String? = nil,
         finalX: String? = nil,
@@ -5576,6 +8295,7 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.elapsedCycles = elapsedCycles
         self.reason = reason
         self.category = category
+        self.roadmapPhase = roadmapPhase
         self.finalPC = finalPC
         self.finalA = finalA
         self.finalX = finalX
@@ -5691,8 +8411,58 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
     let mismatches: [String]
 }
 
+private struct MilestonePhaseBreakdown: Codable, Equatable {
+    var total: Int
+    var passed: Int
+    var failed: Int
+    var skipped: Int
+    var expectedFailures: Int
+    var unexpectedFailures: Int
+    var expectedFailureDrift: Int
+    var unclassifiedFailures: Int
+
+    init(
+        total: Int = 0,
+        passed: Int = 0,
+        failed: Int = 0,
+        skipped: Int = 0,
+        expectedFailures: Int = 0,
+        unexpectedFailures: Int = 0,
+        expectedFailureDrift: Int = 0,
+        unclassifiedFailures: Int = 0
+    ) {
+        self.total = total
+        self.passed = passed
+        self.failed = failed
+        self.skipped = skipped
+        self.expectedFailures = expectedFailures
+        self.unexpectedFailures = unexpectedFailures
+        self.expectedFailureDrift = expectedFailureDrift
+        self.unclassifiedFailures = unclassifiedFailures
+    }
+}
+
+private enum MilestonePhaseOutcome {
+    static let passed = "passed"
+    static let skipped = "skipped"
+    static let expectedFailures = "expectedFailures"
+    static let expectedFailureDrift = "expectedFailureDrift"
+    static let unexpectedFailures = "unexpectedFailures"
+    static let unclassifiedFailures = "unclassifiedFailures"
+    static let failures = "failures"
+
+    static func isAcceptanceFailure(_ outcome: String) -> Bool {
+        switch outcome {
+        case expectedFailureDrift, unexpectedFailures, unclassifiedFailures, failures:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 private struct MilestoneRunSummary: Codable, Equatable {
-    var formatVersion: Int = 1
+    var formatVersion: Int = 33
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
     var runID: String?
@@ -5703,15 +8473,96 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var resumeEnabled: Bool = false
     var strictManifestResumeEnabled: Bool = false
     var screenshotFailuresEnabled: Bool = false
+    var screenshotsWrittenCount: Int = 0
+    var passedScreenshotCount: Int = 0
+    var failedScreenshotCount: Int = 0
     var milestoneLimit: Int?
+    var milestoneShardIndex: Int?
+    var milestoneShardCount: Int?
+    var preShardMilestoneCount: Int?
+    var postShardMilestoneCount: Int?
+    var manifestValidationErrors: [String] = []
+    var invalidShardConfiguration: String?
     var manifestMilestoneCount: Int?
+    var manifestPhaseCounts: [String: Int] = [:]
+    var manifestMediaCounts: [String: Int] = [:]
+    var manifestMachineProfileCounts: [String: Int] = [:]
+    var manifestDriveModeCounts: [String: Int] = [:]
+    var manifestSIDModelCounts: [String: Int] = [:]
+    var manifestSIDAccuracyModeCounts: [String: Int] = [:]
+    var manifestObservableTypeCounts: [String: Int] = [:]
+    var manifestExpectedFailureCategoryCounts: [String: Int] = [:]
+    var manifestActionTypeCounts: [String: Int] = [:]
+    var manifestUntaggedMilestoneCount: Int = 0
+    var manifestUnnamedMilestoneCount: Int = 0
+    var manifestExpectedFailureCount: Int = 0
+    var manifestExpectedFailuresWithoutNotesCount: Int = 0
+    var manifestExpectedFailuresWithoutReasonMarkersCount: Int = 0
+    var manifestMilestonesWithoutMaxCyclesCount: Int = 0
+    var manifestMilestonesWithoutExplicitActionsCount: Int = 0
+    var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
+    var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
+    var phaseFilteredMilestoneCount: Int?
     var selectedMilestoneCount: Int?
+    var selectedMilestoneKeys: [MilestoneResultKey] = []
+    var selectedMediaCounts: [String: Int] = [:]
+    var selectedMachineProfileCounts: [String: Int] = [:]
+    var selectedDriveModeCounts: [String: Int] = [:]
+    var selectedSIDModelCounts: [String: Int] = [:]
+    var selectedSIDAccuracyModeCounts: [String: Int] = [:]
+    var selectedObservableTypeCounts: [String: Int] = [:]
+    var selectedExpectedFailureCategoryCounts: [String: Int] = [:]
+    var selectedActionTypeCounts: [String: Int] = [:]
     var missingMediaFiles: [String] = []
     var requireAllManifestMedia: Bool = false
+    var requiredManifestMediaTypes: [String] = []
+    var invalidRequiredManifestMediaTypes: [String] = []
+    var missingRequiredManifestMediaTypes: [String] = []
+    var requiredManifestMachineProfiles: [String] = []
+    var invalidRequiredManifestMachineProfiles: [String] = []
+    var missingRequiredManifestMachineProfiles: [String] = []
+    var requiredManifestDriveModes: [String] = []
+    var invalidRequiredManifestDriveModes: [String] = []
+    var missingRequiredManifestDriveModes: [String] = []
+    var requiredManifestSIDModels: [String] = []
+    var invalidRequiredManifestSIDModels: [String] = []
+    var missingRequiredManifestSIDModels: [String] = []
+    var requiredManifestSIDAccuracyModes: [String] = []
+    var invalidRequiredManifestSIDAccuracyModes: [String] = []
+    var missingRequiredManifestSIDAccuracyModes: [String] = []
+    var requiredManifestObservableTypes: [String] = []
+    var invalidRequiredManifestObservableTypes: [String] = []
+    var missingRequiredManifestObservableTypes: [String] = []
+    var requiredManifestFailureCategories: [String] = []
+    var invalidRequiredManifestFailureCategories: [String] = []
+    var missingRequiredManifestFailureCategories: [String] = []
+    var requiredManifestActionTypes: [String] = []
+    var invalidRequiredManifestActionTypes: [String] = []
+    var missingRequiredManifestActionTypes: [String] = []
+    var selectedPhaseNames: [String] = []
+    var invalidSelectedPhaseNames: [String] = []
+    var selectedPhaseCounts: [String: Int] = [:]
+    var missingSelectedPhaseNames: [String] = []
+    var selectedMilestoneIDs: [String] = []
+    var missingSelectedMilestoneIDs: [String] = []
+    var requireSelectedPhases: Bool = false
+    var requireSelectedMilestoneIDs: Bool = false
+    var requireManifest: Bool = false
+    var requireTaggedManifestPhases: Bool = false
+    var requireManifestMilestoneIDs: Bool = false
+    var requireExpectedFailureNotes: Bool = false
+    var requireExpectedFailureReasonMarkers: Bool = false
+    var requireExplicitMaxCycles: Bool = false
+    var requireExplicitActions: Bool = false
+    var requireObservableExpectations: Bool = false
+    var requireFramebufferScreenshots: Bool = false
     var failOnUnclassified: Bool = false
     var failOnUnexpected: Bool = false
+    var failPhaseNames: [String] = []
+    var invalidFailPhaseNames: [String] = []
     var outcome: String?
     var acceptanceFailures: [String]?
+    var phaseAcceptanceFailures: [String] = []
     var total: Int = 0
     var executed: Int = 0
     var passed: Int = 0
@@ -5725,6 +8576,11 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var maxElapsedCycles: UInt64 = 0
     var slowestMilestone: MilestoneResultKey?
     var categories: [String: Int] = [:]
+    var phaseCounts: [String: Int] = [:]
+    var phaseBreakdown: [String: MilestonePhaseBreakdown] = [:]
+    var phaseOutcomes: [String: String] = [:]
+    var phaseFailureDetails: [String: [MilestoneFailureSummary]] = [:]
+    var phaseExpectedFailureDriftDetails: [String: [MilestoneExpectedFailureDriftSummary]] = [:]
     var failedMilestones: [MilestoneResultKey] = []
     var failedMilestoneDetails: [MilestoneFailureSummary] = []
     var expectedFailureDetails: [MilestoneFailureSummary] = []
@@ -5743,12 +8599,81 @@ private struct MilestoneRunSummary: Codable, Equatable {
         strictManifestResumeEnabled: Bool,
         screenshotFailuresEnabled: Bool,
         milestoneLimit: Int?,
+        milestoneShardIndex: Int? = nil,
+        milestoneShardCount: Int? = nil,
+        preShardMilestoneCount: Int? = nil,
+        postShardMilestoneCount: Int? = nil,
+        manifestValidationErrors: [String] = [],
+        invalidShardConfiguration: String? = nil,
         manifestMilestoneCount: Int?,
+        manifestPhaseCounts: [String: Int] = [:],
+        manifestMediaCounts: [String: Int] = [:],
+        manifestMachineProfileCounts: [String: Int] = [:],
+        manifestDriveModeCounts: [String: Int] = [:],
+        manifestSIDModelCounts: [String: Int] = [:],
+        manifestSIDAccuracyModeCounts: [String: Int] = [:],
+        manifestObservableTypeCounts: [String: Int] = [:],
+        manifestExpectedFailureCategoryCounts: [String: Int] = [:],
+        manifestActionTypeCounts: [String: Int] = [:],
+        manifestUntaggedMilestoneCount: Int = 0,
+        manifestUnnamedMilestoneCount: Int = 0,
+        manifestExpectedFailureCount: Int = 0,
+        manifestExpectedFailuresWithoutNotesCount: Int = 0,
+        manifestExpectedFailuresWithoutReasonMarkersCount: Int = 0,
+        manifestMilestonesWithoutMaxCyclesCount: Int = 0,
+        manifestMilestonesWithoutExplicitActionsCount: Int = 0,
+        manifestMilestonesWithoutObservableExpectationsCount: Int = 0,
+        manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0,
+        phaseFilteredMilestoneCount: Int? = nil,
         selectedMilestoneCount: Int?,
+        selectedMilestoneKeys: [MilestoneResultKey] = [],
+        selectedMediaCounts: [String: Int] = [:],
+        selectedMachineProfileCounts: [String: Int] = [:],
+        selectedDriveModeCounts: [String: Int] = [:],
+        selectedSIDModelCounts: [String: Int] = [:],
+        selectedSIDAccuracyModeCounts: [String: Int] = [:],
+        selectedObservableTypeCounts: [String: Int] = [:],
+        selectedExpectedFailureCategoryCounts: [String: Int] = [:],
+        selectedActionTypeCounts: [String: Int] = [:],
         missingMediaFiles: [String],
         requireAllManifestMedia: Bool,
+        requiredManifestMediaTypes: [String] = [],
+        invalidRequiredManifestMediaTypes: [String] = [],
+        requiredManifestMachineProfiles: [String] = [],
+        invalidRequiredManifestMachineProfiles: [String] = [],
+        requiredManifestDriveModes: [String] = [],
+        invalidRequiredManifestDriveModes: [String] = [],
+        requiredManifestSIDModels: [String] = [],
+        invalidRequiredManifestSIDModels: [String] = [],
+        requiredManifestSIDAccuracyModes: [String] = [],
+        invalidRequiredManifestSIDAccuracyModes: [String] = [],
+        requiredManifestObservableTypes: [String] = [],
+        invalidRequiredManifestObservableTypes: [String] = [],
+        requiredManifestFailureCategories: [String] = [],
+        invalidRequiredManifestFailureCategories: [String] = [],
+        requiredManifestActionTypes: [String] = [],
+        invalidRequiredManifestActionTypes: [String] = [],
+        selectedPhaseNames: [String] = [],
+        invalidSelectedPhaseNames: [String] = [],
+        selectedPhaseCounts: [String: Int] = [:],
+        missingSelectedPhaseNames: [String] = [],
+        selectedMilestoneIDs: [String] = [],
+        missingSelectedMilestoneIDs: [String] = [],
+        requireSelectedPhases: Bool = false,
+        requireSelectedMilestoneIDs: Bool = false,
+        requireManifest: Bool = false,
+        requireTaggedManifestPhases: Bool = false,
+        requireManifestMilestoneIDs: Bool = false,
+        requireExpectedFailureNotes: Bool = false,
+        requireExpectedFailureReasonMarkers: Bool = false,
+        requireExplicitMaxCycles: Bool = false,
+        requireExplicitActions: Bool = false,
+        requireObservableExpectations: Bool = false,
+        requireFramebufferScreenshots: Bool = false,
         failOnUnclassified: Bool,
-        failOnUnexpected: Bool
+        failOnUnexpected: Bool,
+        failPhaseNames: [String] = [],
+        invalidFailPhaseNames: [String] = []
     ) {
         resultRecordFormatVersion = MilestoneResultRecord.currentFormatVersion
         self.runID = runID
@@ -5760,12 +8685,105 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.strictManifestResumeEnabled = strictManifestResumeEnabled
         self.screenshotFailuresEnabled = screenshotFailuresEnabled
         self.milestoneLimit = milestoneLimit
+        self.milestoneShardIndex = milestoneShardIndex
+        self.milestoneShardCount = milestoneShardCount
+        self.preShardMilestoneCount = preShardMilestoneCount
+        self.postShardMilestoneCount = postShardMilestoneCount
+        self.manifestValidationErrors = manifestValidationErrors
+        self.invalidShardConfiguration = invalidShardConfiguration
         self.manifestMilestoneCount = manifestMilestoneCount
+        self.manifestPhaseCounts = manifestPhaseCounts
+        self.manifestMediaCounts = manifestMediaCounts
+        self.manifestMachineProfileCounts = manifestMachineProfileCounts
+        self.manifestDriveModeCounts = manifestDriveModeCounts
+        self.manifestSIDModelCounts = manifestSIDModelCounts
+        self.manifestSIDAccuracyModeCounts = manifestSIDAccuracyModeCounts
+        self.manifestObservableTypeCounts = manifestObservableTypeCounts
+        self.manifestExpectedFailureCategoryCounts = manifestExpectedFailureCategoryCounts
+        self.manifestActionTypeCounts = manifestActionTypeCounts
+        self.manifestUntaggedMilestoneCount = manifestUntaggedMilestoneCount
+        self.manifestUnnamedMilestoneCount = manifestUnnamedMilestoneCount
+        self.manifestExpectedFailureCount = manifestExpectedFailureCount
+        self.manifestExpectedFailuresWithoutNotesCount = manifestExpectedFailuresWithoutNotesCount
+        self.manifestExpectedFailuresWithoutReasonMarkersCount = manifestExpectedFailuresWithoutReasonMarkersCount
+        self.manifestMilestonesWithoutMaxCyclesCount = manifestMilestonesWithoutMaxCyclesCount
+        self.manifestMilestonesWithoutExplicitActionsCount = manifestMilestonesWithoutExplicitActionsCount
+        self.manifestMilestonesWithoutObservableExpectationsCount = manifestMilestonesWithoutObservableExpectationsCount
+        self.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = manifestFramebufferHashMilestonesWithoutScreenshotNamesCount
+        self.phaseFilteredMilestoneCount = phaseFilteredMilestoneCount
         self.selectedMilestoneCount = selectedMilestoneCount
+        self.selectedMilestoneKeys = selectedMilestoneKeys
+        self.selectedMediaCounts = selectedMediaCounts
+        self.selectedMachineProfileCounts = selectedMachineProfileCounts
+        self.selectedDriveModeCounts = selectedDriveModeCounts
+        self.selectedSIDModelCounts = selectedSIDModelCounts
+        self.selectedSIDAccuracyModeCounts = selectedSIDAccuracyModeCounts
+        self.selectedObservableTypeCounts = selectedObservableTypeCounts
+        self.selectedExpectedFailureCategoryCounts = selectedExpectedFailureCategoryCounts
+        self.selectedActionTypeCounts = selectedActionTypeCounts
         self.missingMediaFiles = missingMediaFiles
         self.requireAllManifestMedia = requireAllManifestMedia
+        self.requiredManifestMediaTypes = requiredManifestMediaTypes
+        self.invalidRequiredManifestMediaTypes = invalidRequiredManifestMediaTypes
+        missingRequiredManifestMediaTypes = requiredManifestMediaTypes.filter {
+            manifestMediaCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestMachineProfiles = requiredManifestMachineProfiles
+        self.invalidRequiredManifestMachineProfiles = invalidRequiredManifestMachineProfiles
+        missingRequiredManifestMachineProfiles = requiredManifestMachineProfiles.filter {
+            manifestMachineProfileCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestDriveModes = requiredManifestDriveModes
+        self.invalidRequiredManifestDriveModes = invalidRequiredManifestDriveModes
+        missingRequiredManifestDriveModes = requiredManifestDriveModes.filter {
+            manifestDriveModeCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestSIDModels = requiredManifestSIDModels
+        self.invalidRequiredManifestSIDModels = invalidRequiredManifestSIDModels
+        missingRequiredManifestSIDModels = requiredManifestSIDModels.filter {
+            manifestSIDModelCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestSIDAccuracyModes = requiredManifestSIDAccuracyModes
+        self.invalidRequiredManifestSIDAccuracyModes = invalidRequiredManifestSIDAccuracyModes
+        missingRequiredManifestSIDAccuracyModes = requiredManifestSIDAccuracyModes.filter {
+            manifestSIDAccuracyModeCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestObservableTypes = requiredManifestObservableTypes
+        self.invalidRequiredManifestObservableTypes = invalidRequiredManifestObservableTypes
+        missingRequiredManifestObservableTypes = requiredManifestObservableTypes.filter {
+            manifestObservableTypeCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestFailureCategories = requiredManifestFailureCategories
+        self.invalidRequiredManifestFailureCategories = invalidRequiredManifestFailureCategories
+        missingRequiredManifestFailureCategories = requiredManifestFailureCategories.filter {
+            manifestExpectedFailureCategoryCounts[$0, default: 0] == 0
+        }
+        self.requiredManifestActionTypes = requiredManifestActionTypes
+        self.invalidRequiredManifestActionTypes = invalidRequiredManifestActionTypes
+        missingRequiredManifestActionTypes = requiredManifestActionTypes.filter {
+            manifestActionTypeCounts[$0, default: 0] == 0
+        }
+        self.selectedPhaseNames = selectedPhaseNames
+        self.invalidSelectedPhaseNames = invalidSelectedPhaseNames
+        self.selectedPhaseCounts = selectedPhaseCounts
+        self.missingSelectedPhaseNames = missingSelectedPhaseNames
+        self.selectedMilestoneIDs = selectedMilestoneIDs
+        self.missingSelectedMilestoneIDs = missingSelectedMilestoneIDs
+        self.requireSelectedPhases = requireSelectedPhases
+        self.requireSelectedMilestoneIDs = requireSelectedMilestoneIDs
+        self.requireManifest = requireManifest
+        self.requireTaggedManifestPhases = requireTaggedManifestPhases
+        self.requireManifestMilestoneIDs = requireManifestMilestoneIDs
+        self.requireExpectedFailureNotes = requireExpectedFailureNotes
+        self.requireExpectedFailureReasonMarkers = requireExpectedFailureReasonMarkers
+        self.requireExplicitMaxCycles = requireExplicitMaxCycles
+        self.requireExplicitActions = requireExplicitActions
+        self.requireObservableExpectations = requireObservableExpectations
+        self.requireFramebufferScreenshots = requireFramebufferScreenshots
         self.failOnUnclassified = failOnUnclassified
         self.failOnUnexpected = failOnUnexpected
+        self.failPhaseNames = failPhaseNames
+        self.invalidFailPhaseNames = invalidFailPhaseNames
     }
 
     mutating func record(_ record: MilestoneResultRecord) {
@@ -5777,6 +8795,15 @@ private struct MilestoneRunSummary: Codable, Equatable {
             slowestMilestone = record.key
         }
         let category = record.category ?? "unknown"
+        let roadmapPhase = record.roadmapPhase ?? MilestoneRoadmapPhase.phaseName(forCategory: category)
+        if record.screenshotPath != nil {
+            screenshotsWrittenCount += 1
+            if record.passed {
+                passedScreenshotCount += 1
+            } else {
+                failedScreenshotCount += 1
+            }
+        }
         if record.passed {
             passed += 1
         } else {
@@ -5787,6 +8814,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
                 reason: record.reason,
                 elapsedCycles: record.elapsedCycles
             )
+            phaseFailureDetails[roadmapPhase, default: []].append(failureSummary)
             if record.expectedFailureMatched == true {
                 expectedFailures += 1
                 expectedFailureDetails.append(failureSummary)
@@ -5797,13 +8825,15 @@ private struct MilestoneRunSummary: Codable, Equatable {
             if let mismatches = record.expectedFailureMismatches,
                !mismatches.isEmpty {
                 expectedFailureDriftCount += 1
-                expectedFailureDriftDetails.append(MilestoneExpectedFailureDriftSummary(
+                let driftSummary = MilestoneExpectedFailureDriftSummary(
                     key: record.key,
                     category: category,
                     reason: record.reason,
                     elapsedCycles: record.elapsedCycles,
                     mismatches: mismatches
-                ))
+                )
+                expectedFailureDriftDetails.append(driftSummary)
+                phaseExpectedFailureDriftDetails[roadmapPhase, default: []].append(driftSummary)
             }
             failedMilestones.append(record.key)
             failedMilestoneDetails.append(failureSummary)
@@ -5814,21 +8844,153 @@ private struct MilestoneRunSummary: Codable, Equatable {
             }
         }
         categories[category, default: 0] += 1
+        phaseCounts[roadmapPhase, default: 0] += 1
+        var breakdown = phaseBreakdown[roadmapPhase] ?? MilestonePhaseBreakdown()
+        breakdown.total += 1
+        if record.passed {
+            breakdown.passed += 1
+        } else {
+            breakdown.failed += 1
+            if record.expectedFailureMatched == true {
+                breakdown.expectedFailures += 1
+            } else {
+                breakdown.unexpectedFailures += 1
+            }
+            if let mismatches = record.expectedFailureMismatches,
+               !mismatches.isEmpty {
+                breakdown.expectedFailureDrift += 1
+            }
+            if record.expectedFailureMatched != true
+                && (category == "unknown" || category == MilestoneResultCategory.emulator.rawValue) {
+                breakdown.unclassifiedFailures += 1
+            }
+        }
+        phaseBreakdown[roadmapPhase] = breakdown
     }
 
     mutating func recordSkipped(_ milestone: LocalMilestone) {
         total += 1
         skipped += 1
         skippedMilestones.append(milestone.resultKey)
+        let roadmapPhase = milestone.roadmapPhase ?? MilestoneRoadmapPhase.skipped
+        phaseCounts[roadmapPhase, default: 0] += 1
+        var breakdown = phaseBreakdown[roadmapPhase] ?? MilestonePhaseBreakdown()
+        breakdown.total += 1
+        breakdown.skipped += 1
+        phaseBreakdown[roadmapPhase] = breakdown
     }
 
     mutating func refreshDerivedFields() {
+        phaseOutcomes = phaseBreakdown.mapValues(Self.phaseOutcome(for:))
+        phaseAcceptanceFailures = failPhaseNames.compactMap { phaseName in
+            guard let outcome = phaseOutcomes[phaseName],
+                  MilestonePhaseOutcome.isAcceptanceFailure(outcome) else {
+                return nil
+            }
+            return "\(phaseName):\(outcome)"
+        }
         var gateFailures: [String] = []
         if failOnUnclassified && hasUnclassifiedFailures {
             gateFailures.append("unclassifiedFailures")
         }
         if failOnUnexpected && hasUnexpectedFailures {
             gateFailures.append("unexpectedFailures")
+        }
+        if !phaseAcceptanceFailures.isEmpty {
+            gateFailures.append(contentsOf: phaseAcceptanceFailures.map { "phase:\($0)" })
+        }
+        if !invalidFailPhaseNames.isEmpty {
+            gateFailures.append(contentsOf: invalidFailPhaseNames.map { "invalidPhase:\($0)" })
+        }
+        if !invalidSelectedPhaseNames.isEmpty {
+            gateFailures.append(contentsOf: invalidSelectedPhaseNames.map { "invalidSelectedPhase:\($0)" })
+        }
+        if let invalidShardConfiguration {
+            gateFailures.append(invalidShardConfiguration)
+        }
+        if !manifestValidationErrors.isEmpty {
+            gateFailures.append(contentsOf: manifestValidationErrors.map { "manifestValidation:\($0)" })
+        }
+        if !invalidRequiredManifestMediaTypes.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestMediaTypes.map { "invalidRequiredMediaType:\($0)" })
+        }
+        if !missingRequiredManifestMediaTypes.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestMediaTypes.map { "missingRequiredMediaType:\($0)" })
+        }
+        if !invalidRequiredManifestMachineProfiles.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestMachineProfiles.map { "invalidRequiredMachineProfile:\($0)" })
+        }
+        if !missingRequiredManifestMachineProfiles.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestMachineProfiles.map { "missingRequiredMachineProfile:\($0)" })
+        }
+        if !invalidRequiredManifestDriveModes.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestDriveModes.map { "invalidRequiredDriveMode:\($0)" })
+        }
+        if !missingRequiredManifestDriveModes.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestDriveModes.map { "missingRequiredDriveMode:\($0)" })
+        }
+        if !invalidRequiredManifestSIDModels.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestSIDModels.map { "invalidRequiredSIDModel:\($0)" })
+        }
+        if !missingRequiredManifestSIDModels.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestSIDModels.map { "missingRequiredSIDModel:\($0)" })
+        }
+        if !invalidRequiredManifestSIDAccuracyModes.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestSIDAccuracyModes.map { "invalidRequiredSIDAccuracyMode:\($0)" })
+        }
+        if !missingRequiredManifestSIDAccuracyModes.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestSIDAccuracyModes.map { "missingRequiredSIDAccuracyMode:\($0)" })
+        }
+        if !invalidRequiredManifestObservableTypes.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestObservableTypes.map { "invalidRequiredObservableType:\($0)" })
+        }
+        if !missingRequiredManifestObservableTypes.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestObservableTypes.map { "missingRequiredObservableType:\($0)" })
+        }
+        if !invalidRequiredManifestFailureCategories.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestFailureCategories.map { "invalidRequiredFailureCategory:\($0)" })
+        }
+        if !missingRequiredManifestFailureCategories.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestFailureCategories.map { "missingRequiredFailureCategory:\($0)" })
+        }
+        if !invalidRequiredManifestActionTypes.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestActionTypes.map { "invalidRequiredActionType:\($0)" })
+        }
+        if !missingRequiredManifestActionTypes.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestActionTypes.map { "missingRequiredActionType:\($0)" })
+        }
+        if requireSelectedPhases && !missingSelectedPhaseNames.isEmpty {
+            gateFailures.append(contentsOf: missingSelectedPhaseNames.map { "missingSelectedPhase:\($0)" })
+        }
+        if requireSelectedMilestoneIDs && !missingSelectedMilestoneIDs.isEmpty {
+            gateFailures.append(contentsOf: missingSelectedMilestoneIDs.map { "missingSelectedMilestoneID:\($0)" })
+        }
+        if requireManifest && manifestPath == nil {
+            gateFailures.append("missingManifest")
+        }
+        if requireTaggedManifestPhases && manifestUntaggedMilestoneCount > 0 {
+            gateFailures.append("untaggedManifestMilestones:\(manifestUntaggedMilestoneCount)")
+        }
+        if requireManifestMilestoneIDs && manifestUnnamedMilestoneCount > 0 {
+            gateFailures.append("unnamedManifestMilestones:\(manifestUnnamedMilestoneCount)")
+        }
+        if requireExpectedFailureNotes && manifestExpectedFailuresWithoutNotesCount > 0 {
+            gateFailures.append("expectedFailuresWithoutNotes:\(manifestExpectedFailuresWithoutNotesCount)")
+        }
+        if requireExpectedFailureReasonMarkers && manifestExpectedFailuresWithoutReasonMarkersCount > 0 {
+            gateFailures.append("expectedFailuresWithoutReasonMarkers:\(manifestExpectedFailuresWithoutReasonMarkersCount)")
+        }
+        if requireExplicitMaxCycles && manifestMilestonesWithoutMaxCyclesCount > 0 {
+            gateFailures.append("milestonesWithoutMaxCycles:\(manifestMilestonesWithoutMaxCyclesCount)")
+        }
+        if requireExplicitActions && manifestMilestonesWithoutExplicitActionsCount > 0 {
+            gateFailures.append("milestonesWithoutExplicitActions:\(manifestMilestonesWithoutExplicitActionsCount)")
+        }
+        if requireObservableExpectations && manifestMilestonesWithoutObservableExpectationsCount > 0 {
+            gateFailures.append("milestonesWithoutObservableExpectations:\(manifestMilestonesWithoutObservableExpectationsCount)")
+        }
+        if requireFramebufferScreenshots && manifestFramebufferHashMilestonesWithoutScreenshotNamesCount > 0 {
+            gateFailures.append("framebufferHashMilestonesWithoutScreenshotNames:\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount)")
         }
         acceptanceFailures = gateFailures
 
@@ -5845,15 +9007,146 @@ private struct MilestoneRunSummary: Codable, Equatable {
         }
     }
 
+    private static func phaseOutcome(for breakdown: MilestonePhaseBreakdown) -> String {
+        if breakdown.total == 0 {
+            return MilestonePhaseOutcome.skipped
+        }
+        if breakdown.unclassifiedFailures > 0 {
+            return MilestonePhaseOutcome.unclassifiedFailures
+        }
+        if breakdown.expectedFailureDrift > 0 {
+            return MilestonePhaseOutcome.expectedFailureDrift
+        }
+        if breakdown.unexpectedFailures > 0 {
+            return MilestonePhaseOutcome.unexpectedFailures
+        }
+        if breakdown.failed > 0 {
+            if breakdown.expectedFailures == breakdown.failed {
+                return MilestonePhaseOutcome.expectedFailures
+            }
+            return MilestonePhaseOutcome.failures
+        }
+        if breakdown.skipped == breakdown.total {
+            return MilestonePhaseOutcome.skipped
+        }
+        return MilestonePhaseOutcome.passed
+    }
+
     var consoleSummary: String {
         let categorySummary = categories
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let categoryText = categorySummary.isEmpty ? "none" : categorySummary
+        let phaseSummary = phaseCounts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " ")
+        let phaseText = phaseSummary.isEmpty ? "none" : phaseSummary
+        let phaseAcceptanceSummary = phaseAcceptanceFailures
+            .map { "phase:\($0)" }
+            + invalidFailPhaseNames.map { "invalid:\($0)" }
+            + invalidSelectedPhaseNames.map { "invalidSelected:\($0)" }
+            + missingSelectedPhaseNames.map { "missingSelected:\($0)" }
+            + missingSelectedMilestoneIDs.map { "missingSelectedID:\($0)" }
+            + invalidRequiredManifestMediaTypes.map { "invalidRequiredMedia:\($0)" }
+            + missingRequiredManifestMediaTypes.map { "missingRequiredMedia:\($0)" }
+            + invalidRequiredManifestMachineProfiles.map { "invalidRequiredProfile:\($0)" }
+            + missingRequiredManifestMachineProfiles.map { "missingRequiredProfile:\($0)" }
+            + invalidRequiredManifestDriveModes.map { "invalidRequiredDrive:\($0)" }
+            + missingRequiredManifestDriveModes.map { "missingRequiredDrive:\($0)" }
+            + invalidRequiredManifestSIDModels.map { "invalidRequiredSIDModel:\($0)" }
+            + missingRequiredManifestSIDModels.map { "missingRequiredSIDModel:\($0)" }
+            + invalidRequiredManifestSIDAccuracyModes.map { "invalidRequiredSIDAccuracy:\($0)" }
+            + missingRequiredManifestSIDAccuracyModes.map { "missingRequiredSIDAccuracy:\($0)" }
+            + invalidRequiredManifestObservableTypes.map { "invalidRequiredObservable:\($0)" }
+            + missingRequiredManifestObservableTypes.map { "missingRequiredObservable:\($0)" }
+            + invalidRequiredManifestFailureCategories.map { "invalidRequiredFailureCategory:\($0)" }
+            + missingRequiredManifestFailureCategories.map { "missingRequiredFailureCategory:\($0)" }
+            + invalidRequiredManifestActionTypes.map { "invalidRequiredAction:\($0)" }
+            + missingRequiredManifestActionTypes.map { "missingRequiredAction:\($0)" }
+        let phaseAcceptanceText = phaseAcceptanceSummary.isEmpty
+            ? "none"
+            : phaseAcceptanceSummary.joined(separator: " ")
         let outcomeText = outcome ?? "unresolved"
         let selectedText = selectedMilestoneCount.map(String.init) ?? "unknown"
-        return "Summary total=\(total) selected=\(selectedText) executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)]"
+        let phaseFilteredText = phaseFilteredMilestoneCount.map(String.init) ?? "unknown"
+        let shardIndexText = milestoneShardIndex.map(String.init) ?? "none"
+        let shardCountText = milestoneShardCount.map(String.init) ?? "none"
+        let preShardText = preShardMilestoneCount.map(String.init) ?? "unknown"
+        let postShardText = postShardMilestoneCount.map(String.init) ?? "unknown"
+        let manifestValidationText = manifestValidationErrors.isEmpty
+            ? "none"
+            : manifestValidationErrors.joined(separator: " | ")
+        let invalidShardText = invalidShardConfiguration ?? "none"
+        let manifestPhaseCountText = manifestPhaseCounts.isEmpty
+            ? "none"
+            : manifestPhaseCounts
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: " ")
+        let manifestMediaCountText = Self.summaryCountText(manifestMediaCounts)
+        let selectedMediaCountText = Self.summaryCountText(selectedMediaCounts)
+        let manifestMachineProfileCountText = Self.summaryCountText(manifestMachineProfileCounts)
+        let selectedMachineProfileCountText = Self.summaryCountText(selectedMachineProfileCounts)
+        let manifestDriveModeCountText = Self.summaryCountText(manifestDriveModeCounts)
+        let selectedDriveModeCountText = Self.summaryCountText(selectedDriveModeCounts)
+        let manifestSIDModelCountText = Self.summaryCountText(manifestSIDModelCounts)
+        let selectedSIDModelCountText = Self.summaryCountText(selectedSIDModelCounts)
+        let manifestSIDAccuracyModeCountText = Self.summaryCountText(manifestSIDAccuracyModeCounts)
+        let selectedSIDAccuracyModeCountText = Self.summaryCountText(selectedSIDAccuracyModeCounts)
+        let manifestObservableTypeCountText = Self.summaryCountText(manifestObservableTypeCounts)
+        let selectedObservableTypeCountText = Self.summaryCountText(selectedObservableTypeCounts)
+        let manifestExpectedFailureCategoryCountText = Self.summaryCountText(manifestExpectedFailureCategoryCounts)
+        let selectedExpectedFailureCategoryCountText = Self.summaryCountText(selectedExpectedFailureCategoryCounts)
+        let manifestActionTypeCountText = Self.summaryCountText(manifestActionTypeCounts)
+        let selectedActionTypeCountText = Self.summaryCountText(selectedActionTypeCounts)
+        let requiredMediaText = requiredManifestMediaTypes.isEmpty ? "none" : requiredManifestMediaTypes.joined(separator: " ")
+        let invalidRequiredMediaText = invalidRequiredManifestMediaTypes.isEmpty ? "none" : invalidRequiredManifestMediaTypes.joined(separator: " ")
+        let missingRequiredMediaText = missingRequiredManifestMediaTypes.isEmpty ? "none" : missingRequiredManifestMediaTypes.joined(separator: " ")
+        let requiredProfileText = requiredManifestMachineProfiles.isEmpty ? "none" : requiredManifestMachineProfiles.joined(separator: " ")
+        let invalidRequiredProfileText = invalidRequiredManifestMachineProfiles.isEmpty ? "none" : invalidRequiredManifestMachineProfiles.joined(separator: " ")
+        let missingRequiredProfileText = missingRequiredManifestMachineProfiles.isEmpty ? "none" : missingRequiredManifestMachineProfiles.joined(separator: " ")
+        let requiredDriveText = requiredManifestDriveModes.isEmpty ? "none" : requiredManifestDriveModes.joined(separator: " ")
+        let invalidRequiredDriveText = invalidRequiredManifestDriveModes.isEmpty ? "none" : invalidRequiredManifestDriveModes.joined(separator: " ")
+        let missingRequiredDriveText = missingRequiredManifestDriveModes.isEmpty ? "none" : missingRequiredManifestDriveModes.joined(separator: " ")
+        let requiredSIDModelText = requiredManifestSIDModels.isEmpty ? "none" : requiredManifestSIDModels.joined(separator: " ")
+        let invalidRequiredSIDModelText = invalidRequiredManifestSIDModels.isEmpty ? "none" : invalidRequiredManifestSIDModels.joined(separator: " ")
+        let missingRequiredSIDModelText = missingRequiredManifestSIDModels.isEmpty ? "none" : missingRequiredManifestSIDModels.joined(separator: " ")
+        let requiredSIDAccuracyText = requiredManifestSIDAccuracyModes.isEmpty ? "none" : requiredManifestSIDAccuracyModes.joined(separator: " ")
+        let invalidRequiredSIDAccuracyText = invalidRequiredManifestSIDAccuracyModes.isEmpty ? "none" : invalidRequiredManifestSIDAccuracyModes.joined(separator: " ")
+        let missingRequiredSIDAccuracyText = missingRequiredManifestSIDAccuracyModes.isEmpty ? "none" : missingRequiredManifestSIDAccuracyModes.joined(separator: " ")
+        let requiredObservableText = requiredManifestObservableTypes.isEmpty ? "none" : requiredManifestObservableTypes.joined(separator: " ")
+        let invalidRequiredObservableText = invalidRequiredManifestObservableTypes.isEmpty ? "none" : invalidRequiredManifestObservableTypes.joined(separator: " ")
+        let missingRequiredObservableText = missingRequiredManifestObservableTypes.isEmpty ? "none" : missingRequiredManifestObservableTypes.joined(separator: " ")
+        let requiredFailureCategoryText = requiredManifestFailureCategories.isEmpty ? "none" : requiredManifestFailureCategories.joined(separator: " ")
+        let invalidRequiredFailureCategoryText = invalidRequiredManifestFailureCategories.isEmpty ? "none" : invalidRequiredManifestFailureCategories.joined(separator: " ")
+        let missingRequiredFailureCategoryText = missingRequiredManifestFailureCategories.isEmpty ? "none" : missingRequiredManifestFailureCategories.joined(separator: " ")
+        let requiredActionTypeText = requiredManifestActionTypes.isEmpty ? "none" : requiredManifestActionTypes.joined(separator: " ")
+        let invalidRequiredActionTypeText = invalidRequiredManifestActionTypes.isEmpty ? "none" : invalidRequiredManifestActionTypes.joined(separator: " ")
+        let missingRequiredActionTypeText = missingRequiredManifestActionTypes.isEmpty ? "none" : missingRequiredManifestActionTypes.joined(separator: " ")
+        let selectedPhaseText = selectedPhaseNames.isEmpty ? "none" : selectedPhaseNames.joined(separator: " ")
+        let invalidSelectedPhaseText = invalidSelectedPhaseNames.isEmpty ? "none" : invalidSelectedPhaseNames.joined(separator: " ")
+        let selectedPhaseCountText = selectedPhaseCounts.isEmpty
+            ? "none"
+            : selectedPhaseCounts
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: " ")
+        let missingSelectedPhaseText = missingSelectedPhaseNames.isEmpty ? "none" : missingSelectedPhaseNames.joined(separator: " ")
+        let selectedIDText = selectedMilestoneIDs.isEmpty ? "none" : selectedMilestoneIDs.joined(separator: " ")
+        let missingSelectedIDText = missingSelectedMilestoneIDs.isEmpty ? "none" : missingSelectedMilestoneIDs.joined(separator: " ")
+        return "Summary total=\(total) selected=\(selectedText) phaseFiltered=\(phaseFilteredText) preShard=\(preShardText) postShard=\(postShardText) shardIndex=\(shardIndexText) shardCount=\(shardCountText) invalidShard=[\(invalidShardText)] manifestValidation=[\(manifestValidationText)] manifestPhaseCounts=[\(manifestPhaseCountText)] manifestMediaCounts=[\(manifestMediaCountText)] selectedMediaCounts=[\(selectedMediaCountText)] manifestMachineProfiles=[\(manifestMachineProfileCountText)] selectedMachineProfiles=[\(selectedMachineProfileCountText)] manifestDriveModes=[\(manifestDriveModeCountText)] selectedDriveModes=[\(selectedDriveModeCountText)] manifestSIDModels=[\(manifestSIDModelCountText)] selectedSIDModels=[\(selectedSIDModelCountText)] manifestSIDAccuracyModes=[\(manifestSIDAccuracyModeCountText)] selectedSIDAccuracyModes=[\(selectedSIDAccuracyModeCountText)] manifestObservableTypes=[\(manifestObservableTypeCountText)] selectedObservableTypes=[\(selectedObservableTypeCountText)] manifestExpectedFailureCategories=[\(manifestExpectedFailureCategoryCountText)] selectedExpectedFailureCategories=[\(selectedExpectedFailureCategoryCountText)] manifestActionTypes=[\(manifestActionTypeCountText)] selectedActionTypes=[\(selectedActionTypeCountText)] requiredMedia=[\(requiredMediaText)] invalidRequiredMedia=[\(invalidRequiredMediaText)] missingRequiredMedia=[\(missingRequiredMediaText)] requiredProfiles=[\(requiredProfileText)] invalidRequiredProfiles=[\(invalidRequiredProfileText)] missingRequiredProfiles=[\(missingRequiredProfileText)] requiredDriveModes=[\(requiredDriveText)] invalidRequiredDriveModes=[\(invalidRequiredDriveText)] missingRequiredDriveModes=[\(missingRequiredDriveText)] requiredSIDModels=[\(requiredSIDModelText)] invalidRequiredSIDModels=[\(invalidRequiredSIDModelText)] missingRequiredSIDModels=[\(missingRequiredSIDModelText)] requiredSIDAccuracyModes=[\(requiredSIDAccuracyText)] invalidRequiredSIDAccuracyModes=[\(invalidRequiredSIDAccuracyText)] missingRequiredSIDAccuracyModes=[\(missingRequiredSIDAccuracyText)] requiredObservableTypes=[\(requiredObservableText)] invalidRequiredObservableTypes=[\(invalidRequiredObservableText)] missingRequiredObservableTypes=[\(missingRequiredObservableText)] requiredFailureCategories=[\(requiredFailureCategoryText)] invalidRequiredFailureCategories=[\(invalidRequiredFailureCategoryText)] missingRequiredFailureCategories=[\(missingRequiredFailureCategoryText)] requiredActionTypes=[\(requiredActionTypeText)] invalidRequiredActionTypes=[\(invalidRequiredActionTypeText)] missingRequiredActionTypes=[\(missingRequiredActionTypeText)] manifestUntagged=\(manifestUntaggedMilestoneCount) manifestUnnamed=\(manifestUnnamedMilestoneCount) manifestExpectedFailures=\(manifestExpectedFailureCount) expectedFailuresWithoutNotes=\(manifestExpectedFailuresWithoutNotesCount) expectedFailuresWithoutReasons=\(manifestExpectedFailuresWithoutReasonMarkersCount) screenshots=\(screenshotsWrittenCount) passedScreenshots=\(passedScreenshotCount) failedScreenshots=\(failedScreenshotCount) milestonesWithoutMaxCycles=\(manifestMilestonesWithoutMaxCyclesCount) milestonesWithoutExplicitActions=\(manifestMilestonesWithoutExplicitActionsCount) milestonesWithoutObservables=\(manifestMilestonesWithoutObservableExpectationsCount) framebufferProofsWithoutScreenshots=\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount) requireManifest=\(requireManifest) requireTaggedPhases=\(requireTaggedManifestPhases) requireIDs=\(requireManifestMilestoneIDs) requireExpectedFailureNotes=\(requireExpectedFailureNotes) requireExpectedFailureReasons=\(requireExpectedFailureReasonMarkers) requireMaxCycles=\(requireExplicitMaxCycles) requireActions=\(requireExplicitActions) requireObservables=\(requireObservableExpectations) requireFramebufferScreenshots=\(requireFramebufferScreenshots) selectedPhases=[\(selectedPhaseText)] selectedPhaseCounts=[\(selectedPhaseCountText)] invalidSelectedPhases=[\(invalidSelectedPhaseText)] missingSelectedPhases=[\(missingSelectedPhaseText)] selectedIDs=[\(selectedIDText)] missingSelectedIDs=[\(missingSelectedIDText)] executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)] phases=[\(phaseText)] phaseAcceptanceFailures=[\(phaseAcceptanceText)]"
+    }
+
+    private static func summaryCountText(_ counts: [String: Int]) -> String {
+        if counts.isEmpty {
+            return "none"
+        }
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " ")
     }
 
     var hasUnclassifiedFailures: Bool {
@@ -5895,6 +9188,54 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason) mismatches=\(detail.mismatches.joined(separator: "; "))"
         }
         return "Expected-failure drift (\(expectedFailureDriftCount)):\n" + details.joined(separator: "\n")
+    }
+
+    var phaseAcceptanceFailureSummary: String {
+        if phaseAcceptanceFailures.isEmpty
+            && invalidFailPhaseNames.isEmpty
+            && invalidSelectedPhaseNames.isEmpty
+            && missingSelectedPhaseNames.isEmpty
+            && invalidRequiredManifestMediaTypes.isEmpty
+            && missingRequiredManifestMediaTypes.isEmpty
+            && invalidRequiredManifestMachineProfiles.isEmpty
+            && missingRequiredManifestMachineProfiles.isEmpty
+            && invalidRequiredManifestDriveModes.isEmpty
+            && missingRequiredManifestDriveModes.isEmpty
+            && invalidRequiredManifestSIDModels.isEmpty
+            && missingRequiredManifestSIDModels.isEmpty
+            && invalidRequiredManifestSIDAccuracyModes.isEmpty
+            && missingRequiredManifestSIDAccuracyModes.isEmpty
+            && invalidRequiredManifestObservableTypes.isEmpty
+            && missingRequiredManifestObservableTypes.isEmpty
+            && invalidRequiredManifestFailureCategories.isEmpty
+            && missingRequiredManifestFailureCategories.isEmpty
+            && invalidRequiredManifestActionTypes.isEmpty
+            && missingRequiredManifestActionTypes.isEmpty
+            && missingSelectedMilestoneIDs.isEmpty {
+            return "No phase acceptance failures."
+        }
+        var parts = phaseAcceptanceFailures
+        parts.append(contentsOf: invalidFailPhaseNames.map { "invalid:\($0)" })
+        parts.append(contentsOf: invalidSelectedPhaseNames.map { "invalidSelected:\($0)" })
+        parts.append(contentsOf: missingSelectedPhaseNames.map { "missingSelected:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestMediaTypes.map { "invalidRequiredMedia:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestMediaTypes.map { "missingRequiredMedia:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestMachineProfiles.map { "invalidRequiredProfile:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestMachineProfiles.map { "missingRequiredProfile:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestDriveModes.map { "invalidRequiredDrive:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestDriveModes.map { "missingRequiredDrive:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestSIDModels.map { "invalidRequiredSIDModel:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestSIDModels.map { "missingRequiredSIDModel:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestSIDAccuracyModes.map { "invalidRequiredSIDAccuracy:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestSIDAccuracyModes.map { "missingRequiredSIDAccuracy:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestObservableTypes.map { "invalidRequiredObservable:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestObservableTypes.map { "missingRequiredObservable:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestFailureCategories.map { "invalidRequiredFailureCategory:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestFailureCategories.map { "missingRequiredFailureCategory:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestActionTypes.map { "invalidRequiredAction:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestActionTypes.map { "missingRequiredAction:\($0)" })
+        parts.append(contentsOf: missingSelectedMilestoneIDs.map { "missingSelectedID:\($0)" })
+        return "Phase acceptance failures: " + parts.joined(separator: ", ")
     }
 }
 
