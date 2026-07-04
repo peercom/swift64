@@ -1655,6 +1655,70 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(line[VIC.displayLeft - VIC.firstVisibleLine], background)
     }
 
+    func testSpritePixelsWrapAroundNineBitHorizontalCounter() {
+        let vic = VIC()
+        let background = ColorPalette.rgba[0]
+        let spriteColor = ColorPalette.rgba[1]
+        var line = [UInt32](repeating: background, count: VIC.screenWidth)
+
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteX[0] = 508
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
+
+        vic.renderSprites(&line, fbY: 0)
+
+        XCTAssertEqual(line[0], spriteColor)
+        XCTAssertEqual(line[3], spriteColor)
+        XCTAssertEqual(line[4], background)
+        XCTAssertEqual(line[VIC.screenWidth - 1], background)
+    }
+
+    func testExpandedSpritePixelsWrapAroundNineBitHorizontalCounter() {
+        let vic = VIC()
+        let background = ColorPalette.rgba[0]
+        let spriteColor = ColorPalette.rgba[1]
+        var line = [UInt32](repeating: background, count: VIC.screenWidth)
+
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteExpandX = 0x01
+        vic.spriteX[0] = 508
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0xF0, 0x00, 0x00]
+
+        vic.renderSprites(&line, fbY: 0)
+
+        XCTAssertEqual(line[0], spriteColor)
+        XCTAssertEqual(line[3], spriteColor)
+        XCTAssertEqual(line[4], background)
+        XCTAssertEqual(line[VIC.screenWidth - 1], background)
+    }
+
+    func testMulticolorSpritePixelsWrapAroundNineBitHorizontalCounter() {
+        let vic = VIC()
+        let background = ColorPalette.rgba[0]
+        var line = [UInt32](repeating: background, count: VIC.screenWidth)
+
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteMulticolor = 0x01
+        vic.spriteX[0] = 510
+        vic.spriteMulticolor0 = 0x02
+        vic.spriteColors[0] = 0x03
+        vic.spriteMulticolor1 = 0x04
+        vic.spriteLineData[0] = [0b01101100, 0x00, 0x00]
+
+        vic.renderSprites(&line, fbY: 0)
+
+        XCTAssertEqual(line[0], ColorPalette.rgba[3])
+        XCTAssertEqual(line[1], ColorPalette.rgba[3])
+        XCTAssertEqual(line[2], ColorPalette.rgba[4])
+        XCTAssertEqual(line[3], ColorPalette.rgba[4])
+        XCTAssertEqual(line[4], background)
+    }
+
     func testMulticolorSpriteUsesSharedAndIndividualColorsWithExpansion() {
         let vic = VIC()
         let background = ColorPalette.rgba[0]
@@ -1700,6 +1764,26 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[1])
         XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[5])
+    }
+
+    func testBeamSpriteTraceWrapsAroundNineBitHorizontalCounter() {
+        let vic = VIC()
+        let line = UInt16(VIC.firstVisibleLine)
+
+        vic.rasterLine = line
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteX[0] = 508
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
+
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        XCTAssertEqual(vic.framebuffer[0], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[3], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[4], ColorPalette.rgba[14])
     }
 
     func testBeamSpriteTraceLatchesMidlineSharedMulticolorChangesByRasterPosition() {

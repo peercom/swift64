@@ -14,12 +14,13 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - Compact drive status popover for disk, IEC, GCR, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
 - Focused regression coverage for VIC, CIA, disk, IEC, GCR, SID, and 1541 behavior
+- Phase 2 CPU, memory, and bus certification is complete for the preservation roadmap gate, with public CPU suites kept opt-in and sequential
 
 ### What works
 
 | Component | Status |
 |-----------|--------|
-| 6502 CPU | Cycle-accurate, 222 opcodes including undocumented |
+| 6502 CPU | Phase 2 complete: cycle-stepped, 222 opcodes including undocumented, RDY/SO/interrupt edge coverage, decimal edge coverage, and opt-in public conformance runners |
 | VIC-II | Rasterline rendering, sprites, bad-line and sprite BA/AEC phases, low-phase VIC access decoding, two-cycle sprite DMA slots, CPU stalls, raster/collision IRQs |
 | SID | 3 voices, ADSR envelopes with exponential decay/release, waveforms/noise LFSR, model-aware routed filter foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
@@ -63,6 +64,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - VIC-II late-start bad-line/DMA-delay behavior now latches unstable `$ff/$f` startup data for the first newly-started c-accesses before normal matrix/color fetches resume
 - VIC-II sprite DMA eligibility is now latched by the cycle-55/56 enable/Y-coordinate check, so post-check `$D015` or sprite-Y writes cannot falsely create current-line DMA while already-latched DMA still reaches its fetch slot and continues through later sprite body rows
 - VIC-II sprite vertical-expansion state now keeps an MCBASE counter and covers the cycle-15 `$D017` clear crunch formula so the next sprite DMA fetch starts from the crunched byte offset
+- VIC-II sprite rendering now honors the 9-bit horizontal counter wraparound for normal, expanded, and multicolor sprites in both beam-time sprite tracing and end-of-line rendering
 - CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
 - CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
 - SID 6581 combined noise waveforms now approximate DAC-bit drain toward noise LFSR lockup while 8580 preserves the cleaner digital combined-noise path; TEST-bit reseeding covers recovery from the locked state
@@ -365,12 +367,18 @@ For multiple public CPU fixtures, use a local untracked manifest and optional ag
 }
 ```
 
-The manifest summary records a stable manifest fingerprint, expected failures, unexpected failures, expected-failure drift, acceptance-failure counts, and compact failure details alongside full per-fixture records. Fixtures can apply `initialMemory` byte patches after binary load and before CPU execution, set optional `initialRegisters` for A/X/Y/SP/P after reset/start setup, then declare `expectedElapsedCycles` plus an optional `elapsedCycleTolerance`; reaching the success self-loop outside that window is reported as a `timing` failure. Optional `finalRegisters` checks compare A/X/Y/SP/P after the success loop is reached, `finalMemory` checks compare individual RAM bytes by address, and `finalMemoryRanges` checks FNV-1a 64-bit hashes over RAM ranges. Register and memory byte checks can be either a byte value or an object with `value` and `mask` for bit-level assertions. Empty fixture arrays may be omitted from hand-written manifests. The opt-in manifest test fails only when a fixture has an unexpected failure or when a fixture marked as an expected failure starts passing, which keeps CPU-suite waivers explicit and reviewable. Non-empty fixture IDs must be unique, explicit `maxCycles` values must be positive, and timing/register/memory expectation values must be valid so resumable summaries stay deterministic.
+The manifest summary records a stable manifest fingerprint, Phase 2 `category`/`roadmapPhase` labels, expected failures, unexpected failures, expected-failure drift, acceptance-failure counts, and compact failure details alongside full per-fixture records. Fixtures can apply `initialMemory` byte patches after binary load and before CPU execution, set optional `initialRegisters` for A/X/Y/SP/P after reset/start setup, then declare `expectedElapsedCycles` plus an optional `elapsedCycleTolerance`; reaching the success self-loop outside that window is reported as a `timing` failure. Optional `finalRegisters` checks compare A/X/Y/SP/P after the success loop is reached, `finalMemory` checks compare individual RAM bytes by address, and `finalMemoryRanges` checks FNV-1a 64-bit hashes over RAM ranges. Register and memory byte checks can be either a byte value or an object with `value` and `mask` for bit-level assertions. Empty fixture arrays may be omitted from hand-written manifests. The opt-in manifest test fails only when a fixture has an unexpected failure or when a fixture marked as an expected failure starts passing, which keeps CPU-suite waivers explicit and reviewable. Non-empty fixture IDs must be unique, explicit `maxCycles` values must be positive, and timing/register/memory expectation values must be valid so resumable summaries stay deterministic.
 
 ```sh
 SWIFT64_CPU_FUNCTIONAL_MANIFEST_JSON=/path/to/cpu-functional-manifest.json \
 SWIFT64_CPU_FUNCTIONAL_SUMMARY_JSON=/tmp/swift64-cpu-functional-summary.json \
 swift test --filter CPU6502ConformanceTests/testOptInFunctionalManifestRunsSequentially
+```
+
+Large CPU functional manifests can be filtered by stable fixture ID with `SWIFT64_CPU_FUNCTIONAL_FIXTURE_IDS=id1,id2` before sharding; add `SWIFT64_CPU_FUNCTIONAL_REQUIRE_IDS_MATCH=1` when missing requested IDs should fail fast. They can also be sharded deterministically while still running one `swift test` process at a time. Each shard summary records `SWIFT64_CPU_FUNCTIONAL_SHARD_INDEX`/`SWIFT64_CPU_FUNCTIONAL_SHARD_COUNT`, requested and missing fixture IDs, selected fixture IDs/paths, selected-vs-manifest fixture counts, a derived `outcome` (`notRun`, `passed`, `expectedFailures`, `unexpectedFailures`, or `acceptanceFailed`), failed fixture IDs/paths, acceptance-failure fixture IDs/paths, and compact outcome/failure-category/expectation-status counts; the helper below writes one summary per shard plus a finalized `run-index.json`:
+
+```sh
+script/run_cpu_functional_shards.sh /path/to/cpu-functional-manifest.json 4
 ```
 
 For Tom Harte/SingleStepTests-style JSON CPU vectors, keep the downloaded corpus outside the repository and run bounded slices by file or opcode list. Passing case records are omitted by default so large runs keep only aggregate counts plus failure records; add `SWIFT64_PROCESSOR_JSON_RECORD_PASSING=1` only for small debugging runs. `SWIFT64_PROCESSOR_JSON_STRICT_CYCLES=1` compares the executed cycle count plus each expected bus-cycle address, data value, and read/write operation:
@@ -399,7 +407,7 @@ SWIFT64_PROCESSOR_JSON_RESULT_JSON=/tmp/swift64-processor-json-all-opcodes.json 
 swift test -c release --filter CPU6502ProcessorJSONTests/testOptInProcessorJSONSingleStepVectors
 ```
 
-For local machines where a single full sweep is inconvenient, shard the opcode files deterministically. The runner below still executes one `swift test` process at a time, writes one compact JSON summary per shard, records the selected corpus path/opcode set/shard identity plus a stable selected-input FNV-1a fingerprint in each summary, exposes explicit aggregate/per-file `outcome` and `acceptanceFailures` fields, and defaults to strict cycle checks with fail-fast enabled:
+For local machines where a single full sweep is inconvenient, shard the opcode files deterministically. The runner below still executes one `swift test` process at a time, writes one compact JSON summary per shard plus a `run-index.json` listing shard outputs and run settings, finalizes that index even when a shard exits early, records the selected corpus path/opcode set/shard identity plus a stable selected-input FNV-1a fingerprint in each summary, exposes explicit aggregate/per-file `outcome` and `acceptanceFailures` fields plus Phase 2 `category`/`roadmapPhase` labels, structured aggregate `failureDetails`, `failedFiles`, `failedOpcodes`, and per-opcode pass/fail summaries, and defaults to strict cycle checks with fail-fast enabled:
 
 ```sh
 script/run_cpu_json_shards.sh /path/to/6502/v1 8
@@ -407,7 +415,7 @@ script/run_cpu_json_shards.sh /path/to/6502/v1 8
 
 Processor JSON fixtures are validated before execution, including register widths, RAM entry shapes, address/value ranges, and cycle operation names (`read`/`write`), so malformed local vector files fail with fixture/case/cycle diagnostics instead of looking like CPU regressions.
 
-The Phase 2 CPU certification checkpoint currently passes the Klaus Dormann NMOS 6502 functional binary when loaded as a 64K RAM image with `SWIFT64_CPU_FUNCTIONAL_START_PC=0x0400` and `SWIFT64_CPU_FUNCTIONAL_SUCCESS_PC=0x3469`; do not start that fixture through its reset vector, because Klaus intentionally routes reset/NMI/IRQ vectors to failure traps. The same checkpoint also passes the full local SingleStepTests 6502-v1 strict-cycle sweep: 2,560,000 public vectors across all 256 opcode files. That sweep now covers the fixed KIL/JAM observed dummy-read timing, decimal-mode ARR overflow-safe correction, and AHX/TAS/SHX/SHY page-cross unstable-store masking against public per-cycle vectors.
+The Phase 2 CPU certification checkpoint currently passes the Klaus Dormann NMOS 6502 functional binary when loaded as a 64K RAM image with `SWIFT64_CPU_FUNCTIONAL_START_PC=0x0400` and `SWIFT64_CPU_FUNCTIONAL_SUCCESS_PC=0x3469`; do not start that fixture through its reset vector, because Klaus intentionally routes reset/NMI/IRQ vectors to failure traps. The same checkpoint also passes the full local SingleStepTests 6502-v1 strict-cycle sweep: 2,560,000 public vectors across all 256 opcode files. That sweep now covers the fixed KIL/JAM observed dummy-read timing, decimal-mode ARR overflow-safe correction, and AHX/TAS/SHX/SHY page-cross unstable-store masking against public per-cycle vectors. The roadmap Phase 2 gate is complete for CPU, memory, and bus behavior: focused checks cover CPU core behavior, interrupt/RDY/SO timing, C64 reset coupling, 6510 `$0000/$0001` port overlay semantics, VIC-visible RAM underneath the CPU port, ROM/I/O banking, color RAM/open-bus behavior, and VIC-driven CPU stalls. External public fixture sweeps remain local opt-in runs so normal development never starts a huge parallel corpus by accident.
 
 For resumable local milestone runs, add a JSONL result log path. Reuse the same path with `SWIFT64_LOCAL_MILESTONE_RESUME=1` to skip milestones that already recorded a passing result. Add `SWIFT64_LOCAL_MILESTONE_RESUME_STRICT_MANIFEST=1` when you only want to trust previous passes recorded with the current `compatibility.json` content hash. Each run gets a generated ID; set `SWIFT64_LOCAL_MILESTONE_RUN_ID` to supply one explicitly for dashboards or resumable batch scripts:
 

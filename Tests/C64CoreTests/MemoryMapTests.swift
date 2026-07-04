@@ -42,6 +42,34 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertEqual(memory.ram[0x0001], 0xBB)
     }
 
+    func testCPUInternalPortReadsIgnoreUnderlyingRAMAfterDirectRAMMutation() {
+        let memory = MemoryMap()
+
+        memory.write(0x0000, value: 0x2F)
+        memory.write(0x0001, value: 0x37)
+        memory.ram[0x0000] = 0x00
+        memory.ram[0x0001] = 0x00
+
+        XCTAssertEqual(memory.read(0x0000), 0x2F)
+        XCTAssertEqual(memory.read(0x0001), 0x37)
+        XCTAssertEqual(memory.ram[0x0000], 0x00)
+        XCTAssertEqual(memory.ram[0x0001], 0x00)
+    }
+
+    func testVICSeesUnderlyingRAMAtCPUInternalPortAddresses() {
+        let memory = MemoryMap()
+        memory.ram[0x0000] = 0xAA
+        memory.ram[0x0001] = 0xBB
+
+        memory.write(0x0000, value: 0x12)
+        memory.write(0x0001, value: 0x23)
+
+        XCTAssertEqual(memory.read(0x0000), 0x12)
+        XCTAssertEqual(memory.read(0x0001), 0x27)
+        XCTAssertEqual(memory.vicRead(0x0000), 0xAA)
+        XCTAssertEqual(memory.vicRead(0x0001), 0xBB)
+    }
+
     func testCPUDataPortReflectsCassetteSenseInputLine() {
         let memory = MemoryMap()
         memory.write(0x0000, value: 0x00)

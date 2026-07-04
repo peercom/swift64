@@ -71,6 +71,8 @@ final class CPU6502ConformanceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(CPUFunctionalRunRecord.self, from: Data(contentsOf: url))
         XCTAssertEqual(decoded.formatVersion, CPUFunctionalRunRecord.currentFormatVersion)
         XCTAssertEqual(decoded.runnerName, "CPU6502ConformanceTests")
+        XCTAssertEqual(decoded.category, "cpu")
+        XCTAssertEqual(decoded.roadmapPhase, "phase2CPUMemoryBus")
         XCTAssertEqual(decoded.fixtureID, "functional")
         XCTAssertEqual(decoded.fixtureName, "Functional test")
         XCTAssertEqual(decoded.binaryPath, "/tmp/6502_functional_test.bin")
@@ -166,6 +168,8 @@ final class CPU6502ConformanceTests: XCTestCase {
         let summary = try runCPUFunctionalManifest(manifest, relativeTo: directory)
 
         XCTAssertEqual(summary.manifestFNV1A64, fnv1a64(canonicalCPUFunctionalManifestData(manifest)))
+        XCTAssertEqual(summary.category, "cpu")
+        XCTAssertEqual(summary.roadmapPhase, "phase2CPUMemoryBus")
         XCTAssertEqual(summary.total, 2)
         XCTAssertEqual(summary.passed, 1)
         XCTAssertEqual(summary.failed, 1)
@@ -175,7 +179,10 @@ final class CPU6502ConformanceTests: XCTestCase {
         XCTAssertEqual(summary.unexpectedFailures, 0)
         XCTAssertEqual(summary.expectedFailureDrift, 0)
         XCTAssertEqual(summary.acceptanceFailures, 0)
+        XCTAssertEqual(summary.outcome, "expectedFailures")
         XCTAssertEqual(summary.records.map { $0.fixtureID }, ["self-loop", "jam"])
+        XCTAssertEqual(summary.records.map(\.category), ["cpu", "cpu"])
+        XCTAssertEqual(summary.records.map(\.roadmapPhase), ["phase2CPUMemoryBus", "phase2CPUMemoryBus"])
         XCTAssertEqual(summary.records[0].passed, true)
         XCTAssertEqual(summary.records[0].outcome, "passed")
         XCTAssertNil(summary.records[0].failureCategory)
@@ -204,6 +211,130 @@ final class CPU6502ConformanceTests: XCTestCase {
         XCTAssertEqual(summary.records[1].expectedFailureReasonContains, ["CPU jammed"])
         XCTAssertEqual(summary.records[1].expectationStatus, "expectedFailure")
         XCTAssertEqual(summary.records[1].reason, "CPU jammed")
+    }
+
+    func testCPUFunctionalManifestCanSelectDeterministicShard() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fixtureIDs: [String] = ["a", "b", "c", "d", "e"]
+        for name in fixtureIDs {
+            try Data([0x4C, 0x00, 0x04]).write(to: directory.appendingPathComponent("\(name).bin"))
+        }
+
+        let manifest = CPUFunctionalManifest(fixtures: fixtureIDs.map { fixtureID in
+            CPUFunctionalFixture(
+                id: fixtureID,
+                name: fixtureID,
+                path: "\(fixtureID).bin",
+                loadAddress: "$0400",
+                startPC: "$0400",
+                successPC: "$0400",
+                maxCycles: 64
+            )
+        })
+
+        let summary = try runCPUFunctionalManifest(
+            manifest,
+            relativeTo: directory,
+            configuration: CPUFunctionalRunConfiguration(shardIndex: 1, shardCount: 2)
+        )
+
+        XCTAssertEqual(summary.configuration.shardIndex, 1)
+        XCTAssertEqual(summary.configuration.shardCount, 2)
+        XCTAssertEqual(summary.manifestFixtureCount, 5)
+        XCTAssertEqual(summary.selectedFixtureCount, 2)
+        XCTAssertEqual(summary.selectedFixtureIDs, ["b", "d"])
+        XCTAssertEqual(summary.records.map(\.fixtureID), ["b", "d"])
+    }
+
+    func testCPUFunctionalManifestCanFilterFixtureIDsBeforeSharding() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fixtureIDs: [String] = ["a", "b", "c", "d", "e"]
+        for name in fixtureIDs {
+            try Data([0x4C, 0x00, 0x04]).write(to: directory.appendingPathComponent("\(name).bin"))
+        }
+
+        let manifest = CPUFunctionalManifest(fixtures: fixtureIDs.map { fixtureID in
+            CPUFunctionalFixture(
+                id: fixtureID,
+                name: fixtureID,
+                path: "\(fixtureID).bin",
+                loadAddress: "$0400",
+                startPC: "$0400",
+                successPC: "$0400",
+                maxCycles: 64
+            )
+        })
+
+        let summary = try runCPUFunctionalManifest(
+            manifest,
+            relativeTo: directory,
+            configuration: CPUFunctionalRunConfiguration(
+                fixtureIDs: ["d", "b", "missing"],
+                requireFixtureIDsMatch: false,
+                shardIndex: 1,
+                shardCount: 2
+            )
+        )
+
+        XCTAssertEqual(summary.configuration.fixtureIDs, ["d", "b", "missing"])
+        XCTAssertEqual(summary.missingFixtureIDs, ["missing"])
+        XCTAssertEqual(summary.selectedFixtureIDs, ["d"])
+        XCTAssertEqual(summary.records.map(\.fixtureID), ["d"])
+    }
+
+    func testCPUFunctionalManifestCanRequireFixtureIDMatches() {
+        let manifest = CPUFunctionalManifest(fixtures: [
+            CPUFunctionalFixture(
+                id: "one",
+                name: nil,
+                path: "one.bin",
+                loadAddress: nil,
+                startPC: nil,
+                successPC: "$0400",
+                maxCycles: nil
+            ),
+        ])
+
+        XCTAssertThrowsError(try runCPUFunctionalManifest(
+            manifest,
+            relativeTo: nil,
+            configuration: CPUFunctionalRunConfiguration(
+                fixtureIDs: ["one", "missing"],
+                requireFixtureIDsMatch: true
+            )
+        )) { error in
+            XCTAssertTrue(String(describing: error).contains("missing requested fixture IDs: missing"))
+        }
+    }
+
+    func testCPUFunctionalManifestRejectsInvalidShardSelection() {
+        let manifest = CPUFunctionalManifest(fixtures: [
+            CPUFunctionalFixture(
+                id: "one",
+                name: nil,
+                path: "one.bin",
+                loadAddress: nil,
+                startPC: nil,
+                successPC: "$0400",
+                maxCycles: nil
+            ),
+        ])
+
+        XCTAssertThrowsError(try runCPUFunctionalManifest(
+            manifest,
+            relativeTo: nil,
+            configuration: CPUFunctionalRunConfiguration(shardIndex: 2, shardCount: 2)
+        )) { error in
+            XCTAssertTrue(String(describing: error).contains("shardIndex"))
+        }
     }
 
     func testCPUFunctionalManifestReportsUnexpectedFailuresAndDrift() throws {
@@ -254,6 +385,7 @@ final class CPU6502ConformanceTests: XCTestCase {
         XCTAssertEqual(summary.unexpectedFailures, 1)
         XCTAssertEqual(summary.expectedFailureDrift, 1)
         XCTAssertEqual(summary.acceptanceFailures, 2)
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
         XCTAssertEqual(summary.records[0].expectationStatus, "expectedFailureDrift")
         XCTAssertEqual(summary.records[1].outcome, "timeout")
         XCTAssertEqual(summary.records[1].failureCategory, "timeout")
@@ -262,15 +394,27 @@ final class CPU6502ConformanceTests: XCTestCase {
         XCTAssertTrue(summary.failureSummary.contains("timeout"))
         XCTAssertEqual(summary.failureDetails.map(\.fixtureID), ["drift", "timeout"])
         XCTAssertEqual(summary.failureDetails.map(\.expectationStatus), ["expectedFailureDrift", "unexpectedFailure"])
+        XCTAssertEqual(summary.failureDetails.map(\.category), ["cpu", "cpu"])
+        XCTAssertEqual(summary.failureDetails.map(\.roadmapPhase), ["phase2CPUMemoryBus", "phase2CPUMemoryBus"])
+        XCTAssertEqual(summary.failedFixtureIDs, ["timeout"])
+        XCTAssertEqual(summary.acceptanceFailureFixtureIDs, ["drift", "timeout"])
+        XCTAssertEqual(summary.outcomeCounts["passed"], 1)
+        XCTAssertEqual(summary.outcomeCounts["timeout"], 1)
+        XCTAssertEqual(summary.failureCategoryCounts["timeout"], 1)
+        XCTAssertEqual(summary.expectationStatusCounts["expectedFailureDrift"], 1)
+        XCTAssertEqual(summary.expectationStatusCounts["unexpectedFailure"], 1)
 
         let summaryURL = directory.appendingPathComponent("summary.json")
         try writeCPUFunctionalRunSummary(summary, to: summaryURL)
         let decoded = try JSONDecoder().decode(CPUFunctionalRunSummary.self, from: Data(contentsOf: summaryURL))
         XCTAssertEqual(decoded.manifestFNV1A64, summary.manifestFNV1A64)
+        XCTAssertEqual(decoded.outcome, "acceptanceFailed")
         XCTAssertEqual(decoded.acceptanceFailures, 2)
         XCTAssertEqual(decoded.failureDetails.count, 2)
         XCTAssertEqual(decoded.failureDetails[0].fixtureID, "drift")
         XCTAssertEqual(decoded.failureDetails[1].fixtureID, "timeout")
+        XCTAssertEqual(decoded.failedFixtureIDs, ["timeout"])
+        XCTAssertEqual(decoded.acceptanceFailureFixtureIDs, ["drift", "timeout"])
     }
 
     func testCPUFunctionalManifestReportsTimingMismatch() throws {
@@ -781,7 +925,11 @@ final class CPU6502ConformanceTests: XCTestCase {
 
         let manifestURL = URL(fileURLWithPath: manifestPath)
         let manifest = try JSONDecoder().decode(CPUFunctionalManifest.self, from: Data(contentsOf: manifestURL))
-        let summary = try runCPUFunctionalManifest(manifest, relativeTo: manifestURL.deletingLastPathComponent())
+        let summary = try runCPUFunctionalManifest(
+            manifest,
+            relativeTo: manifestURL.deletingLastPathComponent(),
+            configuration: cpuFunctionalRunConfiguration(from: environment)
+        )
         let summaryURL = environment["SWIFT64_CPU_FUNCTIONAL_SUMMARY_JSON"].flatMap { path -> URL? in
             path.isEmpty ? nil : URL(fileURLWithPath: path)
         }
@@ -793,6 +941,25 @@ final class CPU6502ConformanceTests: XCTestCase {
 
 private struct CPUFunctionalManifest: Codable, Equatable {
     let fixtures: [CPUFunctionalFixture]
+}
+
+private struct CPUFunctionalRunConfiguration: Codable, Equatable {
+    let fixtureIDs: [String]
+    let requireFixtureIDsMatch: Bool
+    let shardIndex: Int?
+    let shardCount: Int?
+
+    init(
+        fixtureIDs: [String] = [],
+        requireFixtureIDsMatch: Bool = false,
+        shardIndex: Int? = nil,
+        shardCount: Int? = nil
+    ) {
+        self.fixtureIDs = fixtureIDs
+        self.requireFixtureIDsMatch = requireFixtureIDsMatch
+        self.shardIndex = shardIndex
+        self.shardCount = shardCount
+    }
 }
 
 private struct CPUFunctionalExpectedFailure: Codable, Equatable {
@@ -1034,11 +1201,16 @@ private struct CPUFunctionalMemoryRangeExpectation: Codable, Equatable {
     let fnv1a64: String
 }
 
+private let cpuFunctionalFailureCategory = "cpu"
+private let cpuFunctionalRoadmapPhase = "phase2CPUMemoryBus"
+
 private struct CPUFunctionalRunRecord: Codable, Equatable {
-    static let currentFormatVersion = 1
+    static let currentFormatVersion = 2
 
     var formatVersion: Int = CPUFunctionalRunRecord.currentFormatVersion
     var runnerName: String = "CPU6502ConformanceTests"
+    var category: String = cpuFunctionalFailureCategory
+    var roadmapPhase: String = cpuFunctionalRoadmapPhase
     let fixtureID: String?
     let fixtureName: String?
     let binaryPath: String
@@ -1075,10 +1247,19 @@ private struct CPUFunctionalRunRecord: Codable, Equatable {
 }
 
 private struct CPUFunctionalRunSummary: Codable, Equatable {
-    var formatVersion: Int = 1
+    var formatVersion: Int = 2
     var runnerName: String = "CPU6502ConformanceTests"
+    var category: String = cpuFunctionalFailureCategory
+    var roadmapPhase: String = cpuFunctionalRoadmapPhase
     var resultRecordFormatVersion: Int = CPUFunctionalRunRecord.currentFormatVersion
+    let configuration: CPUFunctionalRunConfiguration
     let manifestFNV1A64: String
+    let manifestFixtureCount: Int
+    let fixtureFilteredCount: Int
+    let selectedFixtureCount: Int
+    let selectedFixtureIDs: [String]
+    let selectedFixturePaths: [String]
+    let missingFixtureIDs: [String]
     let total: Int
     let passed: Int
     let failed: Int
@@ -1088,7 +1269,15 @@ private struct CPUFunctionalRunSummary: Codable, Equatable {
     let unexpectedFailures: Int
     let expectedFailureDrift: Int
     let acceptanceFailures: Int
+    let outcome: String
     let totalElapsedCycles: Int
+    let failedFixtureIDs: [String]
+    let failedFixturePaths: [String]
+    let acceptanceFailureFixtureIDs: [String]
+    let acceptanceFailureFixturePaths: [String]
+    let outcomeCounts: [String: Int]
+    let failureCategoryCounts: [String: Int]
+    let expectationStatusCounts: [String: Int]
     let failureDetails: [CPUFunctionalFailureDetail]
     let records: [CPUFunctionalRunRecord]
 
@@ -1104,6 +1293,8 @@ private struct CPUFunctionalRunSummary: Codable, Equatable {
 }
 
 private struct CPUFunctionalFailureDetail: Codable, Equatable {
+    var category: String = cpuFunctionalFailureCategory
+    var roadmapPhase: String = cpuFunctionalRoadmapPhase
     let fixtureID: String?
     let fixtureName: String?
     let binaryPath: String
@@ -1137,15 +1328,24 @@ private struct CPUFunctionalFailureDetail: Codable, Equatable {
 
 private func runCPUFunctionalManifest(
     _ manifest: CPUFunctionalManifest,
-    relativeTo baseURL: URL?
+    relativeTo baseURL: URL?,
+    configuration: CPUFunctionalRunConfiguration = CPUFunctionalRunConfiguration()
 ) throws -> CPUFunctionalRunSummary {
     try validateCPUFunctionalManifest(manifest)
     let manifestFNV1A64 = fnv1a64(canonicalCPUFunctionalManifestData(manifest))
+    let fixtureSelection = try cpuFunctionalFilterFixturesByID(
+        manifest.fixtures,
+        configuration: configuration
+    )
+    let selectedFixtures = try cpuFunctionalShardFixtures(
+        fixtureSelection.fixtures,
+        configuration: configuration
+    )
 
     var records: [CPUFunctionalRunRecord] = []
-    records.reserveCapacity(manifest.fixtures.count)
+    records.reserveCapacity(selectedFixtures.count)
 
-    for fixture in manifest.fixtures {
+    for fixture in selectedFixtures {
         let binaryURL = fixture.binaryURL(relativeTo: baseURL)
         let data = try Data(contentsOf: binaryURL)
         let loadAddress = try parseHex16(fixture.loadAddress, default: 0x0000, field: "loadAddress")
@@ -1181,22 +1381,143 @@ private func runCPUFunctionalManifest(
     let failureDetails = records
         .filter { $0.expectationStatus == "unexpectedFailure" || $0.expectationStatus == "expectedFailureDrift" }
         .map(CPUFunctionalFailureDetail.init)
+    let failedRecords = records.filter { !$0.passed }
+    let expectedFailures = records.filter { $0.expectationStatus == "expectedFailure" }.count
+    let unexpectedFailures = records.filter { $0.expectationStatus == "unexpectedFailure" }.count
+    let expectedFailureDrift = records.filter { $0.expectationStatus == "expectedFailureDrift" }.count
+    let acceptanceFailures = failureDetails.count
 
     return CPUFunctionalRunSummary(
+        configuration: configuration,
         manifestFNV1A64: manifestFNV1A64,
+        manifestFixtureCount: manifest.fixtures.count,
+        fixtureFilteredCount: fixtureSelection.fixtures.count,
+        selectedFixtureCount: selectedFixtures.count,
+        selectedFixtureIDs: selectedFixtures.compactMap(\.id),
+        selectedFixturePaths: selectedFixtures.map(\.path),
+        missingFixtureIDs: fixtureSelection.missingIDs,
         total: records.count,
         passed: records.filter(\.passed).count,
         failed: records.filter { !$0.passed }.count,
         jammed: records.filter(\.jammed).count,
         timedOut: records.filter { $0.outcome == "timeout" }.count,
-        expectedFailures: records.filter { $0.expectationStatus == "expectedFailure" }.count,
-        unexpectedFailures: records.filter { $0.expectationStatus == "unexpectedFailure" }.count,
-        expectedFailureDrift: records.filter { $0.expectationStatus == "expectedFailureDrift" }.count,
-        acceptanceFailures: failureDetails.count,
+        expectedFailures: expectedFailures,
+        unexpectedFailures: unexpectedFailures,
+        expectedFailureDrift: expectedFailureDrift,
+        acceptanceFailures: acceptanceFailures,
+        outcome: cpuFunctionalSummaryOutcome(
+            total: records.count,
+            expectedFailures: expectedFailures,
+            unexpectedFailures: unexpectedFailures,
+            expectedFailureDrift: expectedFailureDrift,
+            acceptanceFailures: acceptanceFailures
+        ),
         totalElapsedCycles: records.reduce(0) { $0 + $1.elapsedCycles },
+        failedFixtureIDs: failedRecords.compactMap(\.fixtureID),
+        failedFixturePaths: failedRecords.map(\.binaryPath),
+        acceptanceFailureFixtureIDs: failureDetails.compactMap(\.fixtureID),
+        acceptanceFailureFixturePaths: failureDetails.map(\.binaryPath),
+        outcomeCounts: cpuFunctionalCounts(records.map(\.outcome)),
+        failureCategoryCounts: cpuFunctionalCounts(records.compactMap(\.failureCategory)),
+        expectationStatusCounts: cpuFunctionalCounts(records.map(\.expectationStatus)),
         failureDetails: failureDetails,
         records: records
     )
+}
+
+private func cpuFunctionalSummaryOutcome(
+    total: Int,
+    expectedFailures: Int,
+    unexpectedFailures: Int,
+    expectedFailureDrift: Int,
+    acceptanceFailures: Int
+) -> String {
+    if acceptanceFailures > 0 || expectedFailureDrift > 0 {
+        return "acceptanceFailed"
+    }
+    if total == 0 {
+        return "notRun"
+    }
+    if unexpectedFailures > 0 {
+        return "unexpectedFailures"
+    }
+    if expectedFailures > 0 {
+        return "expectedFailures"
+    }
+    return "passed"
+}
+
+private func cpuFunctionalCounts(_ values: [String]) -> [String: Int] {
+    var counts: [String: Int] = [:]
+    for value in values {
+        counts[value, default: 0] += 1
+    }
+    return counts
+}
+
+private func cpuFunctionalFilterFixturesByID(
+    _ fixtures: [CPUFunctionalFixture],
+    configuration: CPUFunctionalRunConfiguration
+) throws -> (fixtures: [CPUFunctionalFixture], missingIDs: [String]) {
+    guard !configuration.fixtureIDs.isEmpty else {
+        return (fixtures, [])
+    }
+
+    let requestedIDs = configuration.fixtureIDs
+    let requestedIDSet = Set(requestedIDs)
+    let matchedIDSet = Set(fixtures.compactMap { fixture -> String? in
+        guard let id = fixture.id, requestedIDSet.contains(id) else { return nil }
+        return id
+    })
+    let missingIDs = requestedIDs.filter { !matchedIDSet.contains($0) }
+    if configuration.requireFixtureIDsMatch && !missingIDs.isEmpty {
+        throw CPUFunctionalManifestError("missing requested fixture IDs: \(missingIDs.joined(separator: ","))")
+    }
+
+    return (
+        fixtures.filter { fixture in
+            guard let id = fixture.id else { return false }
+            return requestedIDSet.contains(id)
+        },
+        missingIDs
+    )
+}
+
+private func cpuFunctionalShardFixtures(
+    _ fixtures: [CPUFunctionalFixture],
+    configuration: CPUFunctionalRunConfiguration
+) throws -> [CPUFunctionalFixture] {
+    guard configuration.shardIndex != nil || configuration.shardCount != nil else {
+        return fixtures
+    }
+
+    guard let shardIndex = configuration.shardIndex,
+          let shardCount = configuration.shardCount,
+          shardCount > 0,
+          shardIndex >= 0,
+          shardIndex < shardCount else {
+        throw CPUFunctionalManifestError("shardIndex must be zero-based and less than shardCount")
+    }
+
+    return fixtures.enumerated()
+        .filter { offset, _ in offset % shardCount == shardIndex }
+        .map(\.element)
+}
+
+private func cpuFunctionalRunConfiguration(from environment: [String: String]) -> CPUFunctionalRunConfiguration {
+    CPUFunctionalRunConfiguration(
+        fixtureIDs: cpuFunctionalFixtureIDs(from: environment["SWIFT64_CPU_FUNCTIONAL_FIXTURE_IDS"]),
+        requireFixtureIDsMatch: environment["SWIFT64_CPU_FUNCTIONAL_REQUIRE_IDS_MATCH"] == "1",
+        shardIndex: Int(environment["SWIFT64_CPU_FUNCTIONAL_SHARD_INDEX"] ?? ""),
+        shardCount: Int(environment["SWIFT64_CPU_FUNCTIONAL_SHARD_COUNT"] ?? "")
+    )
+}
+
+private func cpuFunctionalFixtureIDs(from value: String?) -> [String] {
+    (value ?? "")
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
 }
 
 private func canonicalCPUFunctionalManifestData(_ manifest: CPUFunctionalManifest) -> Data {

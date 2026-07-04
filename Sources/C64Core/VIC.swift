@@ -727,9 +727,7 @@ public final class VIC {
     }
 
     func spritePixelColor(sprite: Int, x: Int) -> UInt32? {
-        let sx = Int(spriteX[sprite])
-        let localX = x - sx
-        guard localX >= 0 else { return nil }
+        guard let localX = spriteLocalX(sprite: sprite, visibleX: x) else { return nil }
 
         let expandX = spriteExpandX & (1 << sprite) != 0
         let isMulticolor = spriteMulticolor & (1 << sprite) != 0
@@ -755,6 +753,15 @@ public final class VIC {
         guard bit >= 0 && bit < 24 else { return nil }
         guard fullData & (1 << (23 - bit)) != 0 else { return nil }
         return ColorPalette.rgba[Int(spriteColors[sprite] & 0x0F)]
+    }
+
+    func spriteLocalX(sprite: Int, visibleX x: Int) -> Int? {
+        let sx = Int(spriteX[sprite] & 0x01FF)
+        var localX = x - sx
+        if localX < 0 {
+            localX += 512
+        }
+        return localX >= 0 ? localX : nil
     }
 
     func displayForegroundAtTracePixel(_ x: Int) -> Bool {
@@ -1808,7 +1815,7 @@ public final class VIC {
         for i in stride(from: 7, through: 0, by: -1) {
             guard spriteDisplay[i] else { continue }
 
-            let sx = Int(spriteX[i])
+            let sx = Int(spriteX[i] & 0x01FF)
             let expandX = spriteExpandX & (1 << i) != 0
             let isMulticolor = spriteMulticolor & (1 << i) != 0
             let behindBG = spritePriority & (1 << i) != 0
@@ -1835,7 +1842,7 @@ public final class VIC {
 
                     let xWidth = expandX ? 4 : 2
                     for sub in 0..<xWidth {
-                        let px = sx + bit * xWidth + sub
+                        let px = (sx + bit * xWidth + sub) & 0x01FF
                         plotSpritePixel(sprite: i, x: px, color: pixColor, behindBG: behindBG)
                     }
                 }
@@ -1844,7 +1851,7 @@ public final class VIC {
                     guard fullData & (1 << (23 - bit)) != 0 else { continue }
                     let xWidth = expandX ? 2 : 1
                     for sub in 0..<xWidth {
-                        let px = sx + bit * xWidth + sub
+                        let px = (sx + bit * xWidth + sub) & 0x01FF
                         plotSpritePixel(sprite: i, x: px, color: color, behindBG: behindBG)
                     }
                 }

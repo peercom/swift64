@@ -348,6 +348,23 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
         XCTAssertEqual(aggregate.failed, 1)
         XCTAssertEqual(aggregate.outcome, "failed")
         XCTAssertEqual(aggregate.acceptanceFailures, 1)
+        XCTAssertEqual(aggregate.category, "cpu")
+        XCTAssertEqual(aggregate.roadmapPhase, "phase2CPUMemoryBus")
+        XCTAssertEqual(aggregate.failureDetails.count, 1)
+        XCTAssertEqual(aggregate.failureDetails[0].name, "second-fails")
+        XCTAssertEqual(aggregate.failureDetails[0].category, "cpu")
+        XCTAssertEqual(aggregate.failureDetails[0].roadmapPhase, "phase2CPUMemoryBus")
+        XCTAssertEqual(aggregate.failedFiles, ["a9.json"])
+        XCTAssertEqual(aggregate.failedOpcodes, ["A9"])
+        XCTAssertEqual(aggregate.opcodeSummaries["A9"], ProcessorJSONOpcodeSummary(
+            files: 1,
+            executed: 1,
+            passed: 0,
+            failed: 1,
+            category: "cpu",
+            roadmapPhase: "phase2CPUMemoryBus",
+            outcome: "failed"
+        ))
         XCTAssertTrue(aggregate.failureSummary.contains("second-fails"))
         XCTAssertTrue(aggregate.summaries[0].sourcePath.hasSuffix("a9.json"))
     }
@@ -434,6 +451,10 @@ final class CPU6502ProcessorJSONTests: XCTestCase {
         XCTAssertEqual(summary.selectedInputFiles, ["a9.json", "ea.json"])
         XCTAssertEqual(summary.inputFNV1A64.count, 16)
         XCTAssertEqual(summary.inputFNV1A64, try processorJSONInputFingerprint(urls: [first, second]))
+        XCTAssertEqual(summary.category, "cpu")
+        XCTAssertEqual(summary.roadmapPhase, "phase2CPUMemoryBus")
+        XCTAssertEqual(summary.opcodeSummaries["A9"]?.outcome, "passed")
+        XCTAssertEqual(summary.opcodeSummaries["EA"]?.outcome, "passed")
     }
 
     func testOptInProcessorJSONSingleStepVectors() throws {
@@ -505,9 +526,14 @@ private struct ProcessorJSONCycle: Codable, Equatable {
     }
 }
 
+private let processorJSONFailureCategory = "cpu"
+private let processorJSONRoadmapPhase = "phase2CPUMemoryBus"
+
 private struct ProcessorJSONAggregateSummary: Codable, Equatable {
-    var formatVersion: Int = 4
+    var formatVersion: Int = 9
     var runnerName: String = "CPU6502ProcessorJSONTests"
+    var category: String = processorJSONFailureCategory
+    var roadmapPhase: String = processorJSONRoadmapPhase
     let configuration: ProcessorJSONRunConfiguration
     let inputFNV1A64: String
     let selectedInputFiles: [String]
@@ -518,6 +544,10 @@ private struct ProcessorJSONAggregateSummary: Codable, Equatable {
     let failed: Int
     let outcome: String
     let acceptanceFailures: Int
+    let failureDetails: [ProcessorJSONFailure]
+    let failedFiles: [String]
+    let failedOpcodes: [String]
+    let opcodeSummaries: [String: ProcessorJSONOpcodeSummary]
     let summaries: [ProcessorJSONRunSummary]
 
     init(
@@ -536,18 +566,35 @@ private struct ProcessorJSONAggregateSummary: Codable, Equatable {
         self.failed = summaries.reduce(0) { $0 + $1.failed }
         self.outcome = self.failed == 0 ? "passed" : "failed"
         self.acceptanceFailures = self.failed
+        self.failureDetails = summaries.compactMap(\.firstFailure)
+        self.failedFiles = summaries
+            .filter { $0.failed > 0 }
+            .map { URL(fileURLWithPath: $0.sourcePath).lastPathComponent }
+        self.failedOpcodes = summaries
+            .filter { $0.failed > 0 }
+            .compactMap { processorJSONOpcodeName(from: $0.sourcePath) }
+        self.opcodeSummaries = processorJSONOpcodeSummaries(from: summaries)
         self.summaries = summaries
     }
 
     var failureSummary: String {
-        let failures = summaries.compactMap(\.firstFailure)
-        guard !failures.isEmpty else {
+        guard !failureDetails.isEmpty else {
             return "No ProcessorTests JSON failures."
         }
-        return failures.map { failure in
+        return failureDetails.map { failure in
             "\(failure.sourcePath) \(failure.index) \(failure.name): \(failure.mismatches.joined(separator: "; "))"
         }.joined(separator: "\n")
     }
+}
+
+private struct ProcessorJSONOpcodeSummary: Codable, Equatable {
+    let files: Int
+    let executed: Int
+    let passed: Int
+    let failed: Int
+    let category: String
+    let roadmapPhase: String
+    let outcome: String
 }
 
 private struct ProcessorJSONRunConfiguration: Codable, Equatable {
@@ -578,6 +625,8 @@ private struct ProcessorJSONRunConfiguration: Codable, Equatable {
 private struct ProcessorJSONRunSummary: Codable, Equatable {
     var formatVersion: Int = 2
     var runnerName: String = "CPU6502ProcessorJSONTests"
+    var category: String = processorJSONFailureCategory
+    var roadmapPhase: String = processorJSONRoadmapPhase
     let sourcePath: String
     let totalInFile: Int
     let startIndex: Int
@@ -604,6 +653,8 @@ private struct ProcessorJSONRecord: Codable, Equatable {
 }
 
 private struct ProcessorJSONFailure: Codable, Equatable {
+    var category: String = processorJSONFailureCategory
+    var roadmapPhase: String = processorJSONRoadmapPhase
     let sourcePath: String
     let index: Int
     let name: String
@@ -700,6 +751,39 @@ private func processorJSONAllInputFiles(in directory: URL) throws -> [URL] {
         throw ProcessorJSONError("No hex-named JSON files found in \(directory.path)")
     }
     return jsonFiles
+}
+
+private func processorJSONOpcodeName(from sourcePath: String) -> String? {
+    let name = URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
+    guard let opcode = UInt8(name, radix: 16) else { return nil }
+    return String(format: "%02X", opcode)
+}
+
+private func processorJSONOpcodeSummaries(
+    from summaries: [ProcessorJSONRunSummary]
+) -> [String: ProcessorJSONOpcodeSummary] {
+    var totals: [String: (files: Int, executed: Int, passed: Int, failed: Int)] = [:]
+    for summary in summaries {
+        guard let opcode = processorJSONOpcodeName(from: summary.sourcePath) else { continue }
+        var total = totals[opcode] ?? (files: 0, executed: 0, passed: 0, failed: 0)
+        total.files += 1
+        total.executed += summary.executed
+        total.passed += summary.passed
+        total.failed += summary.failed
+        totals[opcode] = total
+    }
+
+    return totals.mapValues { total in
+        ProcessorJSONOpcodeSummary(
+            files: total.files,
+            executed: total.executed,
+            passed: total.passed,
+            failed: total.failed,
+            category: processorJSONFailureCategory,
+            roadmapPhase: processorJSONRoadmapPhase,
+            outcome: total.failed == 0 ? "passed" : "failed"
+        )
+    }
 }
 
 private func decodeProcessorJSONCases(at url: URL) throws -> [ProcessorJSONCase] {

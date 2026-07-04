@@ -194,6 +194,34 @@ final class C64ResetTests: XCTestCase {
         XCTAssertEqual(c64.cpu.pc, 0x1234)
     }
 
+    func testWarmResetRestoresCPUPortWithoutOverwritingUnderlyingZeroPageRAM() {
+        let c64 = C64()
+        var kernal = Data(repeating: 0, count: C64.kernalROMSize)
+        kernal[0x1FFC] = 0x00
+        kernal[0x1FFD] = 0xE0
+        c64.loadROMs(
+            basic: Data(repeating: 0, count: C64.basicROMSize),
+            kernal: kernal,
+            charset: Data(repeating: 0, count: C64.characterROMSize)
+        )
+        c64.powerOn()
+        c64.memory.ram[0x0000] = 0xAA
+        c64.memory.ram[0x0001] = 0xBB
+        c64.memory.write(0x0000, value: 0x00)
+        c64.memory.write(0x0001, value: 0x30)
+
+        c64.reset()
+
+        XCTAssertEqual(c64.memory.portDirection, 0x2F)
+        XCTAssertEqual(c64.memory.portData, 0x37)
+        XCTAssertEqual(c64.memory.read(0x0000), 0x2F)
+        XCTAssertEqual(c64.memory.read(0x0001), 0x37)
+        XCTAssertEqual(c64.memory.ram[0x0000], 0xAA)
+        XCTAssertEqual(c64.memory.ram[0x0001], 0xBB)
+        XCTAssertEqual(c64.memory.vicRead(0x0000), 0xAA)
+        XCTAssertEqual(c64.memory.vicRead(0x0001), 0xBB)
+    }
+
     func testResetClearsCapturedCassetteWritePulses() {
         let c64 = C64()
 
