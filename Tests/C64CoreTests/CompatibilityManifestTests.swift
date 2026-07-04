@@ -146,8 +146,8 @@ final class CompatibilityManifestTests: XCTestCase {
                   "byteCount": 7928,
                   "bitLength": 63424,
                   "speedZone": 3,
-                  "bytesHash": "0123456789abcdef",
-                  "speedZoneMapHash": "fedcba9876543210",
+                  "bytesHash": "0123456789ABCDEF",
+                  "speedZoneMapHash": "FEDCBA9876543210",
                   "weakBitRangeCount": 2
                 }
               ],
@@ -414,8 +414,8 @@ final class CompatibilityManifestTests: XCTestCase {
                 byteCount: 7928,
                 bitLength: 63424,
                 speedZone: 3,
-                bytesHash: "0123456789abcdef",
-                speedZoneMapHash: "fedcba9876543210",
+                bytesHash: "0123456789ABCDEF",
+                speedZoneMapHash: "FEDCBA9876543210",
                 weakBitRangeCount: 2
             )
         ])
@@ -833,6 +833,59 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(manifest.milestones.first?.screenTextContains, ["READY."])
     }
 
+    func testManifestAcceptsUppercaseHashExpectations() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "vic-proof.prg",
+              "command": "RUN",
+              "screenRAMHash": "0123456789ABCDEF",
+              "colorRAMHash": "FEDCBA9876543210",
+              "framebufferHash": "0011223344556677"
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+        let milestone = try XCTUnwrap(manifest.milestones.first)
+
+        XCTAssertEqual(milestone.screenRAMHash, "0123456789ABCDEF")
+        XCTAssertEqual(milestone.colorRAMHash, "FEDCBA9876543210")
+        XCTAssertEqual(milestone.framebufferHash, "0011223344556677")
+    }
+
+    func testManifestRejectsMalformedHashExpectations() {
+        let invalidFields = [
+            #""screenRAMHash": "1234""#,
+            #""screenRAMHash": "0123456789abcdeg""#,
+            #""colorRAMHash": "0123456789abcde""#,
+            #""colorRAMHash": "0123456789abcdef00""#,
+            #""framebufferHash": "not-a-fnv-hash""#,
+            #""framebufferHash": "00112233445566 7"#
+        ]
+
+        for field in invalidFields {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "bad-hash.prg",
+                  "command": "RUN",
+                  \(field)
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected malformed hash expectation to be rejected: \(field)"
+            )
+        }
+    }
+
     func testManifestRejectsInvalidPCRanges() {
         let json = """
         {
@@ -948,7 +1001,11 @@ final class CompatibilityManifestTests: XCTestCase {
             #""halfTrack": -1"#,
             #""halfTrack": 84"#,
             #""halfTrack": 34, "speedZone": 4"#,
-            #""halfTrack": 34, "bitLength": -1"#
+            #""halfTrack": 34, "bitLength": -1"#,
+            #""halfTrack": 34, "bytesHash": "1234""#,
+            #""halfTrack": 34, "bytesHash": "0123456789abcdeg""#,
+            #""halfTrack": 34, "speedZoneMapHash": "0123456789abcde""#,
+            #""halfTrack": 34, "speedZoneMapHash": "0123456789abcdef00"#
         ]
 
         for track in invalidTracks {
@@ -1224,5 +1281,14 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertEqual(first, unchanged)
         XCTAssertNotEqual(first, changed)
         XCTAssertEqual(first, CompatibilityHash.fnv1a64([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]))
+    }
+
+    func testFNV1A64DigestValidationAcceptsOnlySixteenHexCharacters() {
+        XCTAssertTrue(CompatibilityHash.isFNV1A64Digest("0123456789abcdef"))
+        XCTAssertTrue(CompatibilityHash.isFNV1A64Digest("0123456789ABCDEF"))
+        XCTAssertFalse(CompatibilityHash.isFNV1A64Digest("0123456789abcde"))
+        XCTAssertFalse(CompatibilityHash.isFNV1A64Digest("0123456789abcdef0"))
+        XCTAssertFalse(CompatibilityHash.isFNV1A64Digest("0123456789abcdeg"))
+        XCTAssertFalse(CompatibilityHash.isFNV1A64Digest("00112233445566 7"))
     }
 }

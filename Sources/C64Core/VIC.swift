@@ -701,6 +701,7 @@ public final class VIC {
             guard spriteDisplay[sprite] else { continue }
 
             let spriteMask = UInt8(1 << sprite)
+            guard spriteEnabled & spriteMask != 0 else { continue }
             let behindBG = spritePriority & spriteMask != 0
             for x in startPixel..<endPixel {
                 guard let color = spritePixelColor(sprite: sprite, x: x) else { continue }
@@ -761,7 +762,8 @@ public final class VIC {
         if localX < 0 {
             localX += 512
         }
-        return localX >= 0 ? localX : nil
+        let width = spriteExpandX & (1 << sprite) != 0 ? 48 : 24
+        return localX >= 0 && localX < width ? localX : nil
     }
 
     func displayForegroundAtTracePixel(_ x: Int) -> Bool {
@@ -1814,6 +1816,7 @@ public final class VIC {
         // Render sprites from back to front (sprite 7 first, 0 last = highest priority)
         for i in stride(from: 7, through: 0, by: -1) {
             guard spriteDisplay[i] else { continue }
+            guard spriteEnabled & (1 << i) != 0 else { continue }
 
             let sx = Int(spriteX[i] & 0x01FF)
             let expandX = spriteExpandX & (1 << i) != 0

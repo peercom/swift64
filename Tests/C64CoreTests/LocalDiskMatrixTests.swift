@@ -840,6 +840,59 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(Self.framebufferHashMilestonesWithoutScreenshotNamesCount(in: manifest.milestones), 2)
     }
 
+    func testManifestFramebufferScreenshotCoverageCountsSanitizedFilenameCollisions() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "first-title",
+              "file": "first-title.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "0011223344556677",
+              "screenshotName": "../title screen"
+            },
+            {
+              "id": "second-title",
+              "file": "second-title.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "1122334455667788",
+              "screenshotName": "title/screen"
+            },
+            {
+              "id": "failed-title",
+              "file": "failed-title.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "2233445566778899",
+              "screenshotName": "title screen-failed"
+            },
+            {
+              "id": "unique-title",
+              "file": "unique-title.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "33445566778899AA",
+              "screenshotName": "unique-title"
+            },
+            {
+              "id": "blank-title",
+              "file": "blank-title.prg",
+              "media": "prg",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "445566778899AABB",
+              "screenshotName": " "
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.framebufferScreenshotFilenameCollisions(in: manifest.milestones), ["title_screen.ppm"])
+        XCTAssertEqual(Self.framebufferScreenshotFilenameCollisionCount(in: manifest.milestones), 1)
+    }
+
     func testManifestWeakBitRangesApplyAfterDiskMount() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1098,6 +1151,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutExplicitActionsCount: milestoneLoad.manifestMilestonesWithoutExplicitActionsCount,
             manifestMilestonesWithoutObservableExpectationsCount: milestoneLoad.manifestMilestonesWithoutObservableExpectationsCount,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: milestoneLoad.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
+            manifestFramebufferScreenshotFilenameCollisionCount: milestoneLoad.manifestFramebufferScreenshotFilenameCollisionCount,
             phaseFilteredMilestoneCount: milestoneLoad.phaseFilteredMilestoneCount,
             selectedMilestoneCount: milestones.count,
             selectedMilestoneKeys: milestones.map(\.resultKey),
@@ -2380,6 +2434,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutExplicitActionsCount: 3,
             manifestMilestonesWithoutObservableExpectationsCount: 3,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 2,
+            manifestFramebufferScreenshotFilenameCollisionCount: 1,
+            manifestFramebufferScreenshotFilenameCollisions: ["title_screen.ppm"],
             phaseFilteredMilestoneCount: 4,
             selectedMilestoneCount: 3,
             selectedMilestoneKeys: [milestone.resultKey],
@@ -2596,6 +2652,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.manifestMilestonesWithoutExplicitActionsCount, 3)
         XCTAssertEqual(decoded.manifestMilestonesWithoutObservableExpectationsCount, 3)
         XCTAssertEqual(decoded.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount, 2)
+        XCTAssertEqual(decoded.manifestFramebufferScreenshotFilenameCollisionCount, 1)
+        XCTAssertEqual(decoded.manifestFramebufferScreenshotFilenameCollisions, ["title_screen.ppm"])
         XCTAssertEqual(decoded.phaseFilteredMilestoneCount, 4)
         XCTAssertEqual(decoded.selectedMilestoneCount, 3)
         XCTAssertEqual(decoded.selectedMilestoneKeys, [milestone.resultKey])
@@ -2770,10 +2828,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             "milestonesWithoutMaxCycles:2",
             "milestonesWithoutExplicitActions:3",
             "milestonesWithoutObservableExpectations:3",
-            "framebufferHashMilestonesWithoutScreenshotNames:2"
+            "framebufferHashMilestonesWithoutScreenshotNames:2",
+            "framebufferScreenshotFilenameCollisions:1"
         ])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
-        XCTAssertEqual(decoded.formatVersion, 33)
+        XCTAssertEqual(decoded.formatVersion, 34)
         XCTAssertEqual(decoded.totalElapsedCycles, 85)
         XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
@@ -2934,6 +2993,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredAction:mouseDown"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredAction:startTape"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingSelectedID:missing-id"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("framebufferScreenshotFilenameCollisions:1"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("title_screen.ppm"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=5"))
         XCTAssertTrue(decoded.consoleSummary.contains("executed=4"))
         XCTAssertTrue(decoded.consoleSummary.contains("selected=3"))
@@ -2996,6 +3057,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutExplicitActions=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutObservables=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("framebufferProofsWithoutScreenshots=2"))
+        XCTAssertTrue(decoded.consoleSummary.contains("framebufferScreenshotCollisions=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("framebufferScreenshotCollisionFiles=[title_screen.ppm]"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireManifest=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireTaggedPhases=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireIDs=true"))
@@ -5404,6 +5467,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutExplicitActionsCount: 0,
             manifestMilestonesWithoutObservableExpectationsCount: 0,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 0,
+            manifestFramebufferScreenshotFilenameCollisionCount: 0,
+            manifestFramebufferScreenshotFilenameCollisions: [],
             phaseFilteredMilestoneCount: phaseSelection.valid.isEmpty ? nil : 1,
             selectedMediaCounts: Self.mediaCounts(for: fallbackMilestones),
             selectedMachineProfileCounts: Self.machineProfileCounts(for: fallbackMilestones),
@@ -5454,6 +5519,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let manifestMilestonesWithoutExplicitActionsCount = Self.milestonesWithoutExplicitActionsCount(in: manifest.milestones)
         let manifestMilestonesWithoutObservableExpectationsCount = Self.milestonesWithoutObservableExpectationsCount(in: manifest.milestones)
         let manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = Self.framebufferHashMilestonesWithoutScreenshotNamesCount(in: manifest.milestones)
+        let manifestFramebufferScreenshotFilenameCollisions = Self.framebufferScreenshotFilenameCollisions(in: manifest.milestones)
         let phaseFilteredEntries = Self.phaseFilteredManifestEntries(
             manifest.milestones,
             selectedPhaseNames: phaseSelection.valid
@@ -5562,6 +5628,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutExplicitActionsCount: manifestMilestonesWithoutExplicitActionsCount,
             manifestMilestonesWithoutObservableExpectationsCount: manifestMilestonesWithoutObservableExpectationsCount,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
+            manifestFramebufferScreenshotFilenameCollisionCount: manifestFramebufferScreenshotFilenameCollisions.count,
+            manifestFramebufferScreenshotFilenameCollisions: manifestFramebufferScreenshotFilenameCollisions,
             phaseFilteredMilestoneCount: phaseFilteredEntries.count,
             selectedMediaCounts: Self.mediaCounts(for: milestones),
             selectedMachineProfileCounts: Self.machineProfileCounts(for: milestones),
@@ -6008,6 +6076,26 @@ final class LocalDiskMatrixTests: XCTestCase {
             guard entry.framebufferHash != nil else { return false }
             return entry.screenshotName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         }.count
+    }
+
+    private static func framebufferScreenshotFilenameCollisionCount(in entries: [CompatibilityMilestone]) -> Int {
+        framebufferScreenshotFilenameCollisions(in: entries).count
+    }
+
+    private static func framebufferScreenshotFilenameCollisions(in entries: [CompatibilityMilestone]) -> [String] {
+        var seen: Set<String> = []
+        var collisions: Set<String> = []
+        for entry in entries where entry.framebufferHash != nil {
+            guard let screenshotName = entry.screenshotName,
+                  !screenshotName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            let filename = sanitizedScreenshotName(screenshotName) + ".ppm"
+            if !seen.insert(filename).inserted {
+                collisions.insert(filename)
+            }
+        }
+        return collisions.sorted()
     }
 
     private static func hasObservableExpectation(_ entry: CompatibilityMilestone) -> Bool {
@@ -7171,8 +7259,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let baseName = sanitizedScreenshotName(screenshotName)
-        let suffixPart = suffix.map { "-" + sanitizedScreenshotName($0) } ?? ""
+        let baseName = Self.sanitizedScreenshotName(screenshotName)
+        let suffixPart = suffix.map { "-" + Self.sanitizedScreenshotName($0) } ?? ""
         let filename = baseName + suffixPart + ".ppm"
         let url = directory.appendingPathComponent(filename)
         try ppmData(
@@ -7194,7 +7282,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         return data
     }
 
-    private func sanitizedScreenshotName(_ name: String) -> String {
+    private static func sanitizedScreenshotName(_ name: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let sanitizedScalars = name.unicodeScalars.map { scalar -> Character in
             allowed.contains(scalar) ? Character(scalar) : "_"
@@ -7926,6 +8014,8 @@ private struct MilestoneLoadResult {
     var manifestMilestonesWithoutExplicitActionsCount: Int = 0
     var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
     var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
+    var manifestFramebufferScreenshotFilenameCollisionCount: Int = 0
+    var manifestFramebufferScreenshotFilenameCollisions: [String] = []
     var phaseFilteredMilestoneCount: Int? = nil
     var selectedMediaCounts: [String: Int] = [:]
     var selectedMachineProfileCounts: [String: Int] = [:]
@@ -8462,7 +8552,7 @@ private enum MilestonePhaseOutcome {
 }
 
 private struct MilestoneRunSummary: Codable, Equatable {
-    var formatVersion: Int = 33
+    var formatVersion: Int = 34
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
     var runID: String?
@@ -8502,6 +8592,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var manifestMilestonesWithoutExplicitActionsCount: Int = 0
     var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
     var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
+    var manifestFramebufferScreenshotFilenameCollisionCount: Int = 0
+    var manifestFramebufferScreenshotFilenameCollisions: [String] = []
     var phaseFilteredMilestoneCount: Int?
     var selectedMilestoneCount: Int?
     var selectedMilestoneKeys: [MilestoneResultKey] = []
@@ -8624,6 +8716,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
         manifestMilestonesWithoutExplicitActionsCount: Int = 0,
         manifestMilestonesWithoutObservableExpectationsCount: Int = 0,
         manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0,
+        manifestFramebufferScreenshotFilenameCollisionCount: Int = 0,
+        manifestFramebufferScreenshotFilenameCollisions: [String] = [],
         phaseFilteredMilestoneCount: Int? = nil,
         selectedMilestoneCount: Int?,
         selectedMilestoneKeys: [MilestoneResultKey] = [],
@@ -8710,6 +8804,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.manifestMilestonesWithoutExplicitActionsCount = manifestMilestonesWithoutExplicitActionsCount
         self.manifestMilestonesWithoutObservableExpectationsCount = manifestMilestonesWithoutObservableExpectationsCount
         self.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = manifestFramebufferHashMilestonesWithoutScreenshotNamesCount
+        self.manifestFramebufferScreenshotFilenameCollisionCount = manifestFramebufferScreenshotFilenameCollisionCount
+        self.manifestFramebufferScreenshotFilenameCollisions = manifestFramebufferScreenshotFilenameCollisions
         self.phaseFilteredMilestoneCount = phaseFilteredMilestoneCount
         self.selectedMilestoneCount = selectedMilestoneCount
         self.selectedMilestoneKeys = selectedMilestoneKeys
@@ -8992,6 +9088,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
         if requireFramebufferScreenshots && manifestFramebufferHashMilestonesWithoutScreenshotNamesCount > 0 {
             gateFailures.append("framebufferHashMilestonesWithoutScreenshotNames:\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount)")
         }
+        if requireFramebufferScreenshots && manifestFramebufferScreenshotFilenameCollisionCount > 0 {
+            gateFailures.append("framebufferScreenshotFilenameCollisions:\(manifestFramebufferScreenshotFilenameCollisionCount)")
+        }
         acceptanceFailures = gateFailures
 
         if !gateFailures.isEmpty {
@@ -9127,6 +9226,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let missingRequiredActionTypeText = missingRequiredManifestActionTypes.isEmpty ? "none" : missingRequiredManifestActionTypes.joined(separator: " ")
         let selectedPhaseText = selectedPhaseNames.isEmpty ? "none" : selectedPhaseNames.joined(separator: " ")
         let invalidSelectedPhaseText = invalidSelectedPhaseNames.isEmpty ? "none" : invalidSelectedPhaseNames.joined(separator: " ")
+        let framebufferScreenshotCollisionText = manifestFramebufferScreenshotFilenameCollisions.isEmpty
+            ? "none"
+            : manifestFramebufferScreenshotFilenameCollisions.joined(separator: " ")
         let selectedPhaseCountText = selectedPhaseCounts.isEmpty
             ? "none"
             : selectedPhaseCounts
@@ -9136,7 +9238,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let missingSelectedPhaseText = missingSelectedPhaseNames.isEmpty ? "none" : missingSelectedPhaseNames.joined(separator: " ")
         let selectedIDText = selectedMilestoneIDs.isEmpty ? "none" : selectedMilestoneIDs.joined(separator: " ")
         let missingSelectedIDText = missingSelectedMilestoneIDs.isEmpty ? "none" : missingSelectedMilestoneIDs.joined(separator: " ")
-        return "Summary total=\(total) selected=\(selectedText) phaseFiltered=\(phaseFilteredText) preShard=\(preShardText) postShard=\(postShardText) shardIndex=\(shardIndexText) shardCount=\(shardCountText) invalidShard=[\(invalidShardText)] manifestValidation=[\(manifestValidationText)] manifestPhaseCounts=[\(manifestPhaseCountText)] manifestMediaCounts=[\(manifestMediaCountText)] selectedMediaCounts=[\(selectedMediaCountText)] manifestMachineProfiles=[\(manifestMachineProfileCountText)] selectedMachineProfiles=[\(selectedMachineProfileCountText)] manifestDriveModes=[\(manifestDriveModeCountText)] selectedDriveModes=[\(selectedDriveModeCountText)] manifestSIDModels=[\(manifestSIDModelCountText)] selectedSIDModels=[\(selectedSIDModelCountText)] manifestSIDAccuracyModes=[\(manifestSIDAccuracyModeCountText)] selectedSIDAccuracyModes=[\(selectedSIDAccuracyModeCountText)] manifestObservableTypes=[\(manifestObservableTypeCountText)] selectedObservableTypes=[\(selectedObservableTypeCountText)] manifestExpectedFailureCategories=[\(manifestExpectedFailureCategoryCountText)] selectedExpectedFailureCategories=[\(selectedExpectedFailureCategoryCountText)] manifestActionTypes=[\(manifestActionTypeCountText)] selectedActionTypes=[\(selectedActionTypeCountText)] requiredMedia=[\(requiredMediaText)] invalidRequiredMedia=[\(invalidRequiredMediaText)] missingRequiredMedia=[\(missingRequiredMediaText)] requiredProfiles=[\(requiredProfileText)] invalidRequiredProfiles=[\(invalidRequiredProfileText)] missingRequiredProfiles=[\(missingRequiredProfileText)] requiredDriveModes=[\(requiredDriveText)] invalidRequiredDriveModes=[\(invalidRequiredDriveText)] missingRequiredDriveModes=[\(missingRequiredDriveText)] requiredSIDModels=[\(requiredSIDModelText)] invalidRequiredSIDModels=[\(invalidRequiredSIDModelText)] missingRequiredSIDModels=[\(missingRequiredSIDModelText)] requiredSIDAccuracyModes=[\(requiredSIDAccuracyText)] invalidRequiredSIDAccuracyModes=[\(invalidRequiredSIDAccuracyText)] missingRequiredSIDAccuracyModes=[\(missingRequiredSIDAccuracyText)] requiredObservableTypes=[\(requiredObservableText)] invalidRequiredObservableTypes=[\(invalidRequiredObservableText)] missingRequiredObservableTypes=[\(missingRequiredObservableText)] requiredFailureCategories=[\(requiredFailureCategoryText)] invalidRequiredFailureCategories=[\(invalidRequiredFailureCategoryText)] missingRequiredFailureCategories=[\(missingRequiredFailureCategoryText)] requiredActionTypes=[\(requiredActionTypeText)] invalidRequiredActionTypes=[\(invalidRequiredActionTypeText)] missingRequiredActionTypes=[\(missingRequiredActionTypeText)] manifestUntagged=\(manifestUntaggedMilestoneCount) manifestUnnamed=\(manifestUnnamedMilestoneCount) manifestExpectedFailures=\(manifestExpectedFailureCount) expectedFailuresWithoutNotes=\(manifestExpectedFailuresWithoutNotesCount) expectedFailuresWithoutReasons=\(manifestExpectedFailuresWithoutReasonMarkersCount) screenshots=\(screenshotsWrittenCount) passedScreenshots=\(passedScreenshotCount) failedScreenshots=\(failedScreenshotCount) milestonesWithoutMaxCycles=\(manifestMilestonesWithoutMaxCyclesCount) milestonesWithoutExplicitActions=\(manifestMilestonesWithoutExplicitActionsCount) milestonesWithoutObservables=\(manifestMilestonesWithoutObservableExpectationsCount) framebufferProofsWithoutScreenshots=\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount) requireManifest=\(requireManifest) requireTaggedPhases=\(requireTaggedManifestPhases) requireIDs=\(requireManifestMilestoneIDs) requireExpectedFailureNotes=\(requireExpectedFailureNotes) requireExpectedFailureReasons=\(requireExpectedFailureReasonMarkers) requireMaxCycles=\(requireExplicitMaxCycles) requireActions=\(requireExplicitActions) requireObservables=\(requireObservableExpectations) requireFramebufferScreenshots=\(requireFramebufferScreenshots) selectedPhases=[\(selectedPhaseText)] selectedPhaseCounts=[\(selectedPhaseCountText)] invalidSelectedPhases=[\(invalidSelectedPhaseText)] missingSelectedPhases=[\(missingSelectedPhaseText)] selectedIDs=[\(selectedIDText)] missingSelectedIDs=[\(missingSelectedIDText)] executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)] phases=[\(phaseText)] phaseAcceptanceFailures=[\(phaseAcceptanceText)]"
+        return "Summary total=\(total) selected=\(selectedText) phaseFiltered=\(phaseFilteredText) preShard=\(preShardText) postShard=\(postShardText) shardIndex=\(shardIndexText) shardCount=\(shardCountText) invalidShard=[\(invalidShardText)] manifestValidation=[\(manifestValidationText)] manifestPhaseCounts=[\(manifestPhaseCountText)] manifestMediaCounts=[\(manifestMediaCountText)] selectedMediaCounts=[\(selectedMediaCountText)] manifestMachineProfiles=[\(manifestMachineProfileCountText)] selectedMachineProfiles=[\(selectedMachineProfileCountText)] manifestDriveModes=[\(manifestDriveModeCountText)] selectedDriveModes=[\(selectedDriveModeCountText)] manifestSIDModels=[\(manifestSIDModelCountText)] selectedSIDModels=[\(selectedSIDModelCountText)] manifestSIDAccuracyModes=[\(manifestSIDAccuracyModeCountText)] selectedSIDAccuracyModes=[\(selectedSIDAccuracyModeCountText)] manifestObservableTypes=[\(manifestObservableTypeCountText)] selectedObservableTypes=[\(selectedObservableTypeCountText)] manifestExpectedFailureCategories=[\(manifestExpectedFailureCategoryCountText)] selectedExpectedFailureCategories=[\(selectedExpectedFailureCategoryCountText)] manifestActionTypes=[\(manifestActionTypeCountText)] selectedActionTypes=[\(selectedActionTypeCountText)] requiredMedia=[\(requiredMediaText)] invalidRequiredMedia=[\(invalidRequiredMediaText)] missingRequiredMedia=[\(missingRequiredMediaText)] requiredProfiles=[\(requiredProfileText)] invalidRequiredProfiles=[\(invalidRequiredProfileText)] missingRequiredProfiles=[\(missingRequiredProfileText)] requiredDriveModes=[\(requiredDriveText)] invalidRequiredDriveModes=[\(invalidRequiredDriveText)] missingRequiredDriveModes=[\(missingRequiredDriveText)] requiredSIDModels=[\(requiredSIDModelText)] invalidRequiredSIDModels=[\(invalidRequiredSIDModelText)] missingRequiredSIDModels=[\(missingRequiredSIDModelText)] requiredSIDAccuracyModes=[\(requiredSIDAccuracyText)] invalidRequiredSIDAccuracyModes=[\(invalidRequiredSIDAccuracyText)] missingRequiredSIDAccuracyModes=[\(missingRequiredSIDAccuracyText)] requiredObservableTypes=[\(requiredObservableText)] invalidRequiredObservableTypes=[\(invalidRequiredObservableText)] missingRequiredObservableTypes=[\(missingRequiredObservableText)] requiredFailureCategories=[\(requiredFailureCategoryText)] invalidRequiredFailureCategories=[\(invalidRequiredFailureCategoryText)] missingRequiredFailureCategories=[\(missingRequiredFailureCategoryText)] requiredActionTypes=[\(requiredActionTypeText)] invalidRequiredActionTypes=[\(invalidRequiredActionTypeText)] missingRequiredActionTypes=[\(missingRequiredActionTypeText)] manifestUntagged=\(manifestUntaggedMilestoneCount) manifestUnnamed=\(manifestUnnamedMilestoneCount) manifestExpectedFailures=\(manifestExpectedFailureCount) expectedFailuresWithoutNotes=\(manifestExpectedFailuresWithoutNotesCount) expectedFailuresWithoutReasons=\(manifestExpectedFailuresWithoutReasonMarkersCount) screenshots=\(screenshotsWrittenCount) passedScreenshots=\(passedScreenshotCount) failedScreenshots=\(failedScreenshotCount) milestonesWithoutMaxCycles=\(manifestMilestonesWithoutMaxCyclesCount) milestonesWithoutExplicitActions=\(manifestMilestonesWithoutExplicitActionsCount) milestonesWithoutObservables=\(manifestMilestonesWithoutObservableExpectationsCount) framebufferProofsWithoutScreenshots=\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount) framebufferScreenshotCollisions=\(manifestFramebufferScreenshotFilenameCollisionCount) framebufferScreenshotCollisionFiles=[\(framebufferScreenshotCollisionText)] requireManifest=\(requireManifest) requireTaggedPhases=\(requireTaggedManifestPhases) requireIDs=\(requireManifestMilestoneIDs) requireExpectedFailureNotes=\(requireExpectedFailureNotes) requireExpectedFailureReasons=\(requireExpectedFailureReasonMarkers) requireMaxCycles=\(requireExplicitMaxCycles) requireActions=\(requireExplicitActions) requireObservables=\(requireObservableExpectations) requireFramebufferScreenshots=\(requireFramebufferScreenshots) selectedPhases=[\(selectedPhaseText)] selectedPhaseCounts=[\(selectedPhaseCountText)] invalidSelectedPhases=[\(invalidSelectedPhaseText)] missingSelectedPhases=[\(missingSelectedPhaseText)] selectedIDs=[\(selectedIDText)] missingSelectedIDs=[\(missingSelectedIDText)] executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)] phases=[\(phaseText)] phaseAcceptanceFailures=[\(phaseAcceptanceText)]"
     }
 
     private static func summaryCountText(_ counts: [String: Int]) -> String {
@@ -9211,7 +9313,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
             && missingRequiredManifestFailureCategories.isEmpty
             && invalidRequiredManifestActionTypes.isEmpty
             && missingRequiredManifestActionTypes.isEmpty
-            && missingSelectedMilestoneIDs.isEmpty {
+            && missingSelectedMilestoneIDs.isEmpty
+            && manifestFramebufferScreenshotFilenameCollisionCount == 0 {
             return "No phase acceptance failures."
         }
         var parts = phaseAcceptanceFailures
@@ -9235,6 +9338,10 @@ private struct MilestoneRunSummary: Codable, Equatable {
         parts.append(contentsOf: invalidRequiredManifestActionTypes.map { "invalidRequiredAction:\($0)" })
         parts.append(contentsOf: missingRequiredManifestActionTypes.map { "missingRequiredAction:\($0)" })
         parts.append(contentsOf: missingSelectedMilestoneIDs.map { "missingSelectedID:\($0)" })
+        if manifestFramebufferScreenshotFilenameCollisionCount > 0 {
+            parts.append("framebufferScreenshotFilenameCollisions:\(manifestFramebufferScreenshotFilenameCollisionCount)")
+            parts.append("framebufferScreenshotCollisionFiles:\(manifestFramebufferScreenshotFilenameCollisions.joined(separator: " "))")
+        }
         return "Phase acceptance failures: " + parts.joined(separator: ", ")
     }
 }

@@ -595,9 +595,9 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         } else {
             screenTextContains = []
         }
-        screenRAMHash = try container.decodeIfPresent(String.self, forKey: .screenRAMHash)
-        colorRAMHash = try container.decodeIfPresent(String.self, forKey: .colorRAMHash)
-        framebufferHash = try container.decodeIfPresent(String.self, forKey: .framebufferHash)
+        screenRAMHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .screenRAMHash)
+        colorRAMHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .colorRAMHash)
+        framebufferHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .framebufferHash)
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
         roadmapPhase = try container.decodeIfPresent(CompatibilityRoadmapPhase.self, forKey: .roadmapPhase)
         expectedFailure = try container.decodeIfPresent(CompatibilityExpectedFailure.self, forKey: .expectedFailure)
@@ -958,8 +958,8 @@ public struct CompatibilityLowLevelTrackExpectation: Decodable, Equatable {
                 debugDescription: "speedZone must be 0...3"
             )
         }
-        bytesHash = try container.decodeIfPresent(String.self, forKey: .bytesHash)
-        speedZoneMapHash = try container.decodeIfPresent(String.self, forKey: .speedZoneMapHash)
+        bytesHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .bytesHash)
+        speedZoneMapHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .speedZoneMapHash)
         weakBitRangeCount = try Self.decodeNonNegativeIfPresent(container, forKey: .weakBitRangeCount)
     }
 
@@ -2324,6 +2324,27 @@ public enum CompatibilityHash {
             ]
         }
         return fnv1a64(bytes)
+    }
+
+    public static func isFNV1A64Digest(_ value: String) -> Bool {
+        value.count == 16 && value.allSatisfy { $0.isHexDigit }
+    }
+
+    static func decodeFNV1A64Digest<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) throws -> String? {
+        guard let hash = try container.decodeIfPresent(String.self, forKey: key) else {
+            return nil
+        }
+        guard isFNV1A64Digest(hash) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be a 16-character FNV-1a hex digest"
+            )
+        }
+        return hash
     }
 
     static func fnv1a64<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
