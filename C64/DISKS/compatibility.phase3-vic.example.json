@@ -1,0 +1,103 @@
+{
+  "milestones": [
+    {
+      "id": "phase3-vic-fli-reference-title",
+      "name": "Phase 3 VIC-II FLI reference demo title",
+      "file": "phase3-vic/fli-reference.d64",
+      "mediaType": "d64",
+      "machineProfile": "palC64",
+      "driveMode": "compat1541",
+      "roadmapPhase": "phase3VICII",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 9000000 },
+        { "action": "typeText", "command": "RUN\n" },
+        { "action": "waitCycles", "cycles": 18000000 }
+      ],
+      "maxCycles": 32000000,
+      "vicRegisterSnapshotHash": "0000000000000000",
+      "vicState": {
+        "displayActive": true
+      },
+      "vicRasterLine": 128,
+      "vicRasterCycle": 12,
+      "vicBALineLow": false,
+      "vicAECLineLow": false,
+      "vicHighPhaseMemoryReads": [],
+      "vicLowPhaseMemoryReads": [],
+      "framebufferHash": "0000000000000000",
+      "screenshotName": "phase3-vic-fli-reference-title",
+      "expectedFailure": {
+        "category": "vic",
+        "reasonContains": ["framebuffer hash"],
+        "note": "Template milestone: replace file and hashes with a locally owned FLI demo calibration."
+      }
+    },
+    {
+      "id": "phase3-vic-open-border-reference",
+      "name": "Phase 3 VIC-II open-border reference demo",
+      "file": "phase3-vic/open-border-reference.d64",
+      "mediaType": "d64",
+      "machineProfile": "palC64",
+      "driveMode": "compat1541",
+      "roadmapPhase": "phase3VICII",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 9000000 },
+        { "action": "typeText", "command": "RUN\n" },
+        { "action": "waitCycles", "cycles": 18000000 }
+      ],
+      "maxCycles": 32000000,
+      "vicRegisterSnapshotHash": "0000000000000000",
+      "vicState": {
+        "displayActive": true
+      },
+      "vicRasterLine": 250,
+      "vicRasterCycle": 58,
+      "vicBALineLow": false,
+      "vicAECLineLow": false,
+      "vicHighPhaseMemoryReads": [],
+      "vicLowPhaseMemoryReads": [],
+      "framebufferHash": "0000000000000000",
+      "screenshotName": "phase3-vic-open-border-reference",
+      "expectedFailure": {
+        "category": "vic",
+        "reasonContains": ["framebuffer hash"],
+        "note": "Template milestone: replace file and hashes with a locally owned open-border demo calibration."
+      }
+    },
+    {
+      "id": "phase3-vic-sprite-multiplex-reference",
+      "name": "Phase 3 VIC-II sprite-multiplex reference demo",
+      "file": "phase3-vic/sprite-multiplex-reference.d64",
+      "mediaType": "d64",
+      "machineProfile": "palC64",
+      "driveMode": "compat1541",
+      "roadmapPhase": "phase3VICII",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 9000000 },
+        { "action": "typeText", "command": "RUN\n" },
+        { "action": "waitCycles", "cycles": 18000000 }
+      ],
+      "maxCycles": 32000000,
+      "vicRegisterSnapshotHash": "0000000000000000",
+      "vicState": {
+        "displayActive": true
+      },
+      "vicRasterLine": 180,
+      "vicRasterCycle": 18,
+      "vicBALineLow": false,
+      "vicAECLineLow": false,
+      "vicHighPhaseMemoryReads": [],
+      "vicLowPhaseMemoryReads": [],
+      "framebufferHash": "0000000000000000",
+      "screenshotName": "phase3-vic-sprite-multiplex-reference",
+      "expectedFailure": {
+        "category": "vic",
+        "reasonContains": ["framebuffer hash"],
+        "note": "Template milestone: replace file and hashes with a locally owned sprite-multiplex demo calibration."
+      }
+    }
+  ]
+}

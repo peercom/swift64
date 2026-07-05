@@ -1244,6 +1244,48 @@ final class Drive1541Tests: XCTestCase {
         try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
     }
 
+    func testBlockWriteRepairsD64SectorErrorMetadataAndTrueDriveGCRImage() throws {
+        var d64 = [UInt8](makeMinimalD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset + 3] = 23
+
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(Data(d64)))
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 3), 23)
+        var previousGeneration = c64.drive1541.statusSnapshot.mediaChangeCount
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0x12))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0x34))
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-W:2,0,1,3"))
+
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 3), 0x01)
+        let exported = try XCTUnwrap(c64.exportedD64Image)
+        XCTAssertEqual([UInt8](exported)[errorOffset + 3], 0x01)
+        try assertTrueDriveMatchesExportedD64(c64, since: &previousGeneration)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-R:2,0,1,3"))
+        XCTAssertEqual(c64.diskDrive.readByte(channel: 2).byte, 0x12)
+        XCTAssertEqual(c64.diskDrive.readByte(channel: 2).byte, 0x34)
+    }
+
+    func testBlockReadReportsD64SectorErrorMetadata() throws {
+        var d64 = [UInt8](makeMinimalD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 23
+
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(Data(d64)))
+        XCTAssertEqual(c64.diskDrive.readSectorErrorCode(track: 1, sector: 0), 23)
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "B-R:2,0,1,0"))
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,01,00\r")
+    }
+
     func testC64MountAndWriteProtectStateStaySyncedAcrossDrivePaths() {
         let c64 = C64()
         XCTAssertTrue(c64.mountDisk(makeMinimalD64()))

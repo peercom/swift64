@@ -1625,7 +1625,9 @@ public final class GCRDisk {
                 errorEffect = .ok
             }
 
-            // Sync mark (5 bytes of $FF = 40 one-bits)
+            // Sync mark (5 bytes of $FF = 40 one-bits). D64 error 21
+            // represents a missing sync mark for this sector, so suppress both
+            // the header and data sync fields in the synthetic bitstream.
             let headerSyncByte: UInt8 = errorEffect == .noSync ? 0x55 : 0xFF
             gcr.append(contentsOf: [UInt8](repeating: headerSyncByte, count: 5))
 
@@ -1649,8 +1651,11 @@ public final class GCRDisk {
             // Header gap (9 bytes of $55)
             gcr.append(contentsOf: [UInt8](repeating: 0x55, count: 9))
 
-            // Data sync mark
-            gcr.append(contentsOf: [UInt8](repeating: 0xFF, count: 5))
+            // Data sync mark. Error 22 keeps the sector header visible but
+            // models a missing data block, so the data-side sync is absent.
+            let dataSyncMissing = errorEffect == .noSync || errorEffect == .dataBlockNotPresent
+            let dataSyncByte: UInt8 = dataSyncMissing ? 0x55 : 0xFF
+            gcr.append(contentsOf: [UInt8](repeating: dataSyncByte, count: 5))
 
             // Data block: $07, 256 data bytes, checksum, $00, $00
             var dataBlock = [UInt8]()

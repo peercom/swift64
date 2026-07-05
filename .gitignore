@@ -11,7 +11,10 @@ DerivedData/
 *.bin
 .codex/
 .vscode/
-C64/
+C64/*
+!C64/DISKS/
+C64/DISKS/*
+!C64/DISKS/compatibility.phase3-vic.example.json
 dist/
 script/
 !script/

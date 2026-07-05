@@ -1,7 +1,49 @@
+import Foundation
 import XCTest
 @testable import C64Core
 
 final class CompatibilityManifestTests: XCTestCase {
+    func testPhase3VICExampleManifestDecodesRepresentativeDemoMilestones() throws {
+        let manifestURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("C64/DISKS/compatibility.phase3-vic.example.json")
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
+        let milestonesByID = Dictionary(uniqueKeysWithValues: manifest.milestones.compactMap { milestone in
+            milestone.id.map { ($0, milestone) }
+        })
+
+        let expectedIDs = [
+            "phase3-vic-fli-reference-title",
+            "phase3-vic-open-border-reference",
+            "phase3-vic-sprite-multiplex-reference",
+        ]
+        XCTAssertEqual(Set(milestonesByID.keys), Set(expectedIDs))
+
+        for id in expectedIDs {
+            let milestone = try XCTUnwrap(milestonesByID[id])
+            XCTAssertEqual(milestone.mediaType, .d64)
+            XCTAssertEqual(milestone.machineProfile, .palC64)
+            XCTAssertEqual(milestone.driveMode, .compat1541)
+            XCTAssertEqual(milestone.roadmapPhase, .phase3VICII)
+            XCTAssertTrue(milestone.hasExplicitActions)
+            XCTAssertEqual(milestone.maxCycles, 32_000_000)
+            XCTAssertNotNil(milestone.vicRegisterSnapshotHash)
+            XCTAssertNotNil(milestone.vicState)
+            XCTAssertNotNil(milestone.vicRasterLine)
+            XCTAssertNotNil(milestone.vicRasterCycle)
+            XCTAssertNotNil(milestone.vicBALineLow)
+            XCTAssertNotNil(milestone.vicAECLineLow)
+            XCTAssertTrue(milestone.vicHighPhaseMemoryReadsSpecified)
+            XCTAssertTrue(milestone.vicLowPhaseMemoryReadsSpecified)
+            XCTAssertNotNil(milestone.framebufferHash)
+            XCTAssertFalse(milestone.screenshotName?.isEmpty ?? true)
+            XCTAssertEqual(milestone.expectedFailure?.category, .vic)
+            XCTAssertFalse(milestone.expectedFailure?.note?.isEmpty ?? true)
+        }
+    }
+
     func testFailureCategoryDecodesPreservationSubsystemNamesAndLegacyAliases() throws {
         let json = """
         {
@@ -303,6 +345,25 @@ final class CompatibilityManifestTests: XCTestCase {
                 { "register": "$D020", "value": "$06", "mask": "$0f" },
                 { "register": "$D011", "value": "$3b" }
               ],
+              "vicRegisterSnapshotHash": "0123456789abcdef",
+              "vicState": {
+                "badLine": true,
+                "badLineStartCycle": 12,
+                "badLineDENLatched": true,
+                "displayActive": true,
+                "verticalBorderActive": false,
+                "horizontalBorderActive": false,
+                "rowCounter": 3,
+                "videoCounter": 40,
+                "videoCounterBase": 80,
+                "displayLineBufferBase": 120,
+                "badLineFetchMask": "0x000000ffffffffff",
+                "graphicsFetchMask": 1099511627775,
+                "spriteMC": [0, 3, 6, 9, 12, 15, 18, 21],
+                "spriteMCBase": [0, 3, 6, 9, 12, 15, 18, 21],
+                "spriteYExpFF": [true, false, true, false, true, false, true, false],
+                "spriteDisplay": [false, true, false, true, false, true, false, true]
+              },
               "vicRasterLine": "$32",
               "vicRasterCycle": 17,
               "vicBALineLow": true,
@@ -579,6 +640,25 @@ final class CompatibilityManifestTests: XCTestCase {
             CompatibilityVICRegisterExpectation(register: 0xD020, value: 0x06, mask: 0x0F),
             CompatibilityVICRegisterExpectation(register: 0xD011, value: 0x3B)
         ])
+        XCTAssertEqual(milestone.vicRegisterSnapshotHash, "0123456789abcdef")
+        XCTAssertEqual(milestone.vicState, CompatibilityVICStateExpectation(
+            badLine: true,
+            badLineStartCycle: 12,
+            badLineDENLatched: true,
+            displayActive: true,
+            verticalBorderActive: false,
+            horizontalBorderActive: false,
+            rowCounter: 3,
+            videoCounter: 40,
+            videoCounterBase: 80,
+            displayLineBufferBase: 120,
+            badLineFetchMask: 0x000000ffffffffff,
+            graphicsFetchMask: 1_099_511_627_775,
+            spriteMC: [0, 3, 6, 9, 12, 15, 18, 21],
+            spriteMCBase: [0, 3, 6, 9, 12, 15, 18, 21],
+            spriteYExpFF: [true, false, true, false, true, false, true, false],
+            spriteDisplay: [false, true, false, true, false, true, false, true]
+        ))
         XCTAssertEqual(milestone.vicRasterLine, 0x32)
         XCTAssertEqual(milestone.vicRasterCycle, 17)
         XCTAssertEqual(milestone.vicBALineLow, true)
@@ -915,6 +995,58 @@ final class CompatibilityManifestTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
     }
 
+    func testManifestRejectsInvalidVICStateExpectations() {
+        let invalidRowCounterJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicState": { "rowCounter": 8 }
+            }
+          ]
+        }
+        """
+        let invalidSpriteCounterJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicState": { "spriteMC": [0, 3, 6] }
+            }
+          ]
+        }
+        """
+        let invalidSpriteBoolJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicState": { "spriteDisplay": [true, false] }
+            }
+          ]
+        }
+        """
+        let invalidMaskJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicState": { "badLineFetchMask": "not-hex" }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidRowCounterJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidSpriteCounterJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidSpriteBoolJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidMaskJSON.utf8)))
+    }
+
     func testManifestPreservesExplicitEmptyVICMemoryTraceExpectations() throws {
         let json = """
         {
@@ -1032,7 +1164,8 @@ final class CompatibilityManifestTests: XCTestCase {
             #""colorRAMHash": "0123456789abcde""#,
             #""colorRAMHash": "0123456789abcdef00""#,
             #""framebufferHash": "not-a-fnv-hash""#,
-            #""framebufferHash": "00112233445566 7"#
+            #""framebufferHash": "00112233445566 7"#,
+            #""vicRegisterSnapshotHash": "1234"#
         ]
 
         for field in invalidFields {

@@ -48,6 +48,70 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.readRegister(0xD010 + 0x40), 0x01)
     }
 
+    func testColorRegisterWritesMaskToLowNibbleAndReadFixedHighBits() {
+        let vic = VIC()
+
+        vic.writeRegister(0xD020, value: 0xA5)
+        vic.writeRegister(0xD021, value: 0xB6)
+        vic.writeRegister(0xD022, value: 0xC7)
+        vic.writeRegister(0xD023, value: 0xD8)
+        vic.writeRegister(0xD024, value: 0xE9)
+        vic.writeRegister(0xD025, value: 0xFA)
+        vic.writeRegister(0xD026, value: 0xAB)
+        vic.writeRegister(0xD027 + 0x40, value: 0xBC)
+
+        XCTAssertEqual(vic.borderColor, 0x05)
+        XCTAssertEqual(vic.backgroundColor, [0x06, 0x07, 0x08, 0x09])
+        XCTAssertEqual(vic.spriteMulticolor0, 0x0A)
+        XCTAssertEqual(vic.spriteMulticolor1, 0x0B)
+        XCTAssertEqual(vic.spriteColors[0], 0x0C)
+        XCTAssertEqual(vic.readRegister(0xD020), 0xF5)
+        XCTAssertEqual(vic.readRegister(0xD021), 0xF6)
+        XCTAssertEqual(vic.readRegister(0xD022), 0xF7)
+        XCTAssertEqual(vic.readRegister(0xD023), 0xF8)
+        XCTAssertEqual(vic.readRegister(0xD024), 0xF9)
+        XCTAssertEqual(vic.readRegister(0xD025), 0xFA)
+        XCTAssertEqual(vic.readRegister(0xD026), 0xFB)
+        XCTAssertEqual(vic.readRegister(0xD027), 0xFC)
+    }
+
+    func testDisplayControlRegisterReadbackMasksFixedBits() {
+        let vic = VIC()
+
+        vic.rasterLine = 0
+        vic.writeRegister(0xD011, value: 0xFF)
+        vic.writeRegister(0xD016, value: 0x1B)
+        vic.writeRegister(0xD018, value: 0xFE)
+
+        XCTAssertEqual(vic.controlReg1, 0x7F)
+        XCTAssertEqual(vic.rasterCompare, 0x0100)
+        XCTAssertEqual(vic.readRegister(0xD011), 0x7F)
+        XCTAssertEqual(vic.readRegister(0xD016), 0xFB)
+        XCTAssertEqual(vic.readRegister(0xD018), 0xFF)
+
+        vic.rasterLine = 0x0100
+
+        XCTAssertEqual(vic.readRegister(0xD011), 0xFF)
+    }
+
+    func testSpriteControlRegistersPreserveAllSpriteBits() {
+        let vic = VIC()
+
+        vic.writeRegister(0xD015, value: 0x81)
+        vic.writeRegister(0xD01B, value: 0x42)
+        vic.writeRegister(0xD01C, value: 0x24)
+        vic.writeRegister(0xD01D, value: 0x18)
+
+        XCTAssertEqual(vic.spriteEnabled, 0x81)
+        XCTAssertEqual(vic.spritePriority, 0x42)
+        XCTAssertEqual(vic.spriteMulticolor, 0x24)
+        XCTAssertEqual(vic.spriteExpandX, 0x18)
+        XCTAssertEqual(vic.readRegister(0xD015), 0x81)
+        XCTAssertEqual(vic.readRegister(0xD01B), 0x42)
+        XCTAssertEqual(vic.readRegister(0xD01C), 0x24)
+        XCTAssertEqual(vic.readRegister(0xD01D), 0x18)
+    }
+
     func testMirroredCollisionReadsKeepReadClearSideEffects() {
         let vic = VIC()
         vic.spriteSpriteCollision = 0x03
@@ -75,6 +139,22 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.readRegister(0xD019), 0x70)
         XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testInterruptEnableWriteMasksToLowNibbleAndReadsFixedHighBits() {
+        let vic = VIC()
+
+        vic.writeRegister(0xD01A, value: 0xFF)
+
+        XCTAssertEqual(vic.interruptEnable, 0x0F)
+        XCTAssertEqual(vic.readRegister(0xD01A), 0xFF)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01A), 0xFF)
+
+        vic.writeRegister(0xD01A + 0x80, value: 0xA5)
+
+        XCTAssertEqual(vic.interruptEnable, 0x05)
+        XCTAssertEqual(vic.readRegister(0xD01A + 0x40), 0xF5)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01A), 0xF5)
     }
 
     func testResetClearsRegistersRasterStateAndDeassertsIRQ() {
@@ -644,6 +724,85 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
     }
 
+    func testTopBorderStaysOpenWhenRowModeWriteMissesNarrowerOpenComparison() {
+        let vic = VIC()
+        let startLine = UInt16(VIC.displayTop)
+        let earlyLine = UInt16(VIC.displayTop + 2)
+
+        vic.rasterLine = startLine
+        vic.displayActive = true
+        vic.verticalBorderActive = true
+        vic.controlReg1 = 0x1B
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.tick()
+        XCTAssertFalse(vic.verticalBorderActive)
+
+        vic.writeRegister(0x11, value: 0x13)
+        while vic.rasterLine <= earlyLine {
+            vic.tick()
+        }
+
+        let fbY = Int(earlyLine) - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[1])
+    }
+
+    func testTwentyFiveRowTopBorderOpensOnExactComparisonLine() {
+        let vic = VIC()
+        let startLine = UInt16(VIC.displayTop - 1)
+        let openLine = UInt16(VIC.displayTop)
+
+        vic.rasterLine = startLine
+        vic.displayActive = false
+        vic.verticalBorderActive = true
+        vic.controlReg1 = 0x1B
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine <= openLine {
+            vic.tick()
+        }
+
+        let closedOffset = (Int(startLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        let openOffset = (Int(openLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[closedOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[openOffset + VIC.displayLeft + 20], ColorPalette.rgba[7])
+    }
+
+    func testTwentyFourRowTopBorderOpensOnExactComparisonLine() {
+        let vic = VIC()
+        let closedLine = UInt16(VIC.displayTop + 3)
+        let openLine = UInt16(VIC.displayTop + 4)
+
+        vic.rasterLine = closedLine
+        vic.displayActive = true
+        vic.verticalBorderActive = true
+        vic.controlReg1 = 0x13
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine <= openLine {
+            vic.tick()
+        }
+
+        let closedOffset = (Int(closedLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        let openOffset = (Int(openLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[closedOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[openOffset + VIC.displayLeft + 20], ColorPalette.rgba[7])
+    }
+
     func testRightBorderStaysOpenWhenColumnModeMissesCloseComparison() {
         let vic = VIC()
         let line = UInt16(VIC.displayTop)
@@ -667,6 +826,31 @@ final class VICTests: XCTestCase {
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight + 16], ColorPalette.rgba[1])
+    }
+
+    func testRightBorderStaysClosedWhenColumnModeWriteMissesWiderCloseComparison() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.controlReg2 = 0xC0
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 53 {
+            vic.tick()
+        }
+        vic.writeRegister(0x16, value: 0xC8)
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight + 16], ColorPalette.rgba[2])
     }
 
     func testLeftBorderStaysClosedWhenColumnModeWriteMissesOpenComparison() {
@@ -694,6 +878,342 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
     }
 
+    func testRasterTraceOpensLeftBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = true
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 3 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft - 1], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft], ColorPalette.rgba[7])
+    }
+
+    func testRasterTraceOpensThirtyEightColumnLeftBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+        let leftBorder = VIC.displayLeft + 7
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = true
+        vic.controlReg2 = 0xC0
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x01
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 4 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + leftBorder - 1], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + leftBorder], ColorPalette.rgba[7])
+    }
+
+    func testNTSCRasterTraceOpensLeftBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = true
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 3 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft - 1], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft], ColorPalette.rgba[7])
+    }
+
+    func testNTSCRasterTraceOpensThirtyEightColumnLeftBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        let line = UInt16(VIC.displayTop)
+        let leftBorder = VIC.displayLeft + 7
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = true
+        vic.controlReg2 = 0xC0
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x01
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 5 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + leftBorder - 1], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + leftBorder], ColorPalette.rgba[7])
+    }
+
+    func testBehindPrioritySpriteStartsCollidingAtExactLeftBorderOpenPixel() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = true
+        vic.borderColor = 0x02
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spritePriority = 0x01
+        vic.spriteX[0] = UInt16(VIC.displayLeft - 1)
+        vic.spriteY[0] = UInt8(VIC.displayTop)
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
+        vic.readMemory = { address in
+            switch address {
+            case 0x0400: return 0x01
+            case 0x1008: return 0x80
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft - 1], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.readRegister(0x1F), 0x01)
+    }
+
+    func testRasterTraceClosesRightBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 53 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 1], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight], ColorPalette.rgba[2])
+    }
+
+    func testRasterTraceClosesThirtyEightColumnRightBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+        let rightBorder = VIC.displayRight - 9
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.controlReg2 = 0xC0
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0426: return 0x01
+            case 0x1008: return 0x02
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 52 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + rightBorder - 1], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[rowOffset + rightBorder], ColorPalette.rgba[2])
+    }
+
+    func testNTSCRasterTraceClosesRightBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 55 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 1], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight], ColorPalette.rgba[2])
+    }
+
+    func testNTSCRasterTraceClosesThirtyEightColumnRightBorderAtExactComparisonPixelWithinCycle() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        let line = UInt16(VIC.displayTop)
+        let rightBorder = VIC.displayRight - 9
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.controlReg2 = 0xC0
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            switch address {
+            case 0x0426: return 0x01
+            case 0x1008: return 0x02
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterCycle < 54 {
+            vic.tick()
+        }
+        vic.tick()
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + rightBorder - 1], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[rowOffset + rightBorder], ColorPalette.rgba[2])
+    }
+
+    func testBehindPrioritySpriteStopsCollidingAfterExactRightBorderClosePixel() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.borderColor = 0x02
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spritePriority = 0x01
+        vic.spriteX[0] = UInt16(VIC.displayRight - 1)
+        vic.spriteY[0] = UInt8(VIC.displayTop)
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
+        vic.readMemory = { address in
+            switch address {
+            case 0x0427: return 0x01
+            case 0x1008: return 0x01
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine == line {
+            vic.tick()
+        }
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 1], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.readRegister(0x1F), 0x01)
+    }
+
     func testBottomBorderClosesDisplayWhenComparisonIsNotSkipped() {
         let vic = VIC()
         let line = UInt16(VIC.displayBottom)
@@ -713,6 +1233,58 @@ final class VICTests: XCTestCase {
         let fbY = VIC.displayBottom - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
+    }
+
+    func testTwentyFiveRowBottomBorderClosesOnExactComparisonLine() {
+        let vic = VIC()
+        let openLine = UInt16(VIC.displayBottom - 1)
+        let closedLine = UInt16(VIC.displayBottom)
+
+        vic.rasterLine = openLine
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.controlReg1 = 0x1B
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine <= closedLine {
+            vic.tick()
+        }
+
+        let openOffset = (Int(openLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        let closedOffset = (Int(closedLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[openOffset + VIC.displayLeft + 20], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[closedOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
+    }
+
+    func testTwentyFourRowBottomBorderClosesOnExactComparisonLine() {
+        let vic = VIC()
+        let openLine = UInt16(VIC.displayBottom - 5)
+        let closedLine = UInt16(VIC.displayBottom - 4)
+
+        vic.rasterLine = openLine
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.controlReg1 = 0x13
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { address in
+            address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        while vic.rasterLine <= closedLine {
+            vic.tick()
+        }
+
+        let openOffset = (Int(openLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        let closedOffset = (Int(closedLine) - VIC.firstVisibleLine) * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[openOffset + VIC.displayLeft + 20], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[closedOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
     }
 
     func testBottomBorderStaysOpenWhenRowModeMissesCloseComparison() {
@@ -746,6 +1318,33 @@ final class VICTests: XCTestCase {
         let fbY = Int(openedLine) - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[1])
+    }
+
+    func testBottomBorderStaysClosedWhenRowModeWriteMissesWiderCloseComparison() {
+        let vic = VIC()
+        let startLine = UInt16(VIC.displayBottom - 4)
+        let laterLine = UInt16(VIC.displayBottom + 1)
+
+        vic.rasterLine = startLine
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.controlReg1 = 0x13
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.tick()
+        XCTAssertTrue(vic.verticalBorderActive)
+
+        vic.writeRegister(0x11, value: 0x1B)
+        while vic.rasterLine <= laterLine {
+            vic.tick()
+        }
+
+        let fbY = Int(laterLine) - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
     }
 
     func testOpenBottomBorderContinuesLowPhaseDisplayFetches() {
@@ -1432,6 +2031,73 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(irqStates, [true])
     }
 
+    func testRasterHighBitClearToCurrentLineRaisesIRQImmediately() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+
+        vic.rasterLine = 0x0035
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x34)
+        vic.writeRegister(0x11, value: 0x9B)
+
+        vic.rasterLine = 0x0034
+        vic.rasterIRQTriggeredThisLine = false
+        irqStates.removeAll()
+
+        vic.writeRegister(0x11, value: 0x1B)
+
+        XCTAssertEqual(vic.rasterCompare, 0x0034)
+        XCTAssertEqual(vic.readRegister(0x19), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+    }
+
+    func testDisablingRasterIRQDeassertsButKeepsPendingRasterFlag() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0034
+
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x34)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x1A, value: 0x00)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x71)
+        XCTAssertEqual(irqStates, [true, false])
+
+        vic.writeRegister(0x1A, value: 0x01)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true, false, true])
+    }
+
+    func testInterruptAcknowledgeIgnoresHighBits() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0034
+
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x34)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0xF0)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x81)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+    }
+
     func testLightPenLatchReadsCoordinatesAndRaisesIRQ() {
         let vic = VIC()
         var irqStates: [Bool] = []
@@ -1513,19 +2179,32 @@ final class VICTests: XCTestCase {
 
     func testLightPenLatchCapturesOnlyFirstTriggerUntilNextFrame() {
         let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.writeRegister(0x1A, value: 0x08)
 
         vic.triggerLightPen(x: 100, y: 50)
         vic.triggerLightPen(x: 300, y: 60)
 
         XCTAssertEqual(vic.readRegister(0x13), 50)
         XCTAssertEqual(vic.readRegister(0x14), 50)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF8)
+        XCTAssertEqual(irqStates, [true])
 
+        vic.writeRegister(0x19, value: 0x08)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+
+        vic.writeRegister(0x12, value: 0x01)
         vic.rasterLine = UInt16(VIC.totalLines - 1)
         vic.endOfLine()
         vic.triggerLightPen(x: 300, y: 316)
 
         XCTAssertEqual(vic.readRegister(0x13), 150)
         XCTAssertEqual(vic.readRegister(0x14), 60)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF8)
+        XCTAssertEqual(irqStates, [true, false, true])
     }
 
     func testLightPenLatchResetsAtNTSCFrameBoundary() {
@@ -1561,6 +2240,82 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(irqStates, [true, false])
     }
 
+    func testRasterIRQReenableAfterAcknowledgeDoesNotRetriggerOnSameLine() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x0034
+
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x34)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x01)
+        vic.writeRegister(0x1A, value: 0x00)
+        vic.writeRegister(0x1A, value: 0x01)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+    }
+
+    func testRasterIRQSameLineSuppressionResetsAtFrameBoundary() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+
+        vic.rasterLine = 0
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x00)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x01)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+
+        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true, false, true])
+    }
+
+    func testNTSCRasterIRQSameLineSuppressionResetsAtFrameBoundary() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+
+        vic.rasterLine = 0
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.writeRegister(0x12, value: 0x00)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x01)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+
+        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.rasterLinesPerFrame, VIC.ntscRasterLinesPerFrame)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
+        XCTAssertEqual(irqStates, [true, false, true])
+    }
+
     func testRasterInterruptFiresWhenEnteringCompareLine() {
         let vic = VIC()
         var irqStates: [Bool] = []
@@ -1574,6 +2329,46 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.rasterLine, 0x0034)
         XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.readRegister(0x19), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+    }
+
+    func testPALRasterInterruptFiresWhenEnteringHighBitCompareLine() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x00FF
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+
+        vic.writeRegister(0x12, value: 0x00)
+        vic.writeRegister(0x11, value: 0x9B)
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0x0100)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.rasterCompare, 0x0100)
+        XCTAssertEqual(vic.readRegister(0x19), 0xF1)
+        XCTAssertEqual(irqStates, [true])
+    }
+
+    func testNTSCRasterInterruptFiresWhenEnteringHighBitCompareLine() {
+        let vic = VIC()
+        vic.videoStandard = .ntsc
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.rasterLine = 0x00FF
+        vic.rasterCycle = vic.rasterCyclesPerLine - 1
+
+        vic.writeRegister(0x12, value: 0x00)
+        vic.writeRegister(0x11, value: 0x9B)
+        vic.writeRegister(0x1A, value: 0x01)
+        vic.tick()
+
+        XCTAssertEqual(vic.rasterLine, 0x0100)
+        XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.rasterCompare, 0x0100)
+        XCTAssertEqual(vic.rasterLinesPerFrame, VIC.ntscRasterLinesPerFrame)
         XCTAssertEqual(vic.readRegister(0x19), 0xF1)
         XCTAssertEqual(irqStates, [true])
     }
@@ -4051,6 +4846,49 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 1)
     }
 
+    func testCycleFifteenYExpansionClearCrunchesOnlySelectedSprites() {
+        let vic = VIC()
+        vic.rasterLine = 7
+        vic.rasterCycle = 15
+        vic.spriteEnabled = 0x03
+        vic.spriteExpandY = 0x03
+        vic.spriteY[0] = 7
+        vic.spriteY[1] = 7
+        vic.updateSpriteExpansionStateForCurrentLine()
+        vic.spriteMCBase[0] = 0
+        vic.spriteMC[0] = 0
+        vic.spriteLastFetchedMC[0] = 3
+        vic.spriteMCBase[1] = 6
+        vic.spriteMC[1] = 6
+        vic.spriteLastFetchedMC[1] = 9
+
+        vic.writeRegister(0x17, value: 0x02)
+
+        XCTAssertTrue(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMCBase[0], 1)
+        XCTAssertEqual(vic.spriteMC[0], 1)
+        XCTAssertFalse(vic.spriteYExpFF[1])
+        XCTAssertEqual(vic.spriteMCBase[1], 6)
+        XCTAssertEqual(vic.spriteMC[1], 6)
+    }
+
+    func testSettingYExpansionDuringCounterWindowDoesNotCrunchUnexpandedSprite() {
+        let vic = VIC()
+        vic.rasterLine = 7
+        vic.rasterCycle = 15
+        vic.spriteEnabled = 0x01
+        vic.spriteExpandY = 0x00
+        vic.spriteY[0] = 7
+        vic.updateSpriteExpansionStateForCurrentLine()
+
+        vic.writeRegister(0x17, value: 0x01)
+
+        XCTAssertTrue(vic.spriteYExpFF[0])
+        XCTAssertEqual(vic.spriteMCBase[0], 0)
+        XCTAssertEqual(vic.spriteMC[0], 0)
+        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 0)
+    }
+
     func testClearingYExpansionAtCycleFifteenChangesSpriteDMAFetchToCrunchedBytes() {
         let vic = VIC()
         vic.rasterLine = 7
@@ -4206,6 +5044,31 @@ final class VICTests: XCTestCase {
         XCTAssertTrue(vic.spriteDisplay[0])
         XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
         XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA, 0x07FB, 0x0080, 0x0081, 0x0082])
+    }
+
+    func testSpritePointerSlotsUseCurrentD018ScreenBasePerSprite() {
+        let vic = VIC()
+        vic.rasterLine = 0
+        vic.rasterCycle = 55
+        vic.memoryPointers = 0x14
+        var reads: [UInt16] = []
+        vic.readMemory = { address in
+            reads.append(address)
+            switch address {
+            case 0x07F8: return 0x02
+            case 0x0BF9: return 0x09
+            default: return 0x00
+            }
+        }
+
+        vic.tick()
+        vic.memoryPointers = 0x24
+        vic.tick()
+
+        XCTAssertEqual(vic.spritePointers[0], 0x02)
+        XCTAssertEqual(vic.spritePointers[1], 0x09)
+        XCTAssertEqual(reads, [0x07F8, 0x0BF9])
+        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0BF9])
     }
 
     func testNTSCSpritePointerSlotsUseLastEightRasterCycles() {
@@ -5229,6 +6092,37 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.readRegister(0x1E), 0x00)
     }
 
+    func testSpriteSpriteCollisionReadClearKeepsInterruptPending() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.writeRegister(0x1A, value: 0x04)
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+
+        vic.spriteEnabled = 0x03
+        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[1] = true
+        vic.spriteX[0] = UInt16(VIC.displayLeft)
+        vic.spriteX[1] = UInt16(VIC.displayLeft)
+        vic.spriteColors[0] = 0x01
+        vic.spriteColors[1] = 0x02
+        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+
+        vic.renderSprites(&line, fbY: 0)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF4)
+        XCTAssertEqual(vic.readRegister(0x1E), 0x03)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01E), 0x00)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF4)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x04)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
+    }
+
     func testSpriteDataCollisionRegisterTracksAndClearsForegroundOverlap() {
         let vic = VIC()
         let background = ColorPalette.rgba[0]
@@ -5246,6 +6140,34 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.readRegister(0x1F), 0x01)
         XCTAssertEqual(vic.readRegister(0x1F), 0x00)
+    }
+
+    func testSpriteDataCollisionReadClearKeepsInterruptPending() {
+        let vic = VIC()
+        var irqStates: [Bool] = []
+        vic.onIRQ = { irqStates.append($0) }
+        vic.writeRegister(0x1A, value: 0x02)
+        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
+        line[VIC.displayLeft] = ColorPalette.rgba[7]
+
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteX[0] = UInt16(VIC.displayLeft)
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+
+        vic.renderSprites(&line, fbY: 0)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF2)
+        XCTAssertEqual(vic.readRegister(0x1F), 0x01)
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x00)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF2)
+        XCTAssertEqual(irqStates, [true])
+
+        vic.writeRegister(0x19, value: 0x02)
+
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        XCTAssertEqual(irqStates, [true, false])
     }
 
     func testSpriteDataCollisionUsesGraphicsMaskWhenForegroundColorMatchesBackground() {

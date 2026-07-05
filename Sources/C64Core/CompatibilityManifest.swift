@@ -308,6 +308,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let sidAudioState: CompatibilitySIDAudioState?
     public let sidVoiceStates: [CompatibilitySIDVoiceState]
     public let vicRegisters: [CompatibilityVICRegisterExpectation]
+    public let vicRegisterSnapshotHash: String?
+    public let vicState: CompatibilityVICStateExpectation?
     public let vicRasterLine: Int?
     public let vicRasterCycle: Int?
     public let vicBALineLow: Bool?
@@ -363,6 +365,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case sidAudioState
         case sidVoiceStates
         case vicRegisters
+        case vicRegisterSnapshotHash
+        case vicState
         case vicRasterLine
         case vicRasterCycle
         case vicBALineLow
@@ -414,6 +418,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState: CompatibilitySIDAudioState? = nil,
         sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
+        vicRegisterSnapshotHash: String? = nil,
+        vicState: CompatibilityVICStateExpectation? = nil,
         vicRasterLine: Int? = nil,
         vicRasterCycle: Int? = nil,
         vicBALineLow: Bool? = nil,
@@ -468,6 +474,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.sidAudioState = sidAudioState
         self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
+        self.vicRegisterSnapshotHash = vicRegisterSnapshotHash
+        self.vicState = vicState
         self.vicRasterLine = vicRasterLine
         self.vicRasterCycle = vicRasterCycle
         self.vicBALineLow = vicBALineLow
@@ -523,6 +531,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState: CompatibilitySIDAudioState? = nil,
         sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
+        vicRegisterSnapshotHash: String? = nil,
+        vicState: CompatibilityVICStateExpectation? = nil,
         vicRasterLine: Int? = nil,
         vicRasterCycle: Int? = nil,
         vicBALineLow: Bool? = nil,
@@ -577,6 +587,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.sidAudioState = sidAudioState
         self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
+        self.vicRegisterSnapshotHash = vicRegisterSnapshotHash
+        self.vicState = vicState
         self.vicRasterLine = vicRasterLine
         self.vicRasterCycle = vicRasterCycle
         self.vicBALineLow = vicBALineLow
@@ -661,6 +673,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState = try container.decodeIfPresent(CompatibilitySIDAudioState.self, forKey: .sidAudioState)
         sidVoiceStates = try container.decodeIfPresent([CompatibilitySIDVoiceState].self, forKey: .sidVoiceStates) ?? []
         vicRegisters = try container.decodeIfPresent([CompatibilityVICRegisterExpectation].self, forKey: .vicRegisters) ?? []
+        vicRegisterSnapshotHash = try CompatibilityHash.decodeFNV1A64Digest(from: container, forKey: .vicRegisterSnapshotHash)
+        vicState = try container.decodeIfPresent(CompatibilityVICStateExpectation.self, forKey: .vicState)
         vicRasterLine = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterLine, in: container)
         vicRasterCycle = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterCycle, in: container)
         vicBALineLow = try container.decodeIfPresent(Bool.self, forKey: .vicBALineLow)
@@ -2411,6 +2425,179 @@ public struct CompatibilityVICRegisterExpectation: Decodable, Equatable {
     }
 }
 
+public struct CompatibilityVICStateExpectation: Codable, Equatable {
+    public let badLine: Bool?
+    public let badLineStartCycle: Int?
+    public let badLineDENLatched: Bool?
+    public let displayActive: Bool?
+    public let verticalBorderActive: Bool?
+    public let horizontalBorderActive: Bool?
+    public let rowCounter: Int?
+    public let videoCounter: Int?
+    public let videoCounterBase: Int?
+    public let displayLineBufferBase: Int?
+    public let badLineFetchMask: UInt64?
+    public let graphicsFetchMask: UInt64?
+    public let spriteMC: [Int]?
+    public let spriteMCBase: [Int]?
+    public let spriteYExpFF: [Bool]?
+    public let spriteDisplay: [Bool]?
+
+    private enum CodingKeys: String, CodingKey {
+        case badLine
+        case badLineStartCycle
+        case badLineDENLatched
+        case displayActive
+        case verticalBorderActive
+        case horizontalBorderActive
+        case rowCounter
+        case videoCounter
+        case videoCounterBase
+        case displayLineBufferBase
+        case badLineFetchMask
+        case graphicsFetchMask
+        case spriteMC
+        case spriteMCBase
+        case spriteYExpFF
+        case spriteDisplay
+    }
+
+    public init(
+        badLine: Bool? = nil,
+        badLineStartCycle: Int? = nil,
+        badLineDENLatched: Bool? = nil,
+        displayActive: Bool? = nil,
+        verticalBorderActive: Bool? = nil,
+        horizontalBorderActive: Bool? = nil,
+        rowCounter: Int? = nil,
+        videoCounter: Int? = nil,
+        videoCounterBase: Int? = nil,
+        displayLineBufferBase: Int? = nil,
+        badLineFetchMask: UInt64? = nil,
+        graphicsFetchMask: UInt64? = nil,
+        spriteMC: [Int]? = nil,
+        spriteMCBase: [Int]? = nil,
+        spriteYExpFF: [Bool]? = nil,
+        spriteDisplay: [Bool]? = nil
+    ) {
+        self.badLine = badLine
+        self.badLineStartCycle = badLineStartCycle
+        self.badLineDENLatched = badLineDENLatched
+        self.displayActive = displayActive
+        self.verticalBorderActive = verticalBorderActive
+        self.horizontalBorderActive = horizontalBorderActive
+        self.rowCounter = rowCounter
+        self.videoCounter = videoCounter
+        self.videoCounterBase = videoCounterBase
+        self.displayLineBufferBase = displayLineBufferBase
+        self.badLineFetchMask = badLineFetchMask
+        self.graphicsFetchMask = graphicsFetchMask
+        self.spriteMC = spriteMC
+        self.spriteMCBase = spriteMCBase
+        self.spriteYExpFF = spriteYExpFF
+        self.spriteDisplay = spriteDisplay
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        badLine = try container.decodeIfPresent(Bool.self, forKey: .badLine)
+        badLineStartCycle = try Self.decodeNonNegativeIfPresent(container, forKey: .badLineStartCycle)
+        badLineDENLatched = try container.decodeIfPresent(Bool.self, forKey: .badLineDENLatched)
+        displayActive = try container.decodeIfPresent(Bool.self, forKey: .displayActive)
+        verticalBorderActive = try container.decodeIfPresent(Bool.self, forKey: .verticalBorderActive)
+        horizontalBorderActive = try container.decodeIfPresent(Bool.self, forKey: .horizontalBorderActive)
+        rowCounter = try Self.decodeNonNegativeIfPresent(container, forKey: .rowCounter, max: 7)
+        videoCounter = try Self.decodeNonNegativeIfPresent(container, forKey: .videoCounter)
+        videoCounterBase = try Self.decodeNonNegativeIfPresent(container, forKey: .videoCounterBase)
+        displayLineBufferBase = try Self.decodeNonNegativeIfPresent(container, forKey: .displayLineBufferBase)
+        badLineFetchMask = try Self.decodeUInt64IfPresent(container, forKey: .badLineFetchMask)
+        graphicsFetchMask = try Self.decodeUInt64IfPresent(container, forKey: .graphicsFetchMask)
+        spriteMC = try Self.decodeSpriteCounterArray(container, forKey: .spriteMC)
+        spriteMCBase = try Self.decodeSpriteCounterArray(container, forKey: .spriteMCBase)
+        spriteYExpFF = try Self.decodeSpriteBoolArray(container, forKey: .spriteYExpFF)
+        spriteDisplay = try Self.decodeSpriteBoolArray(container, forKey: .spriteDisplay)
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys,
+        max: Int? = nil
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else { return nil }
+        guard value >= 0, max.map({ value <= $0 }) ?? true else {
+            let rangeText = max.map { "0...\($0)" } ?? "non-negative"
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be \(rangeText)"
+            )
+        }
+        return value
+    }
+
+    private static func decodeUInt64IfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> UInt64? {
+        guard container.contains(key) else { return nil }
+        if let value = try? container.decode(UInt64.self, forKey: key) {
+            return value
+        }
+        let rawValue = try container.decode(String.self, forKey: key)
+        let compact = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: "0x", with: "", options: .caseInsensitive)
+        guard let value = UInt64(compact, radix: 16) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be an unsigned integer or hexadecimal string"
+            )
+        }
+        return value
+    }
+
+    private static func decodeSpriteCounterArray(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> [Int]? {
+        guard container.contains(key) else { return nil }
+        let values = try container.decode([Int].self, forKey: key)
+        guard values.count == 8 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must contain exactly 8 sprite entries"
+            )
+        }
+        guard values.allSatisfy({ (0...63).contains($0) }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) entries must be in 0...63"
+            )
+        }
+        return values
+    }
+
+    private static func decodeSpriteBoolArray(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> [Bool]? {
+        guard container.contains(key) else { return nil }
+        let values = try container.decode([Bool].self, forKey: key)
+        guard values.count == 8 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must contain exactly 8 sprite entries"
+            )
+        }
+        return values
+    }
+}
+
 public struct CompatibilityAddress: Decodable, Equatable {
     public let value: Int
 
@@ -2710,6 +2897,10 @@ public enum CompatibilityHash {
             ]
         }
         return fnv1a64(bytes)
+    }
+
+    public static func vicRegisterSnapshot(_ registers: [UInt8]) -> String {
+        fnv1a64(registers)
     }
 
     public static func isFNV1A64Digest(_ value: String) -> Bool {

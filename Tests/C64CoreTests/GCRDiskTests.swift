@@ -1172,11 +1172,40 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(decoded.contains { $0.0 == 1 })
     }
 
+    func testD64SectorNoSyncErrorSuppressesBothHeaderAndDataSyncMarks() throws {
+        let track1 = try syntheticTrack1(d64ErrorCode: 21)
+        let headerSyncRange = 0..<5
+        let dataSyncStart = 5 + 10 + 9
+        let dataSyncRange = dataSyncStart..<(dataSyncStart + 5)
+
+        XCTAssertEqual(Array(track1[headerSyncRange]), [UInt8](repeating: 0x55, count: 5))
+        XCTAssertEqual(Array(track1[dataSyncRange]), [UInt8](repeating: 0x55, count: 5))
+
+        let cleanTrack = try syntheticTrack1(d64ErrorCode: 1)
+        XCTAssertEqual(Array(cleanTrack[headerSyncRange]), [UInt8](repeating: 0xFF, count: 5))
+        XCTAssertEqual(Array(cleanTrack[dataSyncRange]), [UInt8](repeating: 0xFF, count: 5))
+    }
+
     func testD64SectorDataBlockNotPresentErrorSuppressesSyntheticGCRSector() throws {
         let decoded = try decodedTrack1Sectors(d64ErrorCode: 22)
 
         XCTAssertFalse(decoded.contains { $0.0 == 0 })
         XCTAssertTrue(decoded.contains { $0.0 == 1 })
+    }
+
+    func testD64SectorDataBlockNotPresentKeepsHeaderSyncButSuppressesDataSync() throws {
+        let track1 = try syntheticTrack1(d64ErrorCode: 22)
+        let headerSyncRange = 0..<5
+        let dataSyncStart = 5 + 10 + 9
+        let dataSyncRange = dataSyncStart..<(dataSyncStart + 5)
+
+        XCTAssertEqual(Array(track1[headerSyncRange]), [UInt8](repeating: 0xFF, count: 5))
+        XCTAssertEqual(Array(track1[dataSyncRange]), [UInt8](repeating: 0x55, count: 5))
+
+        let header = G64Parser.decodeGCRBlock(Array(track1[5..<15]), count: 8)
+        XCTAssertEqual(header[0], 0x08)
+        XCTAssertEqual(header[2], 0)
+        XCTAssertEqual(header[3], 1)
     }
 
     func testD64SectorByteDecodeErrorCorruptsSyntheticGCRDataBytes() throws {

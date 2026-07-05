@@ -29,13 +29,16 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneRequireMaxCyclesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MAX_CYCLES"
     private let milestoneRequireExplicitActionsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ACTIONS"
     private let milestoneRequireObservableExpectationsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_OBSERVABLES"
+    private let milestoneRequirePhase3VICProofsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_PHASE3_VIC_PROOFS"
     private let milestoneRequireFramebufferScreenshotsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_FRAMEBUFFER_SCREENSHOTS"
+    private let milestoneRejectPlaceholderProofHashesEnv = "SWIFT64_LOCAL_MILESTONE_REJECT_PLACEHOLDER_PROOF_HASHES"
     private let milestoneRequireMediaTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MEDIA_TYPES"
     private let milestoneRequireMachineProfilesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_MACHINE_PROFILES"
     private let milestoneRequireDriveModesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_DRIVE_MODES"
     private let milestoneRequireSIDModelsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_SID_MODELS"
     private let milestoneRequireSIDAccuracyModesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_SID_ACCURACY_MODES"
     private let milestoneRequireObservableTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_OBSERVABLE_TYPES"
+    private let milestoneRequireVICProofsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_VIC_PROOFS"
     private let milestoneRequireFailureCategoriesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_FAILURE_CATEGORIES"
     private let milestoneRequireActionTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ACTION_TYPES"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
@@ -431,6 +434,22 @@ final class LocalDiskMatrixTests: XCTestCase {
         ])
     }
 
+    func testMilestoneRequiredVICProofSelectionDeduplicatesAndReportsInvalidNames() {
+        let selection = Self.parseMilestoneVICProofSelection(
+            " raster, bus, state, raster, spriteCrunch, , framebuffer, spriteCrunch "
+        )
+
+        XCTAssertEqual(selection.valid, [
+            MilestoneVICProofType.raster,
+            MilestoneVICProofType.bus,
+            MilestoneVICProofType.state,
+            MilestoneVICProofType.framebuffer,
+        ])
+        XCTAssertEqual(selection.invalid, [
+            "spriteCrunch",
+        ])
+    }
+
     func testMilestoneRequiredFailureCategorySelectionDeduplicatesAndReportsInvalidNames() {
         let selection = Self.parseMilestoneFailureCategorySelection(
             " sid, vic, protectedMedia, sid, video, , cartridge, video "
@@ -798,6 +817,188 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(Self.milestonesWithoutObservableExpectationsCount(in: manifest.milestones), 1)
     }
 
+    func testManifestPhase3VICProofCoverageCountsOnlyPhase3MilestonesWithoutVICProof() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "phase3-raster-proof",
+              "file": "phase3-raster-proof.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "vicRasterLine": 64
+            },
+            {
+              "id": "phase3-framebuffer-proof",
+              "file": "phase3-framebuffer-proof.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "framebufferHash": "0011223344556677"
+            },
+            {
+              "id": "phase3-no-vic-proof",
+              "file": "phase3-no-vic-proof.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "screenTextContains": ["READY."]
+            },
+            {
+              "id": "phase4-no-vic-proof",
+              "file": "phase4-no-vic-proof.g64",
+              "media": "g64",
+              "roadmapPhase": "phase4DriveMedia",
+              "commands": ["LOAD\\"*\\",8,1"],
+              "driveStatus": { "minGCRReads": 1 }
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.phase3MilestonesWithoutVICProofCount(in: manifest.milestones), 1)
+    }
+
+    func testManifestPhase3VICProofCoverageCountsMissingRequiredProofSet() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "phase3-register-only",
+              "file": "phase3-register-only.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisters": [
+                { "register": 53265, "value": 27 }
+              ]
+            },
+            {
+              "id": "phase3-complete-proof",
+              "file": "phase3-complete-proof.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisters": [
+                { "register": 53265, "value": 27 }
+              ],
+              "vicState": {
+                "displayActive": false
+              },
+              "vicRasterLine": 64,
+              "vicBusOwner": "cpu",
+              "vicLowPhaseMemoryReads": [],
+              "framebufferHash": "0011223344556677"
+            },
+            {
+              "id": "phase4-register-only",
+              "file": "phase4-register-only.g64",
+              "media": "g64",
+              "roadmapPhase": "phase4DriveMedia",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisters": [
+                { "register": 53265, "value": 27 }
+              ]
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.phase3MilestonesWithoutVICProofCount(in: manifest.milestones), 0)
+        XCTAssertEqual(Self.phase3MilestonesMissingRequiredVICProofsCount(in: manifest.milestones), 1)
+    }
+
+    func testManifestPhase3VICProofCoverageCanSatisfyAllProofSurfaces() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "phase3-complete-proof",
+              "file": "phase3-complete-proof.prg",
+              "media": "prg",
+              "roadmapPhase": "phase3VICII",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisters": [
+                { "register": 53265, "value": 27 }
+              ],
+              "vicState": {
+                "displayActive": false
+              },
+              "vicRasterLine": 64,
+              "vicBusOwner": "cpu",
+              "vicLowPhaseMemoryReads": [],
+              "framebufferHash": "0011223344556677"
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.phase3MilestonesWithoutVICProofCount(in: manifest.milestones), 0)
+        XCTAssertEqual(Self.phase3MilestonesMissingRequiredVICProofsCount(in: manifest.milestones), 0)
+        XCTAssertEqual(Self.vicProofCounts(for: manifest.milestones), [
+            MilestoneVICProofType.registers: 1,
+            MilestoneVICProofType.state: 1,
+            MilestoneVICProofType.raster: 1,
+            MilestoneVICProofType.bus: 1,
+            MilestoneVICProofType.memoryTrace: 1,
+            MilestoneVICProofType.framebuffer: 1,
+        ])
+    }
+
+    func testPhase3VICExampleManifestSatisfiesStrictProofBundle() throws {
+        let manifestURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("C64/DISKS/compatibility.phase3-vic.example.json")
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
+
+        XCTAssertEqual(manifest.milestones.count, 3)
+        XCTAssertEqual(Self.phase3MilestonesWithoutVICProofCount(in: manifest.milestones), 0)
+        XCTAssertEqual(Self.phase3MilestonesMissingRequiredVICProofsCount(in: manifest.milestones), 0)
+
+        let proofCounts = Self.vicProofCounts(for: manifest.milestones)
+        for proofType in MilestoneVICProofType.requiredPhase3Proofs {
+            XCTAssertEqual(proofCounts[proofType], 3, "Expected all Phase 3 demo milestones to include \(proofType)")
+        }
+    }
+
+    func testManifestPlaceholderProofHashCoverageCountsUncalibratedDigests() throws {
+        let manifestJSON = """
+        {
+          "milestones": [
+            {
+              "id": "template-proof",
+              "file": "template-proof.prg",
+              "media": "prg",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisterSnapshotHash": "0000000000000000",
+              "screenRAMHash": "0000000000000000",
+              "colorRAMHash": "0000000000000000",
+              "framebufferHash": "0000000000000000"
+            },
+            {
+              "id": "calibrated-proof",
+              "file": "calibrated-proof.prg",
+              "media": "prg",
+              "actions": [{ "type": "waitCycles", "cycles": 1 }],
+              "vicRegisterSnapshotHash": "0011223344556677",
+              "screenRAMHash": "1122334455667788",
+              "colorRAMHash": "2233445566778899",
+              "framebufferHash": "33445566778899AA"
+            }
+          ]
+        }
+        """
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(manifestJSON.utf8))
+
+        XCTAssertEqual(Self.placeholderProofHashCount(in: manifest.milestones), 4)
+    }
+
     func testManifestFramebufferProofCoverageCountsMissingAndBlankScreenshotNames() throws {
         let manifestJSON = """
         {
@@ -1047,6 +1248,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let requiredSIDModelSelection = milestoneRequiredSIDModelSelection
         let requiredSIDAccuracyModeSelection = milestoneRequiredSIDAccuracyModeSelection
         let requiredObservableTypeSelection = milestoneRequiredObservableTypeSelection
+        let requiredVICProofSelection = milestoneRequiredVICProofSelection
         let requiredFailureCategorySelection = milestoneRequiredFailureCategorySelection
         let requiredActionTypeSelection = milestoneRequiredActionTypeSelection
 
@@ -1082,6 +1284,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 invalidRequiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.invalid,
                 requiredManifestObservableTypes: requiredObservableTypeSelection.valid,
                 invalidRequiredManifestObservableTypes: requiredObservableTypeSelection.invalid,
+                requiredManifestVICProofs: requiredVICProofSelection.valid,
+                invalidRequiredManifestVICProofs: requiredVICProofSelection.invalid,
                 requiredManifestFailureCategories: requiredFailureCategorySelection.valid,
                 invalidRequiredManifestFailureCategories: requiredFailureCategorySelection.invalid,
                 requiredManifestActionTypes: requiredActionTypeSelection.valid,
@@ -1094,7 +1298,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                 requireExplicitMaxCycles: shouldRequireMaxCyclesForManifestMilestones,
                 requireExplicitActions: shouldRequireExplicitActionsForManifestMilestones,
                 requireObservableExpectations: shouldRequireObservableExpectationsForManifestMilestones,
+                requirePhase3VICProofs: shouldRequirePhase3VICProofsForManifestMilestones,
                 requireFramebufferScreenshots: shouldRequireFramebufferScreenshotsForManifestMilestones,
+                rejectPlaceholderProofHashes: shouldRejectPlaceholderProofHashesForManifestMilestones,
                 failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
                 failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures,
                 failPhaseNames: milestoneFailurePhaseSelection.valid,
@@ -1140,6 +1346,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestSIDModelCounts: milestoneLoad.manifestSIDModelCounts,
             manifestSIDAccuracyModeCounts: milestoneLoad.manifestSIDAccuracyModeCounts,
             manifestObservableTypeCounts: milestoneLoad.manifestObservableTypeCounts,
+            manifestVICProofCounts: milestoneLoad.manifestVICProofCounts,
             manifestExpectedFailureCategoryCounts: milestoneLoad.manifestExpectedFailureCategoryCounts,
             manifestActionTypeCounts: milestoneLoad.manifestActionTypeCounts,
             manifestUntaggedMilestoneCount: milestoneLoad.manifestUntaggedMilestoneCount,
@@ -1150,8 +1357,11 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutMaxCyclesCount: milestoneLoad.manifestMilestonesWithoutMaxCyclesCount,
             manifestMilestonesWithoutExplicitActionsCount: milestoneLoad.manifestMilestonesWithoutExplicitActionsCount,
             manifestMilestonesWithoutObservableExpectationsCount: milestoneLoad.manifestMilestonesWithoutObservableExpectationsCount,
+            manifestPhase3MilestonesWithoutVICProofCount: milestoneLoad.manifestPhase3MilestonesWithoutVICProofCount,
+            manifestPhase3MilestonesMissingRequiredVICProofsCount: milestoneLoad.manifestPhase3MilestonesMissingRequiredVICProofsCount,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: milestoneLoad.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
             manifestFramebufferScreenshotFilenameCollisionCount: milestoneLoad.manifestFramebufferScreenshotFilenameCollisionCount,
+            manifestPlaceholderProofHashCount: milestoneLoad.manifestPlaceholderProofHashCount,
             phaseFilteredMilestoneCount: milestoneLoad.phaseFilteredMilestoneCount,
             selectedMilestoneCount: milestones.count,
             selectedMilestoneKeys: milestones.map(\.resultKey),
@@ -1161,6 +1371,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             selectedSIDModelCounts: milestoneLoad.selectedSIDModelCounts,
             selectedSIDAccuracyModeCounts: milestoneLoad.selectedSIDAccuracyModeCounts,
             selectedObservableTypeCounts: milestoneLoad.selectedObservableTypeCounts,
+            selectedVICProofCounts: milestoneLoad.selectedVICProofCounts,
             selectedExpectedFailureCategoryCounts: milestoneLoad.selectedExpectedFailureCategoryCounts,
             selectedActionTypeCounts: milestoneLoad.selectedActionTypeCounts,
             missingMediaFiles: milestoneLoad.missingMediaFiles,
@@ -1177,6 +1388,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             invalidRequiredManifestSIDAccuracyModes: requiredSIDAccuracyModeSelection.invalid,
             requiredManifestObservableTypes: requiredObservableTypeSelection.valid,
             invalidRequiredManifestObservableTypes: requiredObservableTypeSelection.invalid,
+            requiredManifestVICProofs: requiredVICProofSelection.valid,
+            invalidRequiredManifestVICProofs: requiredVICProofSelection.invalid,
             requiredManifestFailureCategories: requiredFailureCategorySelection.valid,
             invalidRequiredManifestFailureCategories: requiredFailureCategorySelection.invalid,
             requiredManifestActionTypes: requiredActionTypeSelection.valid,
@@ -1197,7 +1410,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             requireExplicitMaxCycles: shouldRequireMaxCyclesForManifestMilestones,
             requireExplicitActions: shouldRequireExplicitActionsForManifestMilestones,
             requireObservableExpectations: shouldRequireObservableExpectationsForManifestMilestones,
+            requirePhase3VICProofs: shouldRequirePhase3VICProofsForManifestMilestones,
             requireFramebufferScreenshots: shouldRequireFramebufferScreenshotsForManifestMilestones,
+            rejectPlaceholderProofHashes: shouldRejectPlaceholderProofHashesForManifestMilestones,
             failOnUnclassified: shouldFailOnUnclassifiedMilestoneFailures,
             failOnUnexpected: shouldFailOnUnexpectedMilestoneFailures,
             failPhaseNames: milestoneFailurePhaseSelection.valid,
@@ -2034,6 +2249,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(log.contains(#""category":"#))
         XCTAssertTrue(log.contains(#""roadmapPhase":"#))
         XCTAssertTrue(log.contains(#""finalPC":"#))
+        XCTAssertTrue(log.contains(#""finalVICRegisterSnapshotHash":"#))
+        XCTAssertTrue(log.contains(#""finalVICRegisterSnapshot":"#))
+        XCTAssertTrue(log.contains(#""finalVICState":"#))
         XCTAssertTrue(log.contains(#""finalSIDAccuracyMode":"compatibility""#))
         XCTAssertTrue(log.contains(#""finalSIDModel":"mos6581""#))
         XCTAssertTrue(log.contains(#""finalSIDAudioSignature":"#))
@@ -2086,8 +2304,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalVICHighPhaseMemoryReads, [])
         XCTAssertEqual(records.last?.finalVICHighPhaseColorRAMReads, [])
         XCTAssertEqual(records.last?.finalVICLowPhaseMemoryReads, [])
+        XCTAssertEqual(
+            records.last?.finalVICRegisterSnapshotHash,
+            CompatibilityHash.vicRegisterSnapshot(vicRegisterSnapshot(tapeC64.vic))
+        )
         XCTAssertEqual(records.last?.finalVICRegisterSnapshot?.count, 0x2F)
         XCTAssertEqual(records.last?.finalVICRegisterSnapshot?[0x19], "70")
+        XCTAssertEqual(records.last?.finalVICState, vicStateSnapshot(tapeC64.vic))
         XCTAssertEqual(records.last?.framebufferHash, CompatibilityHash.framebuffer(
             tapeC64.vic.framebuffer,
             width: VIC.screenWidth,
@@ -2290,7 +2513,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalVICHighPhaseMemoryReads)
         XCTAssertNil(legacyRecord.finalVICHighPhaseColorRAMReads)
         XCTAssertNil(legacyRecord.finalVICLowPhaseMemoryReads)
+        XCTAssertNil(legacyRecord.finalVICRegisterSnapshotHash)
         XCTAssertNil(legacyRecord.finalVICRegisterSnapshot)
+        XCTAssertNil(legacyRecord.finalVICState)
         XCTAssertNil(legacyRecord.finalSIDAccuracyMode)
         XCTAssertNil(legacyRecord.finalSIDModel)
         XCTAssertNil(legacyRecord.finalSIDAudioSignature)
@@ -2435,6 +2660,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 MilestoneObservableType.sid: 2,
                 MilestoneObservableType.vic: 1,
             ],
+            manifestVICProofCounts: [
+                MilestoneVICProofType.raster: 2,
+                MilestoneVICProofType.state: 1,
+            ],
             manifestExpectedFailureCategoryCounts: [
                 CompatibilityFailureCategory.drive.rawValue: 2,
                 CompatibilityFailureCategory.sid.rawValue: 1,
@@ -2452,9 +2681,12 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutMaxCyclesCount: 2,
             manifestMilestonesWithoutExplicitActionsCount: 3,
             manifestMilestonesWithoutObservableExpectationsCount: 3,
+            manifestPhase3MilestonesWithoutVICProofCount: 1,
+            manifestPhase3MilestonesMissingRequiredVICProofsCount: 2,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 2,
             manifestFramebufferScreenshotFilenameCollisionCount: 1,
             manifestFramebufferScreenshotFilenameCollisions: ["title_screen.ppm"],
+            manifestPlaceholderProofHashCount: 3,
             phaseFilteredMilestoneCount: 4,
             selectedMilestoneCount: 3,
             selectedMilestoneKeys: [milestone.resultKey],
@@ -2476,6 +2708,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             selectedObservableTypeCounts: [
                 MilestoneObservableType.drive: 3,
                 MilestoneObservableType.sid: 1,
+            ],
+            selectedVICProofCounts: [
+                MilestoneVICProofType.raster: 1,
             ],
             selectedExpectedFailureCategoryCounts: [
                 CompatibilityFailureCategory.drive.rawValue: 1,
@@ -2520,6 +2755,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 MilestoneObservableType.framebuffer,
             ],
             invalidRequiredManifestObservableTypes: ["raster"],
+            requiredManifestVICProofs: [
+                MilestoneVICProofType.raster,
+                MilestoneVICProofType.state,
+                MilestoneVICProofType.bus,
+            ],
+            invalidRequiredManifestVICProofs: ["spriteCrunch"],
             requiredManifestFailureCategories: [
                 CompatibilityFailureCategory.drive.rawValue,
                 CompatibilityFailureCategory.sid.rawValue,
@@ -2562,7 +2803,9 @@ final class LocalDiskMatrixTests: XCTestCase {
             requireExplicitMaxCycles: true,
             requireExplicitActions: true,
             requireObservableExpectations: true,
+            requirePhase3VICProofs: true,
             requireFramebufferScreenshots: true,
+            rejectPlaceholderProofHashes: true,
             failOnUnclassified: true,
             failOnUnexpected: true,
             failPhaseNames: [
@@ -2597,6 +2840,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         try writeMilestoneRunSummary(summary, to: url)
 
         let decoded = try JSONDecoder().decode(MilestoneRunSummary.self, from: Data(contentsOf: url))
+        let expectedVICRegisterSnapshotHash = CompatibilityHash.vicRegisterSnapshot(vicRegisterSnapshot(C64().vic))
+        let expectedVICState = vicStateSnapshot(C64().vic)
         func expectedFailureSummary(
             category: String,
             reason: String,
@@ -2615,7 +2860,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                 finalVICLowPhaseAccess: "idle",
                 finalVICHighPhaseMemoryReads: [],
                 finalVICHighPhaseColorRAMReads: [],
-                finalVICLowPhaseMemoryReads: []
+                finalVICLowPhaseMemoryReads: [],
+                finalVICRegisterSnapshotHash: expectedVICRegisterSnapshotHash,
+                finalVICState: expectedVICState
             )
         }
         func expectedDriftSummary(
@@ -2638,7 +2885,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                 finalVICLowPhaseAccess: "idle",
                 finalVICHighPhaseMemoryReads: [],
                 finalVICHighPhaseColorRAMReads: [],
-                finalVICLowPhaseMemoryReads: []
+                finalVICLowPhaseMemoryReads: [],
+                finalVICRegisterSnapshotHash: expectedVICRegisterSnapshotHash,
+                finalVICState: expectedVICState
             )
         }
         XCTAssertEqual(decoded.total, 5)
@@ -2697,6 +2946,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             MilestoneObservableType.sid: 2,
             MilestoneObservableType.vic: 1,
         ])
+        XCTAssertEqual(decoded.manifestVICProofCounts, [
+            MilestoneVICProofType.raster: 2,
+            MilestoneVICProofType.state: 1,
+        ])
         XCTAssertEqual(decoded.manifestExpectedFailureCategoryCounts, [
             CompatibilityFailureCategory.drive.rawValue: 2,
             CompatibilityFailureCategory.sid.rawValue: 1,
@@ -2714,9 +2967,12 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.manifestMilestonesWithoutMaxCyclesCount, 2)
         XCTAssertEqual(decoded.manifestMilestonesWithoutExplicitActionsCount, 3)
         XCTAssertEqual(decoded.manifestMilestonesWithoutObservableExpectationsCount, 3)
+        XCTAssertEqual(decoded.manifestPhase3MilestonesWithoutVICProofCount, 1)
+        XCTAssertEqual(decoded.manifestPhase3MilestonesMissingRequiredVICProofsCount, 2)
         XCTAssertEqual(decoded.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount, 2)
         XCTAssertEqual(decoded.manifestFramebufferScreenshotFilenameCollisionCount, 1)
         XCTAssertEqual(decoded.manifestFramebufferScreenshotFilenameCollisions, ["title_screen.ppm"])
+        XCTAssertEqual(decoded.manifestPlaceholderProofHashCount, 3)
         XCTAssertEqual(decoded.phaseFilteredMilestoneCount, 4)
         XCTAssertEqual(decoded.selectedMilestoneCount, 3)
         XCTAssertEqual(decoded.selectedMilestoneKeys, [milestone.resultKey])
@@ -2738,6 +2994,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.selectedObservableTypeCounts, [
             MilestoneObservableType.drive: 3,
             MilestoneObservableType.sid: 1,
+        ])
+        XCTAssertEqual(decoded.selectedVICProofCounts, [
+            MilestoneVICProofType.raster: 1,
         ])
         XCTAssertEqual(decoded.selectedExpectedFailureCategoryCounts, [
             CompatibilityFailureCategory.drive.rawValue: 1,
@@ -2800,6 +3059,15 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.missingRequiredManifestObservableTypes, [
             MilestoneObservableType.framebuffer,
         ])
+        XCTAssertEqual(decoded.requiredManifestVICProofs, [
+            MilestoneVICProofType.raster,
+            MilestoneVICProofType.state,
+            MilestoneVICProofType.bus,
+        ])
+        XCTAssertEqual(decoded.invalidRequiredManifestVICProofs, ["spriteCrunch"])
+        XCTAssertEqual(decoded.missingRequiredManifestVICProofs, [
+            MilestoneVICProofType.bus,
+        ])
         XCTAssertEqual(decoded.requiredManifestFailureCategories, [
             CompatibilityFailureCategory.drive.rawValue,
             CompatibilityFailureCategory.sid.rawValue,
@@ -2848,7 +3116,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.requireExplicitMaxCycles, true)
         XCTAssertEqual(decoded.requireExplicitActions, true)
         XCTAssertEqual(decoded.requireObservableExpectations, true)
+        XCTAssertEqual(decoded.requirePhase3VICProofs, true)
         XCTAssertEqual(decoded.requireFramebufferScreenshots, true)
+        XCTAssertEqual(decoded.rejectPlaceholderProofHashes, true)
         XCTAssertEqual(decoded.failOnUnclassified, true)
         XCTAssertEqual(decoded.failOnUnexpected, true)
         XCTAssertEqual(decoded.failPhaseNames, [
@@ -2878,6 +3148,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             "missingRequiredSIDAccuracyMode:compatibility",
             "invalidRequiredObservableType:raster",
             "missingRequiredObservableType:framebuffer",
+            "invalidRequiredVICProof:spriteCrunch",
+            "missingRequiredVICProof:bus",
             "invalidRequiredFailureCategory:video",
             "missingRequiredFailureCategory:vic",
             "invalidRequiredActionType:mouseDown",
@@ -2891,11 +3163,14 @@ final class LocalDiskMatrixTests: XCTestCase {
             "milestonesWithoutMaxCycles:2",
             "milestonesWithoutExplicitActions:3",
             "milestonesWithoutObservableExpectations:3",
+            "phase3MilestonesWithoutVICProof:1",
+            "phase3MilestonesMissingRequiredVICProofs:2",
             "framebufferHashMilestonesWithoutScreenshotNames:2",
-            "framebufferScreenshotFilenameCollisions:1"
+            "framebufferScreenshotFilenameCollisions:1",
+            "placeholderProofHashes:3"
         ])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
-        XCTAssertEqual(decoded.formatVersion, 37)
+        XCTAssertEqual(decoded.formatVersion, 42)
         XCTAssertEqual(decoded.totalElapsedCycles, 85)
         XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
@@ -3052,6 +3327,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("invalidRequiredAction:mouseDown"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingRequiredAction:startTape"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("missingSelectedID:missing-id"))
+        XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("phase3MilestonesMissingRequiredVICProofs:2"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("framebufferScreenshotFilenameCollisions:1"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains("title_screen.ppm"))
         XCTAssertTrue(decoded.consoleSummary.contains("total=5"))
@@ -3115,9 +3391,12 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutMaxCycles=2"))
         XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutExplicitActions=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("milestonesWithoutObservables=3"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phase3MilestonesWithoutVICProof=1"))
+        XCTAssertTrue(decoded.consoleSummary.contains("phase3MilestonesMissingRequiredVICProofs=2"))
         XCTAssertTrue(decoded.consoleSummary.contains("framebufferProofsWithoutScreenshots=2"))
         XCTAssertTrue(decoded.consoleSummary.contains("framebufferScreenshotCollisions=1"))
         XCTAssertTrue(decoded.consoleSummary.contains("framebufferScreenshotCollisionFiles=[title_screen.ppm]"))
+        XCTAssertTrue(decoded.consoleSummary.contains("placeholderProofHashes=3"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireManifest=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireTaggedPhases=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireIDs=true"))
@@ -3126,7 +3405,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.consoleSummary.contains("requireMaxCycles=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireActions=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireObservables=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("requirePhase3VICProofs=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("requireFramebufferScreenshots=true"))
+        XCTAssertTrue(decoded.consoleSummary.contains("rejectPlaceholderProofHashes=true"))
         XCTAssertTrue(decoded.consoleSummary.contains("selectedPhases=[phase4DriveMedia phase5SID]"))
         XCTAssertTrue(decoded.consoleSummary.contains("selectedPhaseCounts=[phase4DriveMedia=4 phase5SID=0]"))
         XCTAssertTrue(decoded.consoleSummary.contains("invalidSelectedPhases=[phase5SIDD]"))
@@ -3227,6 +3508,80 @@ final class LocalDiskMatrixTests: XCTestCase {
         missingManifest.refreshDerivedFields()
         XCTAssertEqual(missingManifest.outcome, "acceptanceFailed")
         XCTAssertEqual(missingManifest.acceptanceFailures, ["missingManifest"])
+    }
+
+    func testMilestoneRunSummaryCanGatePhase3VICMilestonesWithoutVICProof() {
+        var summary = MilestoneRunSummary()
+        summary.configureRun(
+            runID: nil,
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            manifestMilestoneCount: 3,
+            manifestPhaseCounts: [
+                MilestoneRoadmapPhase.phase3VICII: 2,
+                MilestoneRoadmapPhase.phase4DriveMedia: 1,
+            ],
+            manifestVICProofCounts: [
+                MilestoneVICProofType.raster: 1,
+            ],
+            manifestPhase3MilestonesWithoutVICProofCount: 1,
+            manifestPhase3MilestonesMissingRequiredVICProofsCount: 2,
+            selectedMilestoneCount: 0,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            requirePhase3VICProofs: true,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+
+        summary.refreshDerivedFields()
+
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
+        XCTAssertEqual(summary.acceptanceFailures, [
+            "phase3MilestonesWithoutVICProof:1",
+            "phase3MilestonesMissingRequiredVICProofs:2",
+        ])
+        XCTAssertTrue(summary.consoleSummary.contains("phase3MilestonesWithoutVICProof=1"))
+        XCTAssertTrue(summary.consoleSummary.contains("phase3MilestonesMissingRequiredVICProofs=2"))
+        XCTAssertTrue(summary.consoleSummary.contains("requirePhase3VICProofs=true"))
+    }
+
+    func testMilestoneRunSummaryCanRejectPlaceholderProofHashes() {
+        var summary = MilestoneRunSummary()
+        summary.configureRun(
+            runID: nil,
+            manifestURL: URL(fileURLWithPath: "/tmp/compatibility.json"),
+            manifestHash: nil,
+            resultLogURL: nil,
+            screenshotDirectoryURL: nil,
+            resumeEnabled: false,
+            strictManifestResumeEnabled: false,
+            screenshotFailuresEnabled: false,
+            milestoneLimit: nil,
+            manifestMilestoneCount: 3,
+            manifestPlaceholderProofHashCount: 4,
+            selectedMilestoneCount: 0,
+            missingMediaFiles: [],
+            requireAllManifestMedia: false,
+            rejectPlaceholderProofHashes: true,
+            failOnUnclassified: false,
+            failOnUnexpected: false
+        )
+
+        summary.refreshDerivedFields()
+
+        XCTAssertEqual(summary.outcome, "acceptanceFailed")
+        XCTAssertEqual(summary.acceptanceFailures, [
+            "placeholderProofHashes:4",
+        ])
+        XCTAssertTrue(summary.consoleSummary.contains("placeholderProofHashes=4"))
+        XCTAssertTrue(summary.consoleSummary.contains("rejectPlaceholderProofHashes=true"))
     }
 
     func testMilestoneRunSummaryAcceptanceGateIgnoresCategorizedFailures() {
@@ -4139,6 +4494,154 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(result.reason.contains("VIC $D020"))
     }
 
+    func testNamedMilestoneCanMatchVICRegisterSnapshotHash() {
+        let c64 = C64()
+        c64.vic.writeRegister(0x11, value: 0x3B)
+        c64.vic.writeRegister(0x20, value: 0x06)
+        let expectedHash = CompatibilityHash.vicRegisterSnapshot(vicRegisterSnapshot(c64.vic))
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/vic.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRegisterSnapshotHash: expectedHash,
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresVICRegisterSnapshotHash() {
+        let c64 = C64()
+        c64.vic.writeRegister(0x20, value: 0x06)
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/vic.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRegisterSnapshotHash: "1111111111111111",
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .vic)
+        XCTAssertTrue(result.reason.contains("VIC registerSnapshotHash"))
+    }
+
+    func testNamedMilestoneCanMatchVICState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 20
+        c64.vic.badLine = true
+        c64.vic.badLineStartCycle = 12
+        c64.vic.badLineDENLatched = true
+        c64.vic.displayActive = true
+        c64.vic.verticalBorderActive = false
+        c64.vic.horizontalBorderActive = false
+        c64.vic.rowCounter = 3
+        c64.vic.videoCounterBase = 80
+        c64.vic.displayLineBufferBase = 40
+        c64.vic.spriteMC = [0, 3, 6, 9, 12, 15, 18, 21]
+        c64.vic.spriteMCBase = [0, 3, 6, 9, 12, 15, 18, 21]
+        c64.vic.spriteYExpFF = [true, false, true, false, true, false, true, false]
+        c64.vic.spriteDisplay = [false, true, false, true, false, true, false, true]
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/vic.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicState: CompatibilityVICStateExpectation(
+                badLine: true,
+                badLineStartCycle: 12,
+                badLineDENLatched: true,
+                displayActive: true,
+                verticalBorderActive: false,
+                horizontalBorderActive: false,
+                rowCounter: 3,
+                videoCounterBase: 80,
+                displayLineBufferBase: 40,
+                spriteMC: [0, 3, 6, 9, 12, 15, 18, 21],
+                spriteMCBase: [0, 3, 6, 9, 12, 15, 18, 21],
+                spriteYExpFF: [true, false, true, false, true, false, true, false],
+                spriteDisplay: [false, true, false, true, false, true, false, true]
+            ),
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresVICState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 20
+        c64.vic.rowCounter = 3
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/vic.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicState: CompatibilityVICStateExpectation(rowCounter: 4),
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .vic)
+        XCTAssertTrue(result.reason.contains("VIC state rowCounter"))
+    }
+
     func testNamedMilestoneCanMatchVICRasterPosition() {
         let c64 = C64()
         c64.vic.rasterLine = 50
@@ -4931,6 +5434,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         Self.parseMilestoneObservableTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireObservableTypesEnv])
     }
 
+    private var milestoneRequiredVICProofSelection: (valid: [String], invalid: [String]) {
+        Self.parseMilestoneVICProofSelection(ProcessInfo.processInfo.environment[milestoneRequireVICProofsEnv])
+    }
+
     private var milestoneRequiredFailureCategorySelection: (valid: [String], invalid: [String]) {
         Self.parseMilestoneFailureCategorySelection(ProcessInfo.processInfo.environment[milestoneRequireFailureCategoriesEnv])
     }
@@ -5157,6 +5664,32 @@ final class LocalDiskMatrixTests: XCTestCase {
         return (valid, invalid)
     }
 
+    private static func parseMilestoneVICProofSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], [])
+        }
+        let acceptedTypes = Set(milestoneVICProofTypeNames)
+        var valid: [String] = []
+        var invalid: [String] = []
+        var seenValid = Set<String>()
+        var seenInvalid = Set<String>()
+        let proofTypes = value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for proofType in proofTypes {
+            if acceptedTypes.contains(proofType) {
+                if seenValid.insert(proofType).inserted {
+                    valid.append(proofType)
+                }
+            } else if seenInvalid.insert(proofType).inserted {
+                invalid.append(proofType)
+            }
+        }
+        return (valid, invalid)
+    }
+
     private static func parseMilestoneFailureCategorySelection(_ value: String?) -> (valid: [String], invalid: [String]) {
         guard let value,
               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -5246,6 +5779,32 @@ final class LocalDiskMatrixTests: XCTestCase {
         static let screen = "screen"
         static let framebuffer = "framebuffer"
     }
+
+    private enum MilestoneVICProofType {
+        static let registers = "registers"
+        static let state = "state"
+        static let raster = "raster"
+        static let bus = "bus"
+        static let memoryTrace = "memoryTrace"
+        static let framebuffer = "framebuffer"
+        static let requiredPhase3Proofs = [
+            registers,
+            state,
+            raster,
+            bus,
+            memoryTrace,
+            framebuffer,
+        ]
+    }
+
+    private static let milestoneVICProofTypeNames = [
+        MilestoneVICProofType.registers,
+        MilestoneVICProofType.state,
+        MilestoneVICProofType.raster,
+        MilestoneVICProofType.bus,
+        MilestoneVICProofType.memoryTrace,
+        MilestoneVICProofType.framebuffer,
+    ]
 
     private static let milestoneObservableTypeNames = [
         MilestoneObservableType.pc,
@@ -5364,8 +5923,16 @@ final class LocalDiskMatrixTests: XCTestCase {
         ProcessInfo.processInfo.environment[milestoneRequireObservableExpectationsEnv] == "1"
     }
 
+    private var shouldRequirePhase3VICProofsForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRequirePhase3VICProofsEnv] == "1"
+    }
+
     private var shouldRequireFramebufferScreenshotsForManifestMilestones: Bool {
         ProcessInfo.processInfo.environment[milestoneRequireFramebufferScreenshotsEnv] == "1"
+    }
+
+    private var shouldRejectPlaceholderProofHashesForManifestMilestones: Bool {
+        ProcessInfo.processInfo.environment[milestoneRejectPlaceholderProofHashesEnv] == "1"
     }
 
     private var localMilestoneLimit: Int? {
@@ -5567,6 +6134,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 let actual = c64.vic.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
                 return (actual & expectation.mask) == (expectation.value & expectation.mask)
             }
+            let vicRegisterSnapshotHashMatches = milestone.vicRegisterSnapshotHash.map {
+                CompatibilityHash.vicRegisterSnapshot(vicRegisterSnapshot(c64.vic)).caseInsensitiveCompare($0) == .orderedSame
+            } ?? true
+            let vicStateMatches = vicStateMismatches(milestone.vicState, vic: c64.vic).isEmpty
             let vicRasterLineMatches = milestone.vicRasterLine.map { Int(c64.vic.rasterLine) == $0 } ?? true
             let vicRasterCycleMatches = milestone.vicRasterCycle.map { c64.vic.rasterCycle == $0 } ?? true
             let vicBusMatches = vicBusMismatches(
@@ -5625,6 +6196,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && sidAudioStateMatches
                 && sidVoiceStateMatches
                 && vicMatches
+                && vicRegisterSnapshotHashMatches
+                && vicStateMatches
                 && vicRasterLineMatches
                 && vicRasterCycleMatches
                 && vicBusMatches
@@ -5719,6 +6292,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMachineProfileCounts: [CompatibilityMachineProfile.palC64.rawValue: 1],
             manifestDriveModeCounts: [CompatibilityDriveMode.compat1541.rawValue: 1],
             manifestObservableTypeCounts: [MilestoneObservableType.drive: 1],
+            manifestVICProofCounts: [:],
             manifestActionTypeCounts: [MilestoneActionType.typeText: 1],
             manifestUntaggedMilestoneCount: 0,
             manifestUnnamedMilestoneCount: 0,
@@ -5728,14 +6302,18 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutMaxCyclesCount: 0,
             manifestMilestonesWithoutExplicitActionsCount: 0,
             manifestMilestonesWithoutObservableExpectationsCount: 0,
+            manifestPhase3MilestonesWithoutVICProofCount: 0,
+            manifestPhase3MilestonesMissingRequiredVICProofsCount: 0,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: 0,
             manifestFramebufferScreenshotFilenameCollisionCount: 0,
             manifestFramebufferScreenshotFilenameCollisions: [],
+            manifestPlaceholderProofHashCount: 0,
             phaseFilteredMilestoneCount: phaseSelection.valid.isEmpty ? nil : 1,
             selectedMediaCounts: Self.mediaCounts(for: fallbackMilestones),
             selectedMachineProfileCounts: Self.machineProfileCounts(for: fallbackMilestones),
             selectedDriveModeCounts: Self.driveModeCounts(for: fallbackMilestones),
             selectedObservableTypeCounts: Self.observableTypeCounts(for: fallbackMilestones),
+            selectedVICProofCounts: Self.vicProofCounts(for: fallbackMilestones),
             selectedActionTypeCounts: Self.actionTypeCounts(for: fallbackMilestones),
             selectedPhaseNames: phaseSelection.valid,
             invalidSelectedPhaseNames: phaseSelection.invalid,
@@ -5770,6 +6348,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let manifestSIDModelCounts = Self.sidModelCounts(for: manifest.milestones)
         let manifestSIDAccuracyModeCounts = Self.sidAccuracyModeCounts(for: manifest.milestones)
         let manifestObservableTypeCounts = Self.observableTypeCounts(for: manifest.milestones)
+        let manifestVICProofCounts = Self.vicProofCounts(for: manifest.milestones)
         let manifestExpectedFailureCategoryCounts = Self.expectedFailureCategoryCounts(for: manifest.milestones)
         let manifestActionTypeCounts = Self.actionTypeCounts(for: manifest.milestones)
         let manifestUntaggedMilestoneCount = Self.untaggedPhaseCount(in: manifest.milestones)
@@ -5780,8 +6359,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         let manifestMilestonesWithoutMaxCyclesCount = Self.milestonesWithoutMaxCyclesCount(in: manifest.milestones)
         let manifestMilestonesWithoutExplicitActionsCount = Self.milestonesWithoutExplicitActionsCount(in: manifest.milestones)
         let manifestMilestonesWithoutObservableExpectationsCount = Self.milestonesWithoutObservableExpectationsCount(in: manifest.milestones)
+        let manifestPhase3MilestonesWithoutVICProofCount = Self.phase3MilestonesWithoutVICProofCount(in: manifest.milestones)
+        let manifestPhase3MilestonesMissingRequiredVICProofsCount = Self.phase3MilestonesMissingRequiredVICProofsCount(in: manifest.milestones)
         let manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = Self.framebufferHashMilestonesWithoutScreenshotNamesCount(in: manifest.milestones)
         let manifestFramebufferScreenshotFilenameCollisions = Self.framebufferScreenshotFilenameCollisions(in: manifest.milestones)
+        let manifestPlaceholderProofHashCount = Self.placeholderProofHashCount(in: manifest.milestones)
         let phaseFilteredEntries = Self.phaseFilteredManifestEntries(
             manifest.milestones,
             selectedPhaseNames: phaseSelection.valid
@@ -5840,6 +6422,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 sidAudioState: entry.sidAudioState,
                 sidVoiceStates: entry.sidVoiceStates,
                 vicRegisters: entry.vicRegisters,
+                vicRegisterSnapshotHash: entry.vicRegisterSnapshotHash,
+                vicState: entry.vicState,
                 vicRasterLine: entry.vicRasterLine,
                 vicRasterCycle: entry.vicRasterCycle,
                 vicBALineLow: entry.vicBALineLow,
@@ -5892,6 +6476,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestSIDModelCounts: manifestSIDModelCounts,
             manifestSIDAccuracyModeCounts: manifestSIDAccuracyModeCounts,
             manifestObservableTypeCounts: manifestObservableTypeCounts,
+            manifestVICProofCounts: manifestVICProofCounts,
             manifestExpectedFailureCategoryCounts: manifestExpectedFailureCategoryCounts,
             manifestActionTypeCounts: manifestActionTypeCounts,
             manifestUntaggedMilestoneCount: manifestUntaggedMilestoneCount,
@@ -5902,9 +6487,12 @@ final class LocalDiskMatrixTests: XCTestCase {
             manifestMilestonesWithoutMaxCyclesCount: manifestMilestonesWithoutMaxCyclesCount,
             manifestMilestonesWithoutExplicitActionsCount: manifestMilestonesWithoutExplicitActionsCount,
             manifestMilestonesWithoutObservableExpectationsCount: manifestMilestonesWithoutObservableExpectationsCount,
+            manifestPhase3MilestonesWithoutVICProofCount: manifestPhase3MilestonesWithoutVICProofCount,
+            manifestPhase3MilestonesMissingRequiredVICProofsCount: manifestPhase3MilestonesMissingRequiredVICProofsCount,
             manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: manifestFramebufferHashMilestonesWithoutScreenshotNamesCount,
             manifestFramebufferScreenshotFilenameCollisionCount: manifestFramebufferScreenshotFilenameCollisions.count,
             manifestFramebufferScreenshotFilenameCollisions: manifestFramebufferScreenshotFilenameCollisions,
+            manifestPlaceholderProofHashCount: manifestPlaceholderProofHashCount,
             phaseFilteredMilestoneCount: phaseFilteredEntries.count,
             selectedMediaCounts: Self.mediaCounts(for: milestones),
             selectedMachineProfileCounts: Self.machineProfileCounts(for: milestones),
@@ -5912,6 +6500,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             selectedSIDModelCounts: Self.sidModelCounts(for: milestones),
             selectedSIDAccuracyModeCounts: Self.sidAccuracyModeCounts(for: milestones),
             selectedObservableTypeCounts: Self.observableTypeCounts(for: milestones),
+            selectedVICProofCounts: Self.vicProofCounts(for: milestones),
             selectedExpectedFailureCategoryCounts: Self.expectedFailureCategoryCounts(for: milestones),
             selectedActionTypeCounts: Self.actionTypeCounts(for: milestones),
             missingMediaFiles: missingMediaFiles,
@@ -6123,6 +6712,26 @@ final class LocalDiskMatrixTests: XCTestCase {
         return counts
     }
 
+    private static func vicProofCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            for proofType in vicProofTypes(for: entry) {
+                counts[proofType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private static func vicProofCounts(for milestones: [LocalMilestone]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for milestone in milestones {
+            for proofType in vicProofTypes(for: milestone) {
+                counts[proofType, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
     private static func expectedFailureCategoryCounts(for entries: [CompatibilityMilestone]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for entry in entries {
@@ -6222,6 +6831,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             types.append(MilestoneObservableType.sid)
         }
         if !entry.vicRegisters.isEmpty
+            || entry.vicRegisterSnapshotHash != nil
+            || entry.vicState != nil
             || entry.vicRasterLine != nil
             || entry.vicRasterCycle != nil
             || entry.vicBALineLow != nil
@@ -6245,6 +6856,38 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         if entry.framebufferHash != nil {
             types.append(MilestoneObservableType.framebuffer)
+        }
+        return types
+    }
+
+    private static func vicProofTypes(for entry: CompatibilityMilestone) -> [String] {
+        var types: [String] = []
+        if !entry.vicRegisters.isEmpty || entry.vicRegisterSnapshotHash != nil {
+            types.append(MilestoneVICProofType.registers)
+        }
+        if entry.vicState != nil {
+            types.append(MilestoneVICProofType.state)
+        }
+        if entry.vicRasterLine != nil || entry.vicRasterCycle != nil {
+            types.append(MilestoneVICProofType.raster)
+        }
+        if entry.vicBALineLow != nil
+            || entry.vicAECLineLow != nil
+            || entry.vicBusOwner != nil
+            || entry.vicBusPhase != nil
+            || entry.vicLowPhaseAccess != nil {
+            types.append(MilestoneVICProofType.bus)
+        }
+        if entry.vicHighPhaseMemoryReadsSpecified
+            || !entry.vicHighPhaseMemoryReads.isEmpty
+            || entry.vicHighPhaseColorRAMReadsSpecified
+            || !entry.vicHighPhaseColorRAMReads.isEmpty
+            || entry.vicLowPhaseMemoryReadsSpecified
+            || !entry.vicLowPhaseMemoryReads.isEmpty {
+            types.append(MilestoneVICProofType.memoryTrace)
+        }
+        if entry.framebufferHash != nil {
+            types.append(MilestoneVICProofType.framebuffer)
         }
         return types
     }
@@ -6282,6 +6925,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             types.append(MilestoneObservableType.sid)
         }
         if !milestone.vicRegisters.isEmpty
+            || milestone.vicRegisterSnapshotHash != nil
+            || milestone.vicState != nil
             || milestone.vicRasterLine != nil
             || milestone.vicRasterCycle != nil
             || milestone.vicBALineLow != nil
@@ -6305,6 +6950,38 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         if milestone.framebufferHash != nil {
             types.append(MilestoneObservableType.framebuffer)
+        }
+        return types
+    }
+
+    private static func vicProofTypes(for milestone: LocalMilestone) -> [String] {
+        var types: [String] = []
+        if !milestone.vicRegisters.isEmpty || milestone.vicRegisterSnapshotHash != nil {
+            types.append(MilestoneVICProofType.registers)
+        }
+        if milestone.vicState != nil {
+            types.append(MilestoneVICProofType.state)
+        }
+        if milestone.vicRasterLine != nil || milestone.vicRasterCycle != nil {
+            types.append(MilestoneVICProofType.raster)
+        }
+        if milestone.vicBALineLow != nil
+            || milestone.vicAECLineLow != nil
+            || milestone.vicBusOwner != nil
+            || milestone.vicBusPhase != nil
+            || milestone.vicLowPhaseAccess != nil {
+            types.append(MilestoneVICProofType.bus)
+        }
+        if milestone.vicHighPhaseMemoryReadsSpecified
+            || !milestone.vicHighPhaseMemoryReads.isEmpty
+            || milestone.vicHighPhaseColorRAMReadsSpecified
+            || !milestone.vicHighPhaseColorRAMReads.isEmpty
+            || milestone.vicLowPhaseMemoryReadsSpecified
+            || !milestone.vicLowPhaseMemoryReads.isEmpty {
+            types.append(MilestoneVICProofType.memoryTrace)
+        }
+        if milestone.framebufferHash != nil {
+            types.append(MilestoneVICProofType.framebuffer)
         }
         return types
     }
@@ -6372,6 +7049,23 @@ final class LocalDiskMatrixTests: XCTestCase {
         entries.filter { !hasObservableExpectation($0) }.count
     }
 
+    private static func phase3MilestonesWithoutVICProofCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            entry.roadmapPhase?.rawValue == MilestoneRoadmapPhase.phase3VICII
+                && vicProofTypes(for: entry).isEmpty
+        }.count
+    }
+
+    private static func phase3MilestonesMissingRequiredVICProofsCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.filter { entry in
+            guard entry.roadmapPhase?.rawValue == MilestoneRoadmapPhase.phase3VICII else {
+                return false
+            }
+            let proofTypes = Set(vicProofTypes(for: entry))
+            return !MilestoneVICProofType.requiredPhase3Proofs.allSatisfy { proofTypes.contains($0) }
+        }.count
+    }
+
     private static func framebufferHashMilestonesWithoutScreenshotNamesCount(in entries: [CompatibilityMilestone]) -> Int {
         entries.filter { entry in
             guard entry.framebufferHash != nil else { return false }
@@ -6397,6 +7091,20 @@ final class LocalDiskMatrixTests: XCTestCase {
             }
         }
         return collisions.sorted()
+    }
+
+    private static func placeholderProofHashCount(in entries: [CompatibilityMilestone]) -> Int {
+        entries.reduce(0) { count, entry in
+            count
+                + (isPlaceholderProofHash(entry.vicRegisterSnapshotHash) ? 1 : 0)
+                + (isPlaceholderProofHash(entry.screenRAMHash) ? 1 : 0)
+                + (isPlaceholderProofHash(entry.colorRAMHash) ? 1 : 0)
+                + (isPlaceholderProofHash(entry.framebufferHash) ? 1 : 0)
+        }
+    }
+
+    private static func isPlaceholderProofHash(_ hash: String?) -> Bool {
+        hash?.caseInsensitiveCompare("0000000000000000") == .orderedSame
     }
 
     private static func hasObservableExpectation(_ entry: CompatibilityMilestone) -> Bool {
@@ -6549,6 +7257,13 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         unmet.append(contentsOf: sidVoiceStateMismatches(milestone.sidVoiceStates, sid: c64.sid))
         unmet.append(contentsOf: vicRegisterMismatches(milestone.vicRegisters, vic: c64.vic))
+        if let expectedHash = milestone.vicRegisterSnapshotHash {
+            let actualHash = CompatibilityHash.vicRegisterSnapshot(vicRegisterSnapshot(c64.vic))
+            if actualHash.caseInsensitiveCompare(expectedHash) != .orderedSame {
+                unmet.append("VIC registerSnapshotHash \(actualHash) != \(expectedHash)")
+            }
+        }
+        unmet.append(contentsOf: vicStateMismatches(milestone.vicState, vic: c64.vic))
         unmet.append(contentsOf: vicRasterMismatches(
             expectedLine: milestone.vicRasterLine,
             expectedCycle: milestone.vicRasterCycle,
@@ -7412,6 +8127,81 @@ final class LocalDiskMatrixTests: XCTestCase {
         return mismatches
     }
 
+    private func vicStateMismatches(
+        _ expectation: CompatibilityVICStateExpectation?,
+        vic: VIC
+    ) -> [String] {
+        guard let expectation else { return [] }
+        var mismatches: [String] = []
+        appendVICBoolMismatch(&mismatches, label: "badLine", actual: vic.badLine, expected: expectation.badLine)
+        appendVICIntMismatch(&mismatches, label: "badLineStartCycle", actual: vic.badLineStartCycle, expected: expectation.badLineStartCycle)
+        appendVICBoolMismatch(&mismatches, label: "badLineDENLatched", actual: vic.badLineDENLatched, expected: expectation.badLineDENLatched)
+        appendVICBoolMismatch(&mismatches, label: "displayActive", actual: vic.displayActive, expected: expectation.displayActive)
+        appendVICBoolMismatch(&mismatches, label: "verticalBorderActive", actual: vic.verticalBorderActive, expected: expectation.verticalBorderActive)
+        appendVICBoolMismatch(&mismatches, label: "horizontalBorderActive", actual: vic.horizontalBorderActive, expected: expectation.horizontalBorderActive)
+        appendVICIntMismatch(&mismatches, label: "rowCounter", actual: vic.rowCounter, expected: expectation.rowCounter)
+        appendVICIntMismatch(&mismatches, label: "videoCounter", actual: vic.videoCounter, expected: expectation.videoCounter)
+        appendVICIntMismatch(&mismatches, label: "videoCounterBase", actual: vic.videoCounterBase, expected: expectation.videoCounterBase)
+        appendVICIntMismatch(&mismatches, label: "displayLineBufferBase", actual: vic.displayLineBufferBase, expected: expectation.displayLineBufferBase)
+        appendVICUInt64Mismatch(&mismatches, label: "badLineFetchMask", actual: vic.badLineFetchMask, expected: expectation.badLineFetchMask)
+        appendVICUInt64Mismatch(&mismatches, label: "graphicsFetchMask", actual: vic.graphicsFetchMask, expected: expectation.graphicsFetchMask)
+        appendVICIntArrayMismatch(&mismatches, label: "spriteMC", actual: vic.spriteMC, expected: expectation.spriteMC)
+        appendVICIntArrayMismatch(&mismatches, label: "spriteMCBase", actual: vic.spriteMCBase, expected: expectation.spriteMCBase)
+        appendVICBoolArrayMismatch(&mismatches, label: "spriteYExpFF", actual: vic.spriteYExpFF, expected: expectation.spriteYExpFF)
+        appendVICBoolArrayMismatch(&mismatches, label: "spriteDisplay", actual: vic.spriteDisplay, expected: expectation.spriteDisplay)
+        return mismatches.map { "VIC state \($0)" }
+    }
+
+    private func appendVICBoolMismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: Bool,
+        expected: Bool?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("\(label) \(actual) != \(expected)")
+    }
+
+    private func appendVICIntMismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: Int?,
+        expected: Int?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("\(label) \(actual.map(String.init) ?? "nil") != \(expected)")
+    }
+
+    private func appendVICUInt64Mismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: UInt64,
+        expected: UInt64?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("\(label) \(actual) != \(expected)")
+    }
+
+    private func appendVICIntArrayMismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: [Int],
+        expected: [Int]?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("\(label) \(actual) != \(expected)")
+    }
+
+    private func appendVICBoolArrayMismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: [Bool],
+        expected: [Bool]?
+    ) {
+        guard let expected, actual != expected else { return }
+        mismatches.append("\(label) \(actual) != \(expected)")
+    }
+
     private func vicBusMismatches(
         expectedBALineLow: Bool?,
         expectedAECLineLow: Bool?,
@@ -7776,6 +8566,31 @@ private func milestoneScreenCodeCharacter(_ byte: UInt8) -> String {
     }
 }
 
+private func vicRegisterSnapshot(_ vic: VIC) -> [UInt8] {
+    (0..<0x2F).map { vic.debugRegisterValue(UInt16($0)) }
+}
+
+private func vicStateSnapshot(_ vic: VIC) -> CompatibilityVICStateExpectation {
+    CompatibilityVICStateExpectation(
+        badLine: vic.badLine,
+        badLineStartCycle: vic.badLineStartCycle,
+        badLineDENLatched: vic.badLineDENLatched,
+        displayActive: vic.displayActive,
+        verticalBorderActive: vic.verticalBorderActive,
+        horizontalBorderActive: vic.horizontalBorderActive,
+        rowCounter: vic.rowCounter,
+        videoCounter: vic.videoCounter,
+        videoCounterBase: vic.videoCounterBase,
+        displayLineBufferBase: vic.displayLineBufferBase,
+        badLineFetchMask: vic.badLineFetchMask,
+        graphicsFetchMask: vic.graphicsFetchMask,
+        spriteMC: vic.spriteMC,
+        spriteMCBase: vic.spriteMCBase,
+        spriteYExpFF: vic.spriteYExpFF,
+        spriteDisplay: vic.spriteDisplay
+    )
+}
+
 private struct MatrixRunResult {
     let passed: Bool
     let elapsedCycles: UInt64
@@ -7817,6 +8632,7 @@ private struct MatrixRunResult {
         let tapeStatus = c64.emulationStatus
         let tapeDecode = tapeDecodeRecordFields(tapeStatus.tapeDecodeStatus)
         let media = tapeStatus.mediaCapabilities
+        let vicRegisters = vicRegisterSnapshot(c64.vic)
         return MilestoneResultRecord(
             formatVersion: MilestoneResultRecord.currentFormatVersion,
             runID: runID,
@@ -7859,7 +8675,9 @@ private struct MatrixRunResult {
             finalVICHighPhaseMemoryReads: c64.vic.lastHighPhaseMemoryReads.map(hex16),
             finalVICHighPhaseColorRAMReads: c64.vic.lastHighPhaseColorRAMReads.map(hex16),
             finalVICLowPhaseMemoryReads: c64.vic.lastLowPhaseMemoryReads.map(hex16),
-            finalVICRegisterSnapshot: (0..<0x2F).map { hex8(c64.vic.debugRegisterValue(UInt16($0))) },
+            finalVICRegisterSnapshotHash: CompatibilityHash.vicRegisterSnapshot(vicRegisters),
+            finalVICRegisterSnapshot: vicRegisters.map(hex8),
+            finalVICState: vicStateSnapshot(c64.vic),
             finalSIDModel: c64.sid.model.rawValue,
             finalSIDAccuracyMode: c64.sid.accuracyMode.rawValue,
             finalSIDAudioSignature: SIDAudioSignatureRecord(
@@ -8366,6 +9184,8 @@ private struct LocalMilestone {
     var sidAudioState: CompatibilitySIDAudioState? = nil
     var sidVoiceStates: [CompatibilitySIDVoiceState] = []
     var vicRegisters: [CompatibilityVICRegisterExpectation] = []
+    var vicRegisterSnapshotHash: String? = nil
+    var vicState: CompatibilityVICStateExpectation? = nil
     var vicRasterLine: Int? = nil
     var vicRasterCycle: Int? = nil
     var vicBALineLow: Bool? = nil
@@ -8452,6 +9272,7 @@ private struct MilestoneLoadResult {
     var manifestSIDModelCounts: [String: Int] = [:]
     var manifestSIDAccuracyModeCounts: [String: Int] = [:]
     var manifestObservableTypeCounts: [String: Int] = [:]
+    var manifestVICProofCounts: [String: Int] = [:]
     var manifestExpectedFailureCategoryCounts: [String: Int] = [:]
     var manifestActionTypeCounts: [String: Int] = [:]
     var manifestUntaggedMilestoneCount: Int = 0
@@ -8462,9 +9283,12 @@ private struct MilestoneLoadResult {
     var manifestMilestonesWithoutMaxCyclesCount: Int = 0
     var manifestMilestonesWithoutExplicitActionsCount: Int = 0
     var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
+    var manifestPhase3MilestonesWithoutVICProofCount: Int = 0
+    var manifestPhase3MilestonesMissingRequiredVICProofsCount: Int = 0
     var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
     var manifestFramebufferScreenshotFilenameCollisionCount: Int = 0
     var manifestFramebufferScreenshotFilenameCollisions: [String] = []
+    var manifestPlaceholderProofHashCount: Int = 0
     var phaseFilteredMilestoneCount: Int? = nil
     var selectedMediaCounts: [String: Int] = [:]
     var selectedMachineProfileCounts: [String: Int] = [:]
@@ -8472,6 +9296,7 @@ private struct MilestoneLoadResult {
     var selectedSIDModelCounts: [String: Int] = [:]
     var selectedSIDAccuracyModeCounts: [String: Int] = [:]
     var selectedObservableTypeCounts: [String: Int] = [:]
+    var selectedVICProofCounts: [String: Int] = [:]
     var selectedExpectedFailureCategoryCounts: [String: Int] = [:]
     var selectedActionTypeCounts: [String: Int] = [:]
     var missingMediaFiles: [String] = []
@@ -8590,7 +9415,7 @@ private struct LowLevelTrackRecord: Codable, Equatable {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 33
+    static let currentFormatVersion = 35
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -8634,7 +9459,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalVICHighPhaseMemoryReads: [String]?
     let finalVICHighPhaseColorRAMReads: [String]?
     let finalVICLowPhaseMemoryReads: [String]?
+    let finalVICRegisterSnapshotHash: String?
     let finalVICRegisterSnapshot: [String]?
+    let finalVICState: CompatibilityVICStateExpectation?
     let finalSIDModel: String?
     let finalSIDAccuracyMode: String?
     let finalSIDAudioSignature: SIDAudioSignatureRecord?
@@ -8754,7 +9581,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalVICHighPhaseMemoryReads: [String]? = nil,
         finalVICHighPhaseColorRAMReads: [String]? = nil,
         finalVICLowPhaseMemoryReads: [String]? = nil,
+        finalVICRegisterSnapshotHash: String? = nil,
         finalVICRegisterSnapshot: [String]? = nil,
+        finalVICState: CompatibilityVICStateExpectation? = nil,
         finalSIDModel: String? = nil,
         finalSIDAccuracyMode: String? = nil,
         finalSIDAudioSignature: SIDAudioSignatureRecord? = nil,
@@ -8873,7 +9702,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
         self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
         self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+        self.finalVICRegisterSnapshotHash = finalVICRegisterSnapshotHash
         self.finalVICRegisterSnapshot = finalVICRegisterSnapshot
+        self.finalVICState = finalVICState
         self.finalSIDModel = finalSIDModel
         self.finalSIDAccuracyMode = finalSIDAccuracyMode
         self.finalSIDAudioSignature = finalSIDAudioSignature
@@ -8976,6 +9807,8 @@ private struct MilestoneFailureSummary: Codable, Equatable {
     let finalVICHighPhaseMemoryReads: [String]?
     let finalVICHighPhaseColorRAMReads: [String]?
     let finalVICLowPhaseMemoryReads: [String]?
+    let finalVICRegisterSnapshotHash: String?
+    let finalVICState: CompatibilityVICStateExpectation?
 
     init(
         key: MilestoneResultKey,
@@ -8990,7 +9823,9 @@ private struct MilestoneFailureSummary: Codable, Equatable {
         finalVICLowPhaseAccess: String? = nil,
         finalVICHighPhaseMemoryReads: [String]? = nil,
         finalVICHighPhaseColorRAMReads: [String]? = nil,
-        finalVICLowPhaseMemoryReads: [String]? = nil
+        finalVICLowPhaseMemoryReads: [String]? = nil,
+        finalVICRegisterSnapshotHash: String? = nil,
+        finalVICState: CompatibilityVICStateExpectation? = nil
     ) {
         self.key = key
         self.category = category
@@ -9005,6 +9840,8 @@ private struct MilestoneFailureSummary: Codable, Equatable {
         self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
         self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
         self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+        self.finalVICRegisterSnapshotHash = finalVICRegisterSnapshotHash
+        self.finalVICState = finalVICState
     }
 
     var finalDiagnostics: String {
@@ -9025,6 +9862,8 @@ private struct MilestoneFailureSummary: Codable, Equatable {
             finalVICBusOwner.map { "vicOwner=\($0)" },
             finalVICBusPhase.map { "vicPhase=\($0)" },
             finalVICLowPhaseAccess.map { "vicLowPhase=\($0)" },
+            finalVICRegisterSnapshotHash.map { "vicRegs=\($0)" },
+            finalVICState.map { "vicState=\(compactVICStateSummary($0))" },
             vicTrace.isEmpty ? nil : vicTrace,
         ]
         let compact = fields.compactMap(\.self).joined(separator: " ")
@@ -9047,6 +9886,8 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
     let finalVICHighPhaseMemoryReads: [String]?
     let finalVICHighPhaseColorRAMReads: [String]?
     let finalVICLowPhaseMemoryReads: [String]?
+    let finalVICRegisterSnapshotHash: String?
+    let finalVICState: CompatibilityVICStateExpectation?
 
     init(
         key: MilestoneResultKey,
@@ -9062,7 +9903,9 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
         finalVICLowPhaseAccess: String? = nil,
         finalVICHighPhaseMemoryReads: [String]? = nil,
         finalVICHighPhaseColorRAMReads: [String]? = nil,
-        finalVICLowPhaseMemoryReads: [String]? = nil
+        finalVICLowPhaseMemoryReads: [String]? = nil,
+        finalVICRegisterSnapshotHash: String? = nil,
+        finalVICState: CompatibilityVICStateExpectation? = nil
     ) {
         self.key = key
         self.category = category
@@ -9078,6 +9921,8 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
         self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
         self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
         self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+        self.finalVICRegisterSnapshotHash = finalVICRegisterSnapshotHash
+        self.finalVICState = finalVICState
     }
 
     var finalDiagnostics: String {
@@ -9094,9 +9939,32 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
             finalVICLowPhaseAccess: finalVICLowPhaseAccess,
             finalVICHighPhaseMemoryReads: finalVICHighPhaseMemoryReads,
             finalVICHighPhaseColorRAMReads: finalVICHighPhaseColorRAMReads,
-            finalVICLowPhaseMemoryReads: finalVICLowPhaseMemoryReads
+            finalVICLowPhaseMemoryReads: finalVICLowPhaseMemoryReads,
+            finalVICRegisterSnapshotHash: finalVICRegisterSnapshotHash,
+            finalVICState: finalVICState
         ).finalDiagnostics
     }
+}
+
+private func compactVICStateSummary(_ state: CompatibilityVICStateExpectation) -> String {
+    var parts: [String] = []
+    if let badLine = state.badLine { parts.append("badLine=\(badLine)") }
+    if let start = state.badLineStartCycle { parts.append("badStart=\(start)") }
+    if let den = state.badLineDENLatched { parts.append("den=\(den)") }
+    if let display = state.displayActive { parts.append("display=\(display)") }
+    if let vertical = state.verticalBorderActive { parts.append("vBorder=\(vertical)") }
+    if let horizontal = state.horizontalBorderActive { parts.append("hBorder=\(horizontal)") }
+    if let rowCounter = state.rowCounter { parts.append("rc=\(rowCounter)") }
+    if let videoCounter = state.videoCounter { parts.append("vc=\(videoCounter)") }
+    if let videoCounterBase = state.videoCounterBase { parts.append("vcbase=\(videoCounterBase)") }
+    if let displayBase = state.displayLineBufferBase { parts.append("linebase=\(displayBase)") }
+    if let mask = state.badLineFetchMask { parts.append(String(format: "badMask=$%010llX", mask)) }
+    if let mask = state.graphicsFetchMask { parts.append(String(format: "gfxMask=$%010llX", mask)) }
+    if let spriteMC = state.spriteMC { parts.append("mc=[\(spriteMC.map(String.init).joined(separator: ","))]") }
+    if let spriteMCBase = state.spriteMCBase { parts.append("mcb=[\(spriteMCBase.map(String.init).joined(separator: ","))]") }
+    if let spriteYExpFF = state.spriteYExpFF { parts.append("yexp=[\(spriteYExpFF.map { $0 ? "1" : "0" }.joined())]") }
+    if let spriteDisplay = state.spriteDisplay { parts.append("sprdisp=[\(spriteDisplay.map { $0 ? "1" : "0" }.joined())]") }
+    return parts.isEmpty ? "empty" : parts.joined(separator: ",")
 }
 
 private struct MilestonePhaseBreakdown: Codable, Equatable {
@@ -9150,7 +10018,7 @@ private enum MilestonePhaseOutcome {
 }
 
 private struct MilestoneRunSummary: Codable, Equatable {
-    var formatVersion: Int = 37
+    var formatVersion: Int = 42
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
     var runID: String?
@@ -9179,6 +10047,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var manifestSIDModelCounts: [String: Int] = [:]
     var manifestSIDAccuracyModeCounts: [String: Int] = [:]
     var manifestObservableTypeCounts: [String: Int] = [:]
+    var manifestVICProofCounts: [String: Int] = [:]
     var manifestExpectedFailureCategoryCounts: [String: Int] = [:]
     var manifestActionTypeCounts: [String: Int] = [:]
     var manifestUntaggedMilestoneCount: Int = 0
@@ -9189,9 +10058,12 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var manifestMilestonesWithoutMaxCyclesCount: Int = 0
     var manifestMilestonesWithoutExplicitActionsCount: Int = 0
     var manifestMilestonesWithoutObservableExpectationsCount: Int = 0
+    var manifestPhase3MilestonesWithoutVICProofCount: Int = 0
+    var manifestPhase3MilestonesMissingRequiredVICProofsCount: Int = 0
     var manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0
     var manifestFramebufferScreenshotFilenameCollisionCount: Int = 0
     var manifestFramebufferScreenshotFilenameCollisions: [String] = []
+    var manifestPlaceholderProofHashCount: Int = 0
     var phaseFilteredMilestoneCount: Int?
     var selectedMilestoneCount: Int?
     var selectedMilestoneKeys: [MilestoneResultKey] = []
@@ -9201,6 +10073,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var selectedSIDModelCounts: [String: Int] = [:]
     var selectedSIDAccuracyModeCounts: [String: Int] = [:]
     var selectedObservableTypeCounts: [String: Int] = [:]
+    var selectedVICProofCounts: [String: Int] = [:]
     var selectedExpectedFailureCategoryCounts: [String: Int] = [:]
     var selectedActionTypeCounts: [String: Int] = [:]
     var missingMediaFiles: [String] = []
@@ -9223,6 +10096,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var requiredManifestObservableTypes: [String] = []
     var invalidRequiredManifestObservableTypes: [String] = []
     var missingRequiredManifestObservableTypes: [String] = []
+    var requiredManifestVICProofs: [String] = []
+    var invalidRequiredManifestVICProofs: [String] = []
+    var missingRequiredManifestVICProofs: [String] = []
     var requiredManifestFailureCategories: [String] = []
     var invalidRequiredManifestFailureCategories: [String] = []
     var missingRequiredManifestFailureCategories: [String] = []
@@ -9245,7 +10121,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
     var requireExplicitMaxCycles: Bool = false
     var requireExplicitActions: Bool = false
     var requireObservableExpectations: Bool = false
+    var requirePhase3VICProofs: Bool = false
     var requireFramebufferScreenshots: Bool = false
+    var rejectPlaceholderProofHashes: Bool = false
     var failOnUnclassified: Bool = false
     var failOnUnexpected: Bool = false
     var failPhaseNames: [String] = []
@@ -9303,6 +10181,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         manifestSIDModelCounts: [String: Int] = [:],
         manifestSIDAccuracyModeCounts: [String: Int] = [:],
         manifestObservableTypeCounts: [String: Int] = [:],
+        manifestVICProofCounts: [String: Int] = [:],
         manifestExpectedFailureCategoryCounts: [String: Int] = [:],
         manifestActionTypeCounts: [String: Int] = [:],
         manifestUntaggedMilestoneCount: Int = 0,
@@ -9313,9 +10192,12 @@ private struct MilestoneRunSummary: Codable, Equatable {
         manifestMilestonesWithoutMaxCyclesCount: Int = 0,
         manifestMilestonesWithoutExplicitActionsCount: Int = 0,
         manifestMilestonesWithoutObservableExpectationsCount: Int = 0,
+        manifestPhase3MilestonesWithoutVICProofCount: Int = 0,
+        manifestPhase3MilestonesMissingRequiredVICProofsCount: Int = 0,
         manifestFramebufferHashMilestonesWithoutScreenshotNamesCount: Int = 0,
         manifestFramebufferScreenshotFilenameCollisionCount: Int = 0,
         manifestFramebufferScreenshotFilenameCollisions: [String] = [],
+        manifestPlaceholderProofHashCount: Int = 0,
         phaseFilteredMilestoneCount: Int? = nil,
         selectedMilestoneCount: Int?,
         selectedMilestoneKeys: [MilestoneResultKey] = [],
@@ -9325,6 +10207,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         selectedSIDModelCounts: [String: Int] = [:],
         selectedSIDAccuracyModeCounts: [String: Int] = [:],
         selectedObservableTypeCounts: [String: Int] = [:],
+        selectedVICProofCounts: [String: Int] = [:],
         selectedExpectedFailureCategoryCounts: [String: Int] = [:],
         selectedActionTypeCounts: [String: Int] = [:],
         missingMediaFiles: [String],
@@ -9341,6 +10224,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
         invalidRequiredManifestSIDAccuracyModes: [String] = [],
         requiredManifestObservableTypes: [String] = [],
         invalidRequiredManifestObservableTypes: [String] = [],
+        requiredManifestVICProofs: [String] = [],
+        invalidRequiredManifestVICProofs: [String] = [],
         requiredManifestFailureCategories: [String] = [],
         invalidRequiredManifestFailureCategories: [String] = [],
         requiredManifestActionTypes: [String] = [],
@@ -9361,7 +10246,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
         requireExplicitMaxCycles: Bool = false,
         requireExplicitActions: Bool = false,
         requireObservableExpectations: Bool = false,
+        requirePhase3VICProofs: Bool = false,
         requireFramebufferScreenshots: Bool = false,
+        rejectPlaceholderProofHashes: Bool = false,
         failOnUnclassified: Bool,
         failOnUnexpected: Bool,
         failPhaseNames: [String] = [],
@@ -9391,6 +10278,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.manifestSIDModelCounts = manifestSIDModelCounts
         self.manifestSIDAccuracyModeCounts = manifestSIDAccuracyModeCounts
         self.manifestObservableTypeCounts = manifestObservableTypeCounts
+        self.manifestVICProofCounts = manifestVICProofCounts
         self.manifestExpectedFailureCategoryCounts = manifestExpectedFailureCategoryCounts
         self.manifestActionTypeCounts = manifestActionTypeCounts
         self.manifestUntaggedMilestoneCount = manifestUntaggedMilestoneCount
@@ -9401,9 +10289,12 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.manifestMilestonesWithoutMaxCyclesCount = manifestMilestonesWithoutMaxCyclesCount
         self.manifestMilestonesWithoutExplicitActionsCount = manifestMilestonesWithoutExplicitActionsCount
         self.manifestMilestonesWithoutObservableExpectationsCount = manifestMilestonesWithoutObservableExpectationsCount
+        self.manifestPhase3MilestonesWithoutVICProofCount = manifestPhase3MilestonesWithoutVICProofCount
+        self.manifestPhase3MilestonesMissingRequiredVICProofsCount = manifestPhase3MilestonesMissingRequiredVICProofsCount
         self.manifestFramebufferHashMilestonesWithoutScreenshotNamesCount = manifestFramebufferHashMilestonesWithoutScreenshotNamesCount
         self.manifestFramebufferScreenshotFilenameCollisionCount = manifestFramebufferScreenshotFilenameCollisionCount
         self.manifestFramebufferScreenshotFilenameCollisions = manifestFramebufferScreenshotFilenameCollisions
+        self.manifestPlaceholderProofHashCount = manifestPlaceholderProofHashCount
         self.phaseFilteredMilestoneCount = phaseFilteredMilestoneCount
         self.selectedMilestoneCount = selectedMilestoneCount
         self.selectedMilestoneKeys = selectedMilestoneKeys
@@ -9413,6 +10304,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.selectedSIDModelCounts = selectedSIDModelCounts
         self.selectedSIDAccuracyModeCounts = selectedSIDAccuracyModeCounts
         self.selectedObservableTypeCounts = selectedObservableTypeCounts
+        self.selectedVICProofCounts = selectedVICProofCounts
         self.selectedExpectedFailureCategoryCounts = selectedExpectedFailureCategoryCounts
         self.selectedActionTypeCounts = selectedActionTypeCounts
         self.missingMediaFiles = missingMediaFiles
@@ -9447,6 +10339,11 @@ private struct MilestoneRunSummary: Codable, Equatable {
         missingRequiredManifestObservableTypes = requiredManifestObservableTypes.filter {
             manifestObservableTypeCounts[$0, default: 0] == 0
         }
+        self.requiredManifestVICProofs = requiredManifestVICProofs
+        self.invalidRequiredManifestVICProofs = invalidRequiredManifestVICProofs
+        missingRequiredManifestVICProofs = requiredManifestVICProofs.filter {
+            manifestVICProofCounts[$0, default: 0] == 0
+        }
         self.requiredManifestFailureCategories = requiredManifestFailureCategories
         self.invalidRequiredManifestFailureCategories = invalidRequiredManifestFailureCategories
         missingRequiredManifestFailureCategories = requiredManifestFailureCategories.filter {
@@ -9473,7 +10370,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
         self.requireExplicitMaxCycles = requireExplicitMaxCycles
         self.requireExplicitActions = requireExplicitActions
         self.requireObservableExpectations = requireObservableExpectations
+        self.requirePhase3VICProofs = requirePhase3VICProofs
         self.requireFramebufferScreenshots = requireFramebufferScreenshots
+        self.rejectPlaceholderProofHashes = rejectPlaceholderProofHashes
         self.failOnUnclassified = failOnUnclassified
         self.failOnUnexpected = failOnUnexpected
         self.failPhaseNames = failPhaseNames
@@ -9515,7 +10414,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
                 finalVICLowPhaseAccess: record.finalVICLowPhaseAccess,
                 finalVICHighPhaseMemoryReads: record.finalVICHighPhaseMemoryReads,
                 finalVICHighPhaseColorRAMReads: record.finalVICHighPhaseColorRAMReads,
-                finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads
+                finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads,
+                finalVICRegisterSnapshotHash: record.finalVICRegisterSnapshotHash,
+                finalVICState: record.finalVICState
             )
             phaseFailureDetails[roadmapPhase, default: []].append(failureSummary)
             if record.expectedFailureMatched == true {
@@ -9542,7 +10443,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
                     finalVICLowPhaseAccess: record.finalVICLowPhaseAccess,
                     finalVICHighPhaseMemoryReads: record.finalVICHighPhaseMemoryReads,
                     finalVICHighPhaseColorRAMReads: record.finalVICHighPhaseColorRAMReads,
-                    finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads
+                    finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads,
+                    finalVICRegisterSnapshotHash: record.finalVICRegisterSnapshotHash,
+                    finalVICState: record.finalVICState
                 )
                 expectedFailureDriftDetails.append(driftSummary)
                 phaseExpectedFailureDriftDetails[roadmapPhase, default: []].append(driftSummary)
@@ -9659,6 +10562,12 @@ private struct MilestoneRunSummary: Codable, Equatable {
         if !missingRequiredManifestObservableTypes.isEmpty {
             gateFailures.append(contentsOf: missingRequiredManifestObservableTypes.map { "missingRequiredObservableType:\($0)" })
         }
+        if !invalidRequiredManifestVICProofs.isEmpty {
+            gateFailures.append(contentsOf: invalidRequiredManifestVICProofs.map { "invalidRequiredVICProof:\($0)" })
+        }
+        if !missingRequiredManifestVICProofs.isEmpty {
+            gateFailures.append(contentsOf: missingRequiredManifestVICProofs.map { "missingRequiredVICProof:\($0)" })
+        }
         if !invalidRequiredManifestFailureCategories.isEmpty {
             gateFailures.append(contentsOf: invalidRequiredManifestFailureCategories.map { "invalidRequiredFailureCategory:\($0)" })
         }
@@ -9701,11 +10610,20 @@ private struct MilestoneRunSummary: Codable, Equatable {
         if requireObservableExpectations && manifestMilestonesWithoutObservableExpectationsCount > 0 {
             gateFailures.append("milestonesWithoutObservableExpectations:\(manifestMilestonesWithoutObservableExpectationsCount)")
         }
+        if requirePhase3VICProofs && manifestPhase3MilestonesWithoutVICProofCount > 0 {
+            gateFailures.append("phase3MilestonesWithoutVICProof:\(manifestPhase3MilestonesWithoutVICProofCount)")
+        }
+        if requirePhase3VICProofs && manifestPhase3MilestonesMissingRequiredVICProofsCount > 0 {
+            gateFailures.append("phase3MilestonesMissingRequiredVICProofs:\(manifestPhase3MilestonesMissingRequiredVICProofsCount)")
+        }
         if requireFramebufferScreenshots && manifestFramebufferHashMilestonesWithoutScreenshotNamesCount > 0 {
             gateFailures.append("framebufferHashMilestonesWithoutScreenshotNames:\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount)")
         }
         if requireFramebufferScreenshots && manifestFramebufferScreenshotFilenameCollisionCount > 0 {
             gateFailures.append("framebufferScreenshotFilenameCollisions:\(manifestFramebufferScreenshotFilenameCollisionCount)")
+        }
+        if rejectPlaceholderProofHashes && manifestPlaceholderProofHashCount > 0 {
+            gateFailures.append("placeholderProofHashes:\(manifestPlaceholderProofHashCount)")
         }
         acceptanceFailures = gateFailures
 
@@ -9812,6 +10730,8 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let selectedSIDAccuracyModeCountText = Self.summaryCountText(selectedSIDAccuracyModeCounts)
         let manifestObservableTypeCountText = Self.summaryCountText(manifestObservableTypeCounts)
         let selectedObservableTypeCountText = Self.summaryCountText(selectedObservableTypeCounts)
+        let manifestVICProofCountText = Self.summaryCountText(manifestVICProofCounts)
+        let selectedVICProofCountText = Self.summaryCountText(selectedVICProofCounts)
         let manifestExpectedFailureCategoryCountText = Self.summaryCountText(manifestExpectedFailureCategoryCounts)
         let selectedExpectedFailureCategoryCountText = Self.summaryCountText(selectedExpectedFailureCategoryCounts)
         let manifestActionTypeCountText = Self.summaryCountText(manifestActionTypeCounts)
@@ -9834,6 +10754,9 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let requiredObservableText = requiredManifestObservableTypes.isEmpty ? "none" : requiredManifestObservableTypes.joined(separator: " ")
         let invalidRequiredObservableText = invalidRequiredManifestObservableTypes.isEmpty ? "none" : invalidRequiredManifestObservableTypes.joined(separator: " ")
         let missingRequiredObservableText = missingRequiredManifestObservableTypes.isEmpty ? "none" : missingRequiredManifestObservableTypes.joined(separator: " ")
+        let requiredVICProofText = requiredManifestVICProofs.isEmpty ? "none" : requiredManifestVICProofs.joined(separator: " ")
+        let invalidRequiredVICProofText = invalidRequiredManifestVICProofs.isEmpty ? "none" : invalidRequiredManifestVICProofs.joined(separator: " ")
+        let missingRequiredVICProofText = missingRequiredManifestVICProofs.isEmpty ? "none" : missingRequiredManifestVICProofs.joined(separator: " ")
         let requiredFailureCategoryText = requiredManifestFailureCategories.isEmpty ? "none" : requiredManifestFailureCategories.joined(separator: " ")
         let invalidRequiredFailureCategoryText = invalidRequiredManifestFailureCategories.isEmpty ? "none" : invalidRequiredManifestFailureCategories.joined(separator: " ")
         let missingRequiredFailureCategoryText = missingRequiredManifestFailureCategories.isEmpty ? "none" : missingRequiredManifestFailureCategories.joined(separator: " ")
@@ -9854,7 +10777,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
         let missingSelectedPhaseText = missingSelectedPhaseNames.isEmpty ? "none" : missingSelectedPhaseNames.joined(separator: " ")
         let selectedIDText = selectedMilestoneIDs.isEmpty ? "none" : selectedMilestoneIDs.joined(separator: " ")
         let missingSelectedIDText = missingSelectedMilestoneIDs.isEmpty ? "none" : missingSelectedMilestoneIDs.joined(separator: " ")
-        return "Summary total=\(total) selected=\(selectedText) phaseFiltered=\(phaseFilteredText) preShard=\(preShardText) postShard=\(postShardText) shardIndex=\(shardIndexText) shardCount=\(shardCountText) invalidShard=[\(invalidShardText)] manifestValidation=[\(manifestValidationText)] manifestPhaseCounts=[\(manifestPhaseCountText)] manifestMediaCounts=[\(manifestMediaCountText)] selectedMediaCounts=[\(selectedMediaCountText)] manifestMachineProfiles=[\(manifestMachineProfileCountText)] selectedMachineProfiles=[\(selectedMachineProfileCountText)] manifestDriveModes=[\(manifestDriveModeCountText)] selectedDriveModes=[\(selectedDriveModeCountText)] manifestSIDModels=[\(manifestSIDModelCountText)] selectedSIDModels=[\(selectedSIDModelCountText)] manifestSIDAccuracyModes=[\(manifestSIDAccuracyModeCountText)] selectedSIDAccuracyModes=[\(selectedSIDAccuracyModeCountText)] manifestObservableTypes=[\(manifestObservableTypeCountText)] selectedObservableTypes=[\(selectedObservableTypeCountText)] manifestExpectedFailureCategories=[\(manifestExpectedFailureCategoryCountText)] selectedExpectedFailureCategories=[\(selectedExpectedFailureCategoryCountText)] manifestActionTypes=[\(manifestActionTypeCountText)] selectedActionTypes=[\(selectedActionTypeCountText)] requiredMedia=[\(requiredMediaText)] invalidRequiredMedia=[\(invalidRequiredMediaText)] missingRequiredMedia=[\(missingRequiredMediaText)] requiredProfiles=[\(requiredProfileText)] invalidRequiredProfiles=[\(invalidRequiredProfileText)] missingRequiredProfiles=[\(missingRequiredProfileText)] requiredDriveModes=[\(requiredDriveText)] invalidRequiredDriveModes=[\(invalidRequiredDriveText)] missingRequiredDriveModes=[\(missingRequiredDriveText)] requiredSIDModels=[\(requiredSIDModelText)] invalidRequiredSIDModels=[\(invalidRequiredSIDModelText)] missingRequiredSIDModels=[\(missingRequiredSIDModelText)] requiredSIDAccuracyModes=[\(requiredSIDAccuracyText)] invalidRequiredSIDAccuracyModes=[\(invalidRequiredSIDAccuracyText)] missingRequiredSIDAccuracyModes=[\(missingRequiredSIDAccuracyText)] requiredObservableTypes=[\(requiredObservableText)] invalidRequiredObservableTypes=[\(invalidRequiredObservableText)] missingRequiredObservableTypes=[\(missingRequiredObservableText)] requiredFailureCategories=[\(requiredFailureCategoryText)] invalidRequiredFailureCategories=[\(invalidRequiredFailureCategoryText)] missingRequiredFailureCategories=[\(missingRequiredFailureCategoryText)] requiredActionTypes=[\(requiredActionTypeText)] invalidRequiredActionTypes=[\(invalidRequiredActionTypeText)] missingRequiredActionTypes=[\(missingRequiredActionTypeText)] manifestUntagged=\(manifestUntaggedMilestoneCount) manifestUnnamed=\(manifestUnnamedMilestoneCount) manifestExpectedFailures=\(manifestExpectedFailureCount) expectedFailuresWithoutNotes=\(manifestExpectedFailuresWithoutNotesCount) expectedFailuresWithoutReasons=\(manifestExpectedFailuresWithoutReasonMarkersCount) screenshots=\(screenshotsWrittenCount) passedScreenshots=\(passedScreenshotCount) failedScreenshots=\(failedScreenshotCount) milestonesWithoutMaxCycles=\(manifestMilestonesWithoutMaxCyclesCount) milestonesWithoutExplicitActions=\(manifestMilestonesWithoutExplicitActionsCount) milestonesWithoutObservables=\(manifestMilestonesWithoutObservableExpectationsCount) framebufferProofsWithoutScreenshots=\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount) framebufferScreenshotCollisions=\(manifestFramebufferScreenshotFilenameCollisionCount) framebufferScreenshotCollisionFiles=[\(framebufferScreenshotCollisionText)] requireManifest=\(requireManifest) requireTaggedPhases=\(requireTaggedManifestPhases) requireIDs=\(requireManifestMilestoneIDs) requireExpectedFailureNotes=\(requireExpectedFailureNotes) requireExpectedFailureReasons=\(requireExpectedFailureReasonMarkers) requireMaxCycles=\(requireExplicitMaxCycles) requireActions=\(requireExplicitActions) requireObservables=\(requireObservableExpectations) requireFramebufferScreenshots=\(requireFramebufferScreenshots) selectedPhases=[\(selectedPhaseText)] selectedPhaseCounts=[\(selectedPhaseCountText)] invalidSelectedPhases=[\(invalidSelectedPhaseText)] missingSelectedPhases=[\(missingSelectedPhaseText)] selectedIDs=[\(selectedIDText)] missingSelectedIDs=[\(missingSelectedIDText)] executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)] phases=[\(phaseText)] phaseAcceptanceFailures=[\(phaseAcceptanceText)]"
+        return "Summary total=\(total) selected=\(selectedText) phaseFiltered=\(phaseFilteredText) preShard=\(preShardText) postShard=\(postShardText) shardIndex=\(shardIndexText) shardCount=\(shardCountText) invalidShard=[\(invalidShardText)] manifestValidation=[\(manifestValidationText)] manifestPhaseCounts=[\(manifestPhaseCountText)] manifestMediaCounts=[\(manifestMediaCountText)] selectedMediaCounts=[\(selectedMediaCountText)] manifestMachineProfiles=[\(manifestMachineProfileCountText)] selectedMachineProfiles=[\(selectedMachineProfileCountText)] manifestDriveModes=[\(manifestDriveModeCountText)] selectedDriveModes=[\(selectedDriveModeCountText)] manifestSIDModels=[\(manifestSIDModelCountText)] selectedSIDModels=[\(selectedSIDModelCountText)] manifestSIDAccuracyModes=[\(manifestSIDAccuracyModeCountText)] selectedSIDAccuracyModes=[\(selectedSIDAccuracyModeCountText)] manifestObservableTypes=[\(manifestObservableTypeCountText)] selectedObservableTypes=[\(selectedObservableTypeCountText)] manifestVICProofs=[\(manifestVICProofCountText)] selectedVICProofs=[\(selectedVICProofCountText)] manifestExpectedFailureCategories=[\(manifestExpectedFailureCategoryCountText)] selectedExpectedFailureCategories=[\(selectedExpectedFailureCategoryCountText)] manifestActionTypes=[\(manifestActionTypeCountText)] selectedActionTypes=[\(selectedActionTypeCountText)] requiredMedia=[\(requiredMediaText)] invalidRequiredMedia=[\(invalidRequiredMediaText)] missingRequiredMedia=[\(missingRequiredMediaText)] requiredProfiles=[\(requiredProfileText)] invalidRequiredProfiles=[\(invalidRequiredProfileText)] missingRequiredProfiles=[\(missingRequiredProfileText)] requiredDriveModes=[\(requiredDriveText)] invalidRequiredDriveModes=[\(invalidRequiredDriveText)] missingRequiredDriveModes=[\(missingRequiredDriveText)] requiredSIDModels=[\(requiredSIDModelText)] invalidRequiredSIDModels=[\(invalidRequiredSIDModelText)] missingRequiredSIDModels=[\(missingRequiredSIDModelText)] requiredSIDAccuracyModes=[\(requiredSIDAccuracyText)] invalidRequiredSIDAccuracyModes=[\(invalidRequiredSIDAccuracyText)] missingRequiredSIDAccuracyModes=[\(missingRequiredSIDAccuracyText)] requiredObservableTypes=[\(requiredObservableText)] invalidRequiredObservableTypes=[\(invalidRequiredObservableText)] missingRequiredObservableTypes=[\(missingRequiredObservableText)] requiredVICProofs=[\(requiredVICProofText)] invalidRequiredVICProofs=[\(invalidRequiredVICProofText)] missingRequiredVICProofs=[\(missingRequiredVICProofText)] requiredFailureCategories=[\(requiredFailureCategoryText)] invalidRequiredFailureCategories=[\(invalidRequiredFailureCategoryText)] missingRequiredFailureCategories=[\(missingRequiredFailureCategoryText)] requiredActionTypes=[\(requiredActionTypeText)] invalidRequiredActionTypes=[\(invalidRequiredActionTypeText)] missingRequiredActionTypes=[\(missingRequiredActionTypeText)] manifestUntagged=\(manifestUntaggedMilestoneCount) manifestUnnamed=\(manifestUnnamedMilestoneCount) manifestExpectedFailures=\(manifestExpectedFailureCount) expectedFailuresWithoutNotes=\(manifestExpectedFailuresWithoutNotesCount) expectedFailuresWithoutReasons=\(manifestExpectedFailuresWithoutReasonMarkersCount) screenshots=\(screenshotsWrittenCount) passedScreenshots=\(passedScreenshotCount) failedScreenshots=\(failedScreenshotCount) milestonesWithoutMaxCycles=\(manifestMilestonesWithoutMaxCyclesCount) milestonesWithoutExplicitActions=\(manifestMilestonesWithoutExplicitActionsCount) milestonesWithoutObservables=\(manifestMilestonesWithoutObservableExpectationsCount) phase3MilestonesWithoutVICProof=\(manifestPhase3MilestonesWithoutVICProofCount) phase3MilestonesMissingRequiredVICProofs=\(manifestPhase3MilestonesMissingRequiredVICProofsCount) framebufferProofsWithoutScreenshots=\(manifestFramebufferHashMilestonesWithoutScreenshotNamesCount) framebufferScreenshotCollisions=\(manifestFramebufferScreenshotFilenameCollisionCount) framebufferScreenshotCollisionFiles=[\(framebufferScreenshotCollisionText)] placeholderProofHashes=\(manifestPlaceholderProofHashCount) requireManifest=\(requireManifest) requireTaggedPhases=\(requireTaggedManifestPhases) requireIDs=\(requireManifestMilestoneIDs) requireExpectedFailureNotes=\(requireExpectedFailureNotes) requireExpectedFailureReasons=\(requireExpectedFailureReasonMarkers) requireMaxCycles=\(requireExplicitMaxCycles) requireActions=\(requireExplicitActions) requireObservables=\(requireObservableExpectations) requirePhase3VICProofs=\(requirePhase3VICProofs) requireFramebufferScreenshots=\(requireFramebufferScreenshots) rejectPlaceholderProofHashes=\(rejectPlaceholderProofHashes) selectedPhases=[\(selectedPhaseText)] selectedPhaseCounts=[\(selectedPhaseCountText)] invalidSelectedPhases=[\(invalidSelectedPhaseText)] missingSelectedPhases=[\(missingSelectedPhaseText)] selectedIDs=[\(selectedIDText)] missingSelectedIDs=[\(missingSelectedIDText)] executed=\(executed) passed=\(passed) failed=\(failed) expectedFailures=\(expectedFailures) unexpectedFailures=\(unexpectedFailures) expectedFailureDrift=\(expectedFailureDriftCount) skipped=\(skipped) missingMedia=\(missingMediaFiles.count) unclassified=\(unclassifiedFailureCount) outcome=\(outcomeText) cycles=\(totalElapsedCycles) maxCycles=\(maxElapsedCycles) categories=[\(categoryText)] phases=[\(phaseText)] phaseAcceptanceFailures=[\(phaseAcceptanceText)]"
     }
 
     private static func summaryCountText(_ counts: [String: Int]) -> String {
@@ -9928,12 +10851,17 @@ private struct MilestoneRunSummary: Codable, Equatable {
             && missingRequiredManifestSIDAccuracyModes.isEmpty
             && invalidRequiredManifestObservableTypes.isEmpty
             && missingRequiredManifestObservableTypes.isEmpty
+            && invalidRequiredManifestVICProofs.isEmpty
+            && missingRequiredManifestVICProofs.isEmpty
             && invalidRequiredManifestFailureCategories.isEmpty
             && missingRequiredManifestFailureCategories.isEmpty
             && invalidRequiredManifestActionTypes.isEmpty
             && missingRequiredManifestActionTypes.isEmpty
             && missingSelectedMilestoneIDs.isEmpty
-            && manifestFramebufferScreenshotFilenameCollisionCount == 0 {
+            && manifestPhase3MilestonesWithoutVICProofCount == 0
+            && manifestPhase3MilestonesMissingRequiredVICProofsCount == 0
+            && manifestFramebufferScreenshotFilenameCollisionCount == 0
+            && manifestPlaceholderProofHashCount == 0 {
             return "No phase acceptance failures."
         }
         var parts = phaseAcceptanceFailures
@@ -9952,14 +10880,25 @@ private struct MilestoneRunSummary: Codable, Equatable {
         parts.append(contentsOf: missingRequiredManifestSIDAccuracyModes.map { "missingRequiredSIDAccuracy:\($0)" })
         parts.append(contentsOf: invalidRequiredManifestObservableTypes.map { "invalidRequiredObservable:\($0)" })
         parts.append(contentsOf: missingRequiredManifestObservableTypes.map { "missingRequiredObservable:\($0)" })
+        parts.append(contentsOf: invalidRequiredManifestVICProofs.map { "invalidRequiredVICProof:\($0)" })
+        parts.append(contentsOf: missingRequiredManifestVICProofs.map { "missingRequiredVICProof:\($0)" })
         parts.append(contentsOf: invalidRequiredManifestFailureCategories.map { "invalidRequiredFailureCategory:\($0)" })
         parts.append(contentsOf: missingRequiredManifestFailureCategories.map { "missingRequiredFailureCategory:\($0)" })
         parts.append(contentsOf: invalidRequiredManifestActionTypes.map { "invalidRequiredAction:\($0)" })
         parts.append(contentsOf: missingRequiredManifestActionTypes.map { "missingRequiredAction:\($0)" })
         parts.append(contentsOf: missingSelectedMilestoneIDs.map { "missingSelectedID:\($0)" })
+        if manifestPhase3MilestonesWithoutVICProofCount > 0 {
+            parts.append("phase3MilestonesWithoutVICProof:\(manifestPhase3MilestonesWithoutVICProofCount)")
+        }
+        if manifestPhase3MilestonesMissingRequiredVICProofsCount > 0 {
+            parts.append("phase3MilestonesMissingRequiredVICProofs:\(manifestPhase3MilestonesMissingRequiredVICProofsCount)")
+        }
         if manifestFramebufferScreenshotFilenameCollisionCount > 0 {
             parts.append("framebufferScreenshotFilenameCollisions:\(manifestFramebufferScreenshotFilenameCollisionCount)")
             parts.append("framebufferScreenshotCollisionFiles:\(manifestFramebufferScreenshotFilenameCollisions.joined(separator: " "))")
+        }
+        if manifestPlaceholderProofHashCount > 0 {
+            parts.append("placeholderProofHashes:\(manifestPlaceholderProofHashCount)")
         }
         return "Phase acceptance failures: " + parts.joined(separator: ", ")
     }
