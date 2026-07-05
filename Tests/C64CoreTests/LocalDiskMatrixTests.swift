@@ -4080,6 +4080,69 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(result.reason.contains("VIC $D020"))
     }
 
+    func testNamedMilestoneCanMatchVICRasterPosition() {
+        let c64 = C64()
+        c64.vic.rasterLine = 50
+        c64.vic.rasterCycle = 16
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/raster.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRasterLine: 50,
+            vicRasterCycle: 17,
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresVICRasterPosition() {
+        let c64 = C64()
+        c64.vic.rasterLine = 50
+        c64.vic.rasterCycle = 16
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/raster.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRasterLine: 51,
+            vicRasterCycle: 18,
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .vic)
+        XCTAssertTrue(result.reason.contains("VIC rasterLine 50 != 51"))
+        XCTAssertTrue(result.reason.contains("VIC rasterCycle 17 != 18"))
+    }
+
     func testNamedMilestoneCanMatchCIARegisters() {
         let c64 = C64()
         c64.cia1.writeRegister(0x04, value: 0x34)
@@ -5328,6 +5391,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 let actual = c64.vic.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
                 return (actual & expectation.mask) == (expectation.value & expectation.mask)
             }
+            let vicRasterLineMatches = milestone.vicRasterLine.map { Int(c64.vic.rasterLine) == $0 } ?? true
+            let vicRasterCycleMatches = milestone.vicRasterCycle.map { c64.vic.rasterCycle == $0 } ?? true
             let cia1Matches = milestone.cia1Registers.allSatisfy { expectation in
                 let actual = c64.cia1.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
                 return (actual & expectation.mask) == (expectation.value & expectation.mask)
@@ -5367,6 +5432,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && sidAudioStateMatches
                 && sidVoiceStateMatches
                 && vicMatches
+                && vicRasterLineMatches
+                && vicRasterCycleMatches
                 && cia1Matches
                 && cia2Matches
                 && screenTextMatches
@@ -5578,6 +5645,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 sidAudioState: entry.sidAudioState,
                 sidVoiceStates: entry.sidVoiceStates,
                 vicRegisters: entry.vicRegisters,
+                vicRasterLine: entry.vicRasterLine,
+                vicRasterCycle: entry.vicRasterCycle,
                 cia1Registers: entry.cia1Registers,
                 cia2Registers: entry.cia2Registers,
                 screenTextContains: entry.screenTextContains,
@@ -5946,7 +6015,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             || !entry.sidVoiceStates.isEmpty {
             types.append(MilestoneObservableType.sid)
         }
-        if !entry.vicRegisters.isEmpty {
+        if !entry.vicRegisters.isEmpty || entry.vicRasterLine != nil || entry.vicRasterCycle != nil {
             types.append(MilestoneObservableType.vic)
         }
         if !entry.cia1Registers.isEmpty || !entry.cia2Registers.isEmpty {
@@ -5993,7 +6062,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             || !milestone.sidVoiceStates.isEmpty {
             types.append(MilestoneObservableType.sid)
         }
-        if !milestone.vicRegisters.isEmpty {
+        if !milestone.vicRegisters.isEmpty || milestone.vicRasterLine != nil || milestone.vicRasterCycle != nil {
             types.append(MilestoneObservableType.vic)
         }
         if !milestone.cia1Registers.isEmpty || !milestone.cia2Registers.isEmpty {
@@ -6248,6 +6317,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         }
         unmet.append(contentsOf: sidVoiceStateMismatches(milestone.sidVoiceStates, sid: c64.sid))
         unmet.append(contentsOf: vicRegisterMismatches(milestone.vicRegisters, vic: c64.vic))
+        unmet.append(contentsOf: vicRasterMismatches(
+            expectedLine: milestone.vicRasterLine,
+            expectedCycle: milestone.vicRasterCycle,
+            vic: c64.vic
+        ))
         unmet.append(contentsOf: ciaRegisterMismatches(milestone.cia1Registers, cia: c64.cia1, label: "CIA1"))
         unmet.append(contentsOf: ciaRegisterMismatches(milestone.cia2Registers, cia: c64.cia2, label: "CIA2"))
         if let expectedScreenHash = milestone.screenRAMHash {
@@ -7072,6 +7146,21 @@ final class LocalDiskMatrixTests: XCTestCase {
             guard maskedActual != maskedExpected else { return nil }
             return "VIC $\(hex16(register)) \(hex8(maskedActual)) != \(hex8(maskedExpected)) mask \(hex8(expectation.mask))"
         }
+    }
+
+    private func vicRasterMismatches(
+        expectedLine: Int?,
+        expectedCycle: Int?,
+        vic: VIC
+    ) -> [String] {
+        var mismatches: [String] = []
+        if let expectedLine, Int(vic.rasterLine) != expectedLine {
+            mismatches.append("VIC rasterLine \(Int(vic.rasterLine)) != \(expectedLine)")
+        }
+        if let expectedCycle, vic.rasterCycle != expectedCycle {
+            mismatches.append("VIC rasterCycle \(vic.rasterCycle) != \(expectedCycle)")
+        }
+        return mismatches
     }
 
     private func ciaRegisterMismatches(
@@ -7930,6 +8019,8 @@ private struct LocalMilestone {
     var sidAudioState: CompatibilitySIDAudioState? = nil
     var sidVoiceStates: [CompatibilitySIDVoiceState] = []
     var vicRegisters: [CompatibilityVICRegisterExpectation] = []
+    var vicRasterLine: Int? = nil
+    var vicRasterCycle: Int? = nil
     var cia1Registers: [CompatibilityCIARegisterExpectation] = []
     var cia2Registers: [CompatibilityCIARegisterExpectation] = []
     var screenTextContains: [String] = []

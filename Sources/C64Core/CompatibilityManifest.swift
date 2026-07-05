@@ -308,6 +308,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let sidAudioState: CompatibilitySIDAudioState?
     public let sidVoiceStates: [CompatibilitySIDVoiceState]
     public let vicRegisters: [CompatibilityVICRegisterExpectation]
+    public let vicRasterLine: Int?
+    public let vicRasterCycle: Int?
     public let cia1Registers: [CompatibilityCIARegisterExpectation]
     public let cia2Registers: [CompatibilityCIARegisterExpectation]
     public let screenTextContains: [String]
@@ -350,6 +352,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case sidAudioState
         case sidVoiceStates
         case vicRegisters
+        case vicRasterLine
+        case vicRasterCycle
         case cia1Registers
         case cia2Registers
         case screenTextContains
@@ -391,6 +395,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState: CompatibilitySIDAudioState? = nil,
         sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
+        vicRasterLine: Int? = nil,
+        vicRasterCycle: Int? = nil,
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
         screenTextContains: [String] = [],
@@ -432,6 +438,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.sidAudioState = sidAudioState
         self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
+        self.vicRasterLine = vicRasterLine
+        self.vicRasterCycle = vicRasterCycle
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
         self.screenTextContains = screenTextContains
@@ -474,6 +482,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState: CompatibilitySIDAudioState? = nil,
         sidVoiceStates: [CompatibilitySIDVoiceState] = [],
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
+        vicRasterLine: Int? = nil,
+        vicRasterCycle: Int? = nil,
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
         screenTextContains: [String] = [],
@@ -515,6 +525,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.sidAudioState = sidAudioState
         self.sidVoiceStates = sidVoiceStates
         self.vicRegisters = vicRegisters
+        self.vicRasterLine = vicRasterLine
+        self.vicRasterCycle = vicRasterCycle
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
         self.screenTextContains = screenTextContains
@@ -586,6 +598,8 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         sidAudioState = try container.decodeIfPresent(CompatibilitySIDAudioState.self, forKey: .sidAudioState)
         sidVoiceStates = try container.decodeIfPresent([CompatibilitySIDVoiceState].self, forKey: .sidVoiceStates) ?? []
         vicRegisters = try container.decodeIfPresent([CompatibilityVICRegisterExpectation].self, forKey: .vicRegisters) ?? []
+        vicRasterLine = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterLine, in: container)
+        vicRasterCycle = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterCycle, in: container)
         cia1Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia1Registers) ?? []
         cia2Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia2Registers) ?? []
         if let screenText = try? container.decode([String].self, forKey: .screenTextContains) {
@@ -601,6 +615,39 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         screenshotName = try container.decodeIfPresent(String.self, forKey: .screenshotName)
         roadmapPhase = try container.decodeIfPresent(CompatibilityRoadmapPhase.self, forKey: .roadmapPhase)
         expectedFailure = try container.decodeIfPresent(CompatibilityExpectedFailure.self, forKey: .expectedFailure)
+    }
+
+    private static func decodeOptionalNonNegativeInteger(
+        forKey key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Int? {
+        guard container.contains(key) else { return nil }
+        let value: Int
+        if let decoded = try? container.decode(Int.self, forKey: key) {
+            value = decoded
+        } else {
+            let rawValue = try container.decode(String.self, forKey: key)
+            let compact = rawValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "0x", with: "", options: .caseInsensitive)
+            guard let decoded = Int(compact, radix: 16) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.stringValue) must be a decimal integer or hexadecimal string"
+                )
+            }
+            value = decoded
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
     }
 
     public var command: String {

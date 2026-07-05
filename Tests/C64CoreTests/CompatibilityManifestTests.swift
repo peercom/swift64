@@ -303,6 +303,8 @@ final class CompatibilityManifestTests: XCTestCase {
                 { "register": "$D020", "value": "$06", "mask": "$0f" },
                 { "register": "$D011", "value": "$3b" }
               ],
+              "vicRasterLine": "$32",
+              "vicRasterCycle": 17,
               "cia1Registers": [
                 { "register": "$DC0E", "value": "$41", "mask": "$41" }
               ],
@@ -569,6 +571,8 @@ final class CompatibilityManifestTests: XCTestCase {
             CompatibilityVICRegisterExpectation(register: 0xD020, value: 0x06, mask: 0x0F),
             CompatibilityVICRegisterExpectation(register: 0xD011, value: 0x3B)
         ])
+        XCTAssertEqual(milestone.vicRasterLine, 0x32)
+        XCTAssertEqual(milestone.vicRasterCycle, 17)
         XCTAssertEqual(milestone.cia1Registers, [
             CompatibilityCIARegisterExpectation(register: 0xDC0E, value: 0x41, mask: 0x41)
         ])
@@ -779,6 +783,27 @@ final class CompatibilityManifestTests: XCTestCase {
         """
 
         XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsNegativeVICRasterExpectations() {
+        for field in ["vicRasterLine", "vicRasterCycle"] {
+            let json = """
+            {
+              "milestones": [
+                {
+                  "file": "raster.prg",
+                  "command": "RUN",
+                  "\(field)": -1
+                }
+              ]
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)),
+                "Expected negative \(field) to be rejected"
+            )
+        }
     }
 
     func testManifestDecodesActionsOnlyMilestone() throws {
