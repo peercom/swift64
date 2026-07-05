@@ -198,6 +198,15 @@ public final class KernalTraps {
         }
 
         guard let data = loadData, data.count >= 2 else {
+            if let readErrorCode = diskLoadReadErrorCode(device: deviceNum) {
+                debugLog("[LOAD] READ ERROR \(readErrorCode) — drive status \(diskDrive?.currentCommandStatus.trimmingCharacters(in: .whitespacesAndNewlines) ?? "none")")
+                setStatus(memory: memory, value: 0x80)
+                cpu.a = readErrorCode
+                cpu.setFlag(Flags.carry, true)
+                doRTS(cpu: cpu, memory: memory)
+                return true
+            }
+
             // File not found
             debugLog("[LOAD] FILE NOT FOUND — loadData=\(loadData == nil ? "nil" : "\(loadData!.count) bytes")")
             setStatus(memory: memory, value: 0x42)  // EOF + file not found
@@ -301,6 +310,20 @@ public final class KernalTraps {
 
         doRTS(cpu: cpu, memory: memory)
         return true
+    }
+
+    private func diskLoadReadErrorCode(device: UInt8) -> UInt8? {
+        guard (8...11).contains(device),
+              let status = diskDrive?.currentCommandStatus else {
+            return nil
+        }
+
+        let codeText = status.prefix { $0.isNumber }
+        guard let code = UInt8(codeText),
+              (20...29).contains(code) else {
+            return nil
+        }
+        return code
     }
 
     private func shouldAutostartSystemAreaDiskLoad(

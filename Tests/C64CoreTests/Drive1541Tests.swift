@@ -1634,6 +1634,28 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(c64.memory.ram[0x90], 0)
     }
 
+    func testCompatTrueDriveLoadTrapReportsD64ReadErrorInsteadOfFileNotFound() throws {
+        var d64 = [UInt8](makeMinimalD64())
+        d64.append(contentsOf: [UInt8](repeating: 0x01, count: 683))
+        let geometry = try XCTUnwrap(DiskDrive.d64Geometry(forByteCount: d64.count))
+        let errorOffset = try XCTUnwrap(geometry.errorInfoOffset)
+        d64[errorOffset] = 23
+
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(Data(d64)))
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,01,00\r")
+        XCTAssertEqual(c64.memory.ram[0x90], 0x80)
+        XCTAssertEqual(c64.cpu.a, 23)
+        XCTAssertTrue(c64.cpu.getFlag(Flags.carry))
+        XCTAssertNotEqual(c64.memory.ram[0x0801], 0xA9)
+    }
+
     func testCompatTrueDriveDoesNotTrapNativeOnlyG64Load() {
         let c64 = C64()
         c64.trueDriveEmulationMode = .compat1541
