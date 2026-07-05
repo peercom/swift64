@@ -198,7 +198,7 @@ public final class KernalTraps {
         }
 
         guard let data = loadData, data.count >= 2 else {
-            if let readErrorCode = diskLoadReadErrorCode(device: deviceNum) {
+            if (8...11).contains(deviceNum), let readErrorCode = diskReadErrorCode() {
                 debugLog("[LOAD] READ ERROR \(readErrorCode) — drive status \(diskDrive?.currentCommandStatus.trimmingCharacters(in: .whitespacesAndNewlines) ?? "none")")
                 setStatus(memory: memory, value: 0x80)
                 cpu.a = readErrorCode
@@ -312,9 +312,8 @@ public final class KernalTraps {
         return true
     }
 
-    private func diskLoadReadErrorCode(device: UInt8) -> UInt8? {
-        guard (8...11).contains(device),
-              let status = diskDrive?.currentCommandStatus else {
+    private func diskReadErrorCode() -> UInt8? {
+        guard let status = diskDrive?.currentCommandStatus else {
             return nil
         }
 
@@ -446,6 +445,14 @@ public final class KernalTraps {
         let diskChannel = secondary == 15 ? 15 : channel
 
         guard drive.openFile(channel: diskChannel, filename: filename) else {
+            if let readErrorCode = diskReadErrorCode() {
+                setStatus(memory: memory, value: 0x80)
+                cpu.a = readErrorCode
+                cpu.setFlag(Flags.carry, true)
+                doRTS(cpu: cpu, memory: memory)
+                return true
+            }
+
             setStatus(memory: memory, value: 0x80)
             cpu.a = 5
             cpu.setFlag(Flags.carry, true)

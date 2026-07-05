@@ -44,7 +44,8 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertTrue(c64.kernalTraps.checkTrap())
 
         XCTAssertTrue(c64.cpu.getFlag(Flags.carry))
-        XCTAssertEqual(c64.cpu.a, 4)
+        XCTAssertEqual(c64.cpu.a, 23)
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0x80)
         XCTAssertNotEqual(c64.memory.ram[0x0801], 0xA9)
         XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,01,00\r")
 
@@ -63,7 +64,8 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertTrue(c64.kernalTraps.checkTrap())
 
         XCTAssertTrue(c64.cpu.getFlag(Flags.carry))
-        XCTAssertEqual(c64.cpu.a, 4)
+        XCTAssertEqual(c64.cpu.a, 23)
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0x80)
         XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,18,01\r")
 
         prepareKernalOpenTrap(c64, filename: "", logicalFile: 15, secondary: 15)
@@ -71,6 +73,64 @@ final class KernalTrapsTests: XCTestCase {
         prepareKernalCHKINTrap(c64, channel: 15)
         XCTAssertTrue(c64.kernalTraps.checkTrap())
         XCTAssertEqual(readKernalChannelLine(c64), "23, READ ERROR,18,01\r")
+    }
+
+    func testOpenTrapReportsD64SectorReadErrorsAsDosErrorCode() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(firstFileSectorError: 23)))
+        prepareKernalOpenTrap(c64, filename: "HELLO", logicalFile: 2, secondary: 2)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertTrue(c64.cpu.getFlag(Flags.carry))
+        XCTAssertEqual(c64.cpu.a, 23)
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0x80)
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,01,00\r")
+    }
+
+    func testOpenAppendTrapReportsD64SectorReadErrorsAsDosErrorCode() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(firstFileSectorError: 23)))
+        prepareKernalOpenTrap(c64, filename: "HELLO,P,A", logicalFile: 2, secondary: 2)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertTrue(c64.cpu.getFlag(Flags.carry))
+        XCTAssertEqual(c64.cpu.a, 23)
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0x80)
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "23, READ ERROR,01,00\r")
+    }
+
+    func testOpenCommandChannelCopyReportsSourceD64ReadError() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(firstFileSectorError: 23)))
+        prepareKernalOpenTrap(c64, filename: "C:COPY=HELLO", logicalFile: 15, secondary: 15)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+        XCTAssertEqual(c64.memory.ram[Int(KernalTraps.status)], 0)
+        XCTAssertNil(c64.diskDrive.findFile("COPY"))
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "23, READ ERROR,01,00\r")
+    }
+
+    func testOpenCommandChannelScratchDoesNotDeleteFileWithD64ReadError() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(firstFileSectorError: 23)))
+        XCTAssertNotNil(c64.diskDrive.findFile("HELLO"))
+
+        prepareKernalOpenTrap(c64, filename: "S:HELLO", logicalFile: 15, secondary: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertNotNil(c64.diskDrive.findFile("HELLO"))
+        XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+
+        prepareKernalCHKINTrap(c64, channel: 15)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(readKernalChannelLine(c64), "23, READ ERROR,01,00\r")
     }
 
     func testDirectoryLoadTrapHonorsNameAndTypeFilters() {

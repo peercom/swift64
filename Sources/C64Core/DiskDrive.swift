@@ -1802,6 +1802,9 @@ public final class DiskDrive {
 
         let matches = directorySlots(matching: request)
         guard !matches.isEmpty else { return 0 }
+        for match in matches {
+            guard validateFileChainReadable(match.entry) else { return nil }
+        }
 
         for match in matches {
             let releasedSectors = fileChainKeys(firstTrack: Int(match.entry.firstTrack), firstSector: Int(match.entry.firstSector))
@@ -1814,6 +1817,29 @@ public final class DiskDrive {
         parseDirectory()
         markD64Modified()
         return matches.count
+    }
+
+    private func validateFileChainReadable(_ entry: DirectoryEntry) -> Bool {
+        var track = Int(entry.firstTrack)
+        var sector = Int(entry.firstSector)
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = sectorChainKey(track: track, sector: sector)
+            guard !visitedSectors.contains(key) else { return true }
+            visitedSectors.insert(key)
+
+            guard validateSectorReadable(track: track, sector: sector) else { return false }
+            guard let data = readSector(track: track, sector: sector) else {
+                commandStatus = String(format: "66, ILLEGAL TRACK OR SECTOR,%02d,%02d\r", track, sector)
+                return false
+            }
+
+            track = Int(data[0])
+            sector = Int(data[1])
+        }
+
+        return true
     }
 
     private func renameFile(expression: String) -> RenameResult? {
