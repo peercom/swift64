@@ -2078,6 +2078,16 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalCPUInstructionCycle, 0)
         XCTAssertEqual(records.last?.finalVICRasterLine, 0)
         XCTAssertEqual(records.last?.finalVICRasterCycle, 0)
+        XCTAssertEqual(records.last?.finalVICBALineLow, false)
+        XCTAssertEqual(records.last?.finalVICAECLineLow, false)
+        XCTAssertEqual(records.last?.finalVICBusOwner, "cpu")
+        XCTAssertEqual(records.last?.finalVICBusPhase, "cpu")
+        XCTAssertEqual(records.last?.finalVICLowPhaseAccess, "idle")
+        XCTAssertEqual(records.last?.finalVICHighPhaseMemoryReads, [])
+        XCTAssertEqual(records.last?.finalVICHighPhaseColorRAMReads, [])
+        XCTAssertEqual(records.last?.finalVICLowPhaseMemoryReads, [])
+        XCTAssertEqual(records.last?.finalVICRegisterSnapshot?.count, 0x2F)
+        XCTAssertEqual(records.last?.finalVICRegisterSnapshot?[0x19], "70")
         XCTAssertEqual(records.last?.framebufferHash, CompatibilityHash.framebuffer(
             tapeC64.vic.framebuffer,
             width: VIC.screenWidth,
@@ -2272,6 +2282,15 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(legacyRecord.finalCPUInstructionCycle)
         XCTAssertNil(legacyRecord.finalVICRasterLine)
         XCTAssertNil(legacyRecord.finalVICRasterCycle)
+        XCTAssertNil(legacyRecord.finalVICBALineLow)
+        XCTAssertNil(legacyRecord.finalVICAECLineLow)
+        XCTAssertNil(legacyRecord.finalVICBusOwner)
+        XCTAssertNil(legacyRecord.finalVICBusPhase)
+        XCTAssertNil(legacyRecord.finalVICLowPhaseAccess)
+        XCTAssertNil(legacyRecord.finalVICHighPhaseMemoryReads)
+        XCTAssertNil(legacyRecord.finalVICHighPhaseColorRAMReads)
+        XCTAssertNil(legacyRecord.finalVICLowPhaseMemoryReads)
+        XCTAssertNil(legacyRecord.finalVICRegisterSnapshot)
         XCTAssertNil(legacyRecord.finalSIDAccuracyMode)
         XCTAssertNil(legacyRecord.finalSIDModel)
         XCTAssertNil(legacyRecord.finalSIDAudioSignature)
@@ -2578,6 +2597,50 @@ final class LocalDiskMatrixTests: XCTestCase {
         try writeMilestoneRunSummary(summary, to: url)
 
         let decoded = try JSONDecoder().decode(MilestoneRunSummary.self, from: Data(contentsOf: url))
+        func expectedFailureSummary(
+            category: String,
+            reason: String,
+            elapsedCycles: UInt64
+        ) -> MilestoneFailureSummary {
+            MilestoneFailureSummary(
+                key: milestone.resultKey,
+                category: category,
+                reason: reason,
+                elapsedCycles: elapsedCycles,
+                finalPC: "0000",
+                finalVICRasterLine: 0,
+                finalVICRasterCycle: 0,
+                finalVICBusOwner: "cpu",
+                finalVICBusPhase: "cpu",
+                finalVICLowPhaseAccess: "idle",
+                finalVICHighPhaseMemoryReads: [],
+                finalVICHighPhaseColorRAMReads: [],
+                finalVICLowPhaseMemoryReads: []
+            )
+        }
+        func expectedDriftSummary(
+            category: String,
+            reason: String,
+            elapsedCycles: UInt64,
+            mismatches: [String]
+        ) -> MilestoneExpectedFailureDriftSummary {
+            MilestoneExpectedFailureDriftSummary(
+                key: milestone.resultKey,
+                category: category,
+                reason: reason,
+                elapsedCycles: elapsedCycles,
+                mismatches: mismatches,
+                finalPC: "0000",
+                finalVICRasterLine: 0,
+                finalVICRasterCycle: 0,
+                finalVICBusOwner: "cpu",
+                finalVICBusPhase: "cpu",
+                finalVICLowPhaseAccess: "idle",
+                finalVICHighPhaseMemoryReads: [],
+                finalVICHighPhaseColorRAMReads: [],
+                finalVICLowPhaseMemoryReads: []
+            )
+        }
         XCTAssertEqual(decoded.total, 5)
         XCTAssertEqual(decoded.executed, 4)
         XCTAssertEqual(decoded.passed, 1)
@@ -2832,7 +2895,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             "framebufferScreenshotFilenameCollisions:1"
         ])
         XCTAssertEqual(decoded.unclassifiedFailureCount, 1)
-        XCTAssertEqual(decoded.formatVersion, 34)
+        XCTAssertEqual(decoded.formatVersion, 37)
         XCTAssertEqual(decoded.totalElapsedCycles, 85)
         XCTAssertEqual(decoded.maxElapsedCycles, 30)
         XCTAssertEqual(decoded.slowestMilestone, milestone.resultKey)
@@ -2876,24 +2939,21 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.unclassified], MilestonePhaseOutcome.unclassifiedFailures)
         XCTAssertEqual(decoded.phaseOutcomes[MilestoneRoadmapPhase.skipped], MilestonePhaseOutcome.skipped)
         XCTAssertEqual(decoded.phaseFailureDetails[MilestoneRoadmapPhase.phase2CPUMemoryBus], [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "pc",
                 reason: "PC $0801 not in $C000-$C0FF",
                 elapsedCycles: 20
             )
         ])
         XCTAssertEqual(decoded.phaseFailureDetails[MilestoneRoadmapPhase.phase4DriveMedia], [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "drive",
                 reason: "GCR reads 0 < 64",
                 elapsedCycles: 25
             )
         ])
         XCTAssertEqual(decoded.phaseExpectedFailureDriftDetails[MilestoneRoadmapPhase.phase4DriveMedia], [
-            MilestoneExpectedFailureDriftSummary(
-                key: milestone.resultKey,
+            expectedDriftSummary(
                 category: "drive",
                 reason: "GCR reads 0 < 64",
                 elapsedCycles: 25,
@@ -2902,50 +2962,43 @@ final class LocalDiskMatrixTests: XCTestCase {
         ])
         XCTAssertEqual(decoded.failedMilestones, [milestone.resultKey, milestone.resultKey, milestone.resultKey])
         XCTAssertEqual(decoded.failedMilestoneDetails, [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "pc",
                 reason: "PC $0801 not in $C000-$C0FF",
                 elapsedCycles: 20
             ),
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "drive",
                 reason: "GCR reads 0 < 64",
                 elapsedCycles: 25
             ),
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "emulator",
                 reason: "unexpected fallback path",
                 elapsedCycles: 30
             )
         ])
         XCTAssertEqual(decoded.expectedFailureDetails, [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "pc",
                 reason: "PC $0801 not in $C000-$C0FF",
                 elapsedCycles: 20
             )
         ])
         XCTAssertEqual(decoded.unexpectedFailureDetails, [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "drive",
                 reason: "GCR reads 0 < 64",
                 elapsedCycles: 25
             ),
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "emulator",
                 reason: "unexpected fallback path",
                 elapsedCycles: 30
             )
         ])
         XCTAssertEqual(decoded.expectedFailureDriftDetails, [
-            MilestoneExpectedFailureDriftSummary(
-                key: milestone.resultKey,
+            expectedDriftSummary(
                 category: "drive",
                 reason: "GCR reads 0 < 64",
                 elapsedCycles: 25,
@@ -2953,8 +3006,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             )
         ])
         XCTAssertEqual(decoded.unclassifiedFailureDetails, [
-            MilestoneFailureSummary(
-                key: milestone.resultKey,
+            expectedFailureSummary(
                 category: "emulator",
                 reason: "unexpected fallback path",
                 elapsedCycles: 30
@@ -2965,11 +3017,18 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(decoded.hasUnexpectedFailures)
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("demo.g64"))
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("LOAD\"*\",8,1"))
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("pc=$0000"))
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("vicOwner=cpu"))
+        XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("vicLow=[]"))
         XCTAssertTrue(decoded.unclassifiedFailureSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("demo.g64"))
+        XCTAssertTrue(decoded.unexpectedFailureSummary.contains("vicPhase=cpu"))
+        XCTAssertTrue(decoded.unexpectedFailureSummary.contains("vicHigh=[]"))
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.unexpectedFailureSummary.contains("GCR reads 0 < 64"))
         XCTAssertTrue(decoded.expectedFailureDriftSummary.contains("category drive != pc"))
+        XCTAssertTrue(decoded.expectedFailureDriftSummary.contains("pc=$0000"))
+        XCTAssertTrue(decoded.expectedFailureDriftSummary.contains("vicColor=[]"))
         XCTAssertFalse(decoded.expectedFailureDriftSummary.contains("unexpected fallback path"))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains(MilestoneRoadmapPhase.phase4DriveMedia))
         XCTAssertTrue(decoded.phaseAcceptanceFailureSummary.contains(MilestonePhaseOutcome.expectedFailureDrift))
@@ -4143,6 +4202,122 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(result.reason.contains("VIC rasterCycle 17 != 18"))
     }
 
+    func testNamedMilestoneCanMatchVICBusState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 14
+        c64.vic.badLine = true
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/bus.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicRasterLine: VIC.displayTop,
+            vicRasterCycle: 15,
+            vicBALineLow: true,
+            vicAECLineLow: true,
+            vicBusOwner: .vicBadLine,
+            vicBusPhase: CompatibilityVICBusPhaseExpectation(type: .badLineCharacterFetch, column: 0),
+            vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation(type: .displayData, column: 0),
+            vicLowPhaseMemoryReads: [0x3FFF],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+    }
+
+    func testNamedMilestoneRequiresVICBusState() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 14
+        c64.vic.badLine = true
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/bus.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicBALineLow: false,
+            vicAECLineLow: false,
+            vicBusOwner: .cpu,
+            vicBusPhase: CompatibilityVICBusPhaseExpectation(type: .cpu),
+            vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation(type: .idle),
+            vicHighPhaseMemoryReads: [0x1000],
+            vicHighPhaseColorRAMReads: [0x0001],
+            vicLowPhaseMemoryReads: [0x0400],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .vic)
+        XCTAssertTrue(result.reason.contains("VIC baLineLow true != false"))
+        XCTAssertTrue(result.reason.contains("VIC aecLineLow true != false"))
+        XCTAssertTrue(result.reason.contains("VIC busOwner vicBadLine != cpu"))
+        XCTAssertTrue(result.reason.contains("VIC busPhase badLineCharacterFetch(column:0) != cpu"))
+        XCTAssertTrue(result.reason.contains("VIC lowPhaseAccess displayData(column:0) != idle"))
+        XCTAssertTrue(result.reason.contains("VIC highPhaseMemoryReads [] != [$1000]"))
+        XCTAssertTrue(result.reason.contains("VIC highPhaseColorRAMReads [] != [$0001]"))
+        XCTAssertTrue(result.reason.contains("VIC lowPhaseMemoryReads [$3FFF] != [$0400]"))
+    }
+
+    func testNamedMilestoneCanRequireNoVICMemoryTraceReads() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 14
+        c64.vic.badLine = true
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/bus.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 1,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            vicLowPhaseMemoryReads: [],
+            vicLowPhaseMemoryReadsSpecified: true,
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.category, .vic)
+        XCTAssertTrue(result.reason.contains("VIC lowPhaseMemoryReads [$3FFF] != []"))
+    }
+
     func testNamedMilestoneCanMatchCIARegisters() {
         let c64 = C64()
         c64.cia1.writeRegister(0x04, value: 0x34)
@@ -4388,6 +4563,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "color RAM $0000 00 != 01").category, .screen)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "screen hash abc != def").category, .screen)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "VIC $D020 06 != 02 mask 0F").category, .vic)
+        XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "VIC busOwner vicBadLine != cpu").category, .vic)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID $D418 0F != 10 mask FF").category, .sid)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID audio.sum 0.000000 != 1.000000").category, .sid)
         XCTAssertEqual(MatrixRunResult(passed: false, elapsedCycles: 1, reason: "SID voice1.frequency $1234 != $2345").category, .sid)
@@ -5393,6 +5569,23 @@ final class LocalDiskMatrixTests: XCTestCase {
             }
             let vicRasterLineMatches = milestone.vicRasterLine.map { Int(c64.vic.rasterLine) == $0 } ?? true
             let vicRasterCycleMatches = milestone.vicRasterCycle.map { c64.vic.rasterCycle == $0 } ?? true
+            let vicBusMatches = vicBusMismatches(
+                expectedBALineLow: milestone.vicBALineLow,
+                expectedAECLineLow: milestone.vicAECLineLow,
+                expectedBusOwner: milestone.vicBusOwner,
+                expectedBusPhase: milestone.vicBusPhase,
+                expectedLowPhaseAccess: milestone.vicLowPhaseAccess,
+                vic: c64.vic
+            ).isEmpty
+            let vicMemoryTraceMatches = vicMemoryTraceMismatches(
+                highPhaseMemoryReads: milestone.vicHighPhaseMemoryReads,
+                highPhaseMemoryReadsSpecified: milestone.vicHighPhaseMemoryReadsSpecified,
+                highPhaseColorRAMReads: milestone.vicHighPhaseColorRAMReads,
+                highPhaseColorRAMReadsSpecified: milestone.vicHighPhaseColorRAMReadsSpecified,
+                lowPhaseMemoryReads: milestone.vicLowPhaseMemoryReads,
+                lowPhaseMemoryReadsSpecified: milestone.vicLowPhaseMemoryReadsSpecified,
+                vic: c64.vic
+            ).isEmpty
             let cia1Matches = milestone.cia1Registers.allSatisfy { expectation in
                 let actual = c64.cia1.debugRegisterValue(UInt16(truncatingIfNeeded: expectation.register))
                 return (actual & expectation.mask) == (expectation.value & expectation.mask)
@@ -5434,6 +5627,8 @@ final class LocalDiskMatrixTests: XCTestCase {
                 && vicMatches
                 && vicRasterLineMatches
                 && vicRasterCycleMatches
+                && vicBusMatches
+                && vicMemoryTraceMatches
                 && cia1Matches
                 && cia2Matches
                 && screenTextMatches
@@ -5647,6 +5842,17 @@ final class LocalDiskMatrixTests: XCTestCase {
                 vicRegisters: entry.vicRegisters,
                 vicRasterLine: entry.vicRasterLine,
                 vicRasterCycle: entry.vicRasterCycle,
+                vicBALineLow: entry.vicBALineLow,
+                vicAECLineLow: entry.vicAECLineLow,
+                vicBusOwner: entry.vicBusOwner,
+                vicBusPhase: entry.vicBusPhase,
+                vicLowPhaseAccess: entry.vicLowPhaseAccess,
+                vicHighPhaseMemoryReads: entry.vicHighPhaseMemoryReads,
+                vicHighPhaseMemoryReadsSpecified: entry.vicHighPhaseMemoryReadsSpecified,
+                vicHighPhaseColorRAMReads: entry.vicHighPhaseColorRAMReads,
+                vicHighPhaseColorRAMReadsSpecified: entry.vicHighPhaseColorRAMReadsSpecified,
+                vicLowPhaseMemoryReads: entry.vicLowPhaseMemoryReads,
+                vicLowPhaseMemoryReadsSpecified: entry.vicLowPhaseMemoryReadsSpecified,
                 cia1Registers: entry.cia1Registers,
                 cia2Registers: entry.cia2Registers,
                 screenTextContains: entry.screenTextContains,
@@ -6015,7 +6221,20 @@ final class LocalDiskMatrixTests: XCTestCase {
             || !entry.sidVoiceStates.isEmpty {
             types.append(MilestoneObservableType.sid)
         }
-        if !entry.vicRegisters.isEmpty || entry.vicRasterLine != nil || entry.vicRasterCycle != nil {
+        if !entry.vicRegisters.isEmpty
+            || entry.vicRasterLine != nil
+            || entry.vicRasterCycle != nil
+            || entry.vicBALineLow != nil
+            || entry.vicAECLineLow != nil
+            || entry.vicBusOwner != nil
+            || entry.vicBusPhase != nil
+            || entry.vicLowPhaseAccess != nil
+            || entry.vicHighPhaseMemoryReadsSpecified
+            || !entry.vicHighPhaseMemoryReads.isEmpty
+            || entry.vicHighPhaseColorRAMReadsSpecified
+            || !entry.vicHighPhaseColorRAMReads.isEmpty
+            || entry.vicLowPhaseMemoryReadsSpecified
+            || !entry.vicLowPhaseMemoryReads.isEmpty {
             types.append(MilestoneObservableType.vic)
         }
         if !entry.cia1Registers.isEmpty || !entry.cia2Registers.isEmpty {
@@ -6062,7 +6281,20 @@ final class LocalDiskMatrixTests: XCTestCase {
             || !milestone.sidVoiceStates.isEmpty {
             types.append(MilestoneObservableType.sid)
         }
-        if !milestone.vicRegisters.isEmpty || milestone.vicRasterLine != nil || milestone.vicRasterCycle != nil {
+        if !milestone.vicRegisters.isEmpty
+            || milestone.vicRasterLine != nil
+            || milestone.vicRasterCycle != nil
+            || milestone.vicBALineLow != nil
+            || milestone.vicAECLineLow != nil
+            || milestone.vicBusOwner != nil
+            || milestone.vicBusPhase != nil
+            || milestone.vicLowPhaseAccess != nil
+            || milestone.vicHighPhaseMemoryReadsSpecified
+            || !milestone.vicHighPhaseMemoryReads.isEmpty
+            || milestone.vicHighPhaseColorRAMReadsSpecified
+            || !milestone.vicHighPhaseColorRAMReads.isEmpty
+            || milestone.vicLowPhaseMemoryReadsSpecified
+            || !milestone.vicLowPhaseMemoryReads.isEmpty {
             types.append(MilestoneObservableType.vic)
         }
         if !milestone.cia1Registers.isEmpty || !milestone.cia2Registers.isEmpty {
@@ -6320,6 +6552,23 @@ final class LocalDiskMatrixTests: XCTestCase {
         unmet.append(contentsOf: vicRasterMismatches(
             expectedLine: milestone.vicRasterLine,
             expectedCycle: milestone.vicRasterCycle,
+            vic: c64.vic
+        ))
+        unmet.append(contentsOf: vicBusMismatches(
+            expectedBALineLow: milestone.vicBALineLow,
+            expectedAECLineLow: milestone.vicAECLineLow,
+            expectedBusOwner: milestone.vicBusOwner,
+            expectedBusPhase: milestone.vicBusPhase,
+            expectedLowPhaseAccess: milestone.vicLowPhaseAccess,
+            vic: c64.vic
+        ))
+        unmet.append(contentsOf: vicMemoryTraceMismatches(
+            highPhaseMemoryReads: milestone.vicHighPhaseMemoryReads,
+            highPhaseMemoryReadsSpecified: milestone.vicHighPhaseMemoryReadsSpecified,
+            highPhaseColorRAMReads: milestone.vicHighPhaseColorRAMReads,
+            highPhaseColorRAMReadsSpecified: milestone.vicHighPhaseColorRAMReadsSpecified,
+            lowPhaseMemoryReads: milestone.vicLowPhaseMemoryReads,
+            lowPhaseMemoryReadsSpecified: milestone.vicLowPhaseMemoryReadsSpecified,
             vic: c64.vic
         ))
         unmet.append(contentsOf: ciaRegisterMismatches(milestone.cia1Registers, cia: c64.cia1, label: "CIA1"))
@@ -7163,6 +7412,91 @@ final class LocalDiskMatrixTests: XCTestCase {
         return mismatches
     }
 
+    private func vicBusMismatches(
+        expectedBALineLow: Bool?,
+        expectedAECLineLow: Bool?,
+        expectedBusOwner: CompatibilityVICBusOwner?,
+        expectedBusPhase: CompatibilityVICBusPhaseExpectation?,
+        expectedLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation?,
+        vic: VIC
+    ) -> [String] {
+        var mismatches: [String] = []
+        if let expectedBALineLow, vic.baLineLow != expectedBALineLow {
+            mismatches.append("VIC baLineLow \(vic.baLineLow) != \(expectedBALineLow)")
+        }
+        if let expectedAECLineLow, vic.aecLineLow != expectedAECLineLow {
+            mismatches.append("VIC aecLineLow \(vic.aecLineLow) != \(expectedAECLineLow)")
+        }
+        if let expectedBusOwner {
+            let actual = CompatibilityVICBusOwner(vic.busOwner)
+            if actual != expectedBusOwner {
+                mismatches.append("VIC busOwner \(actual.rawValue) != \(expectedBusOwner.rawValue)")
+            }
+        }
+        if let expectedBusPhase {
+            let actual = CompatibilityVICBusPhaseExpectation(vic.busPhase)
+            if actual != expectedBusPhase {
+                mismatches.append("VIC busPhase \(actual.summary) != \(expectedBusPhase.summary)")
+            }
+        }
+        if let expectedLowPhaseAccess {
+            let actual = CompatibilityVICLowPhaseAccessExpectation(vic.lowPhaseAccess)
+            if actual != expectedLowPhaseAccess {
+                mismatches.append("VIC lowPhaseAccess \(actual.summary) != \(expectedLowPhaseAccess.summary)")
+            }
+        }
+        return mismatches
+    }
+
+    private func vicMemoryTraceMismatches(
+        highPhaseMemoryReads: [Int],
+        highPhaseMemoryReadsSpecified: Bool,
+        highPhaseColorRAMReads: [Int],
+        highPhaseColorRAMReadsSpecified: Bool,
+        lowPhaseMemoryReads: [Int],
+        lowPhaseMemoryReadsSpecified: Bool,
+        vic: VIC
+    ) -> [String] {
+        var mismatches: [String] = []
+        appendVICTraceMismatch(
+            &mismatches,
+            label: "VIC highPhaseMemoryReads",
+            actual: vic.lastHighPhaseMemoryReads.map(Int.init),
+            expected: highPhaseMemoryReads,
+            specified: highPhaseMemoryReadsSpecified
+        )
+        appendVICTraceMismatch(
+            &mismatches,
+            label: "VIC highPhaseColorRAMReads",
+            actual: vic.lastHighPhaseColorRAMReads.map(Int.init),
+            expected: highPhaseColorRAMReads,
+            specified: highPhaseColorRAMReadsSpecified
+        )
+        appendVICTraceMismatch(
+            &mismatches,
+            label: "VIC lowPhaseMemoryReads",
+            actual: vic.lastLowPhaseMemoryReads.map(Int.init),
+            expected: lowPhaseMemoryReads,
+            specified: lowPhaseMemoryReadsSpecified
+        )
+        return mismatches
+    }
+
+    private func appendVICTraceMismatch(
+        _ mismatches: inout [String],
+        label: String,
+        actual: [Int],
+        expected: [Int],
+        specified: Bool
+    ) {
+        guard (specified || !expected.isEmpty), actual != expected else { return }
+        mismatches.append("\(label) \(formatAddresses(actual)) != \(formatAddresses(expected))")
+    }
+
+    private func formatAddresses(_ addresses: [Int]) -> String {
+        "[" + addresses.map { "$\(hex($0, width: 4))" }.joined(separator: ",") + "]"
+    }
+
     private func ciaRegisterMismatches(
         _ expectations: [CompatibilityCIARegisterExpectation],
         cia: CIA,
@@ -7517,6 +7851,15 @@ private struct MatrixRunResult {
             finalCPUInstructionCycle: c64.cpu.cycle,
             finalVICRasterLine: Int(c64.vic.rasterLine),
             finalVICRasterCycle: c64.vic.rasterCycle,
+            finalVICBALineLow: c64.vic.baLineLow,
+            finalVICAECLineLow: c64.vic.aecLineLow,
+            finalVICBusOwner: CompatibilityVICBusOwner(c64.vic.busOwner).rawValue,
+            finalVICBusPhase: CompatibilityVICBusPhaseExpectation(c64.vic.busPhase).summary,
+            finalVICLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation(c64.vic.lowPhaseAccess).summary,
+            finalVICHighPhaseMemoryReads: c64.vic.lastHighPhaseMemoryReads.map(hex16),
+            finalVICHighPhaseColorRAMReads: c64.vic.lastHighPhaseColorRAMReads.map(hex16),
+            finalVICLowPhaseMemoryReads: c64.vic.lastLowPhaseMemoryReads.map(hex16),
+            finalVICRegisterSnapshot: (0..<0x2F).map { hex8(c64.vic.debugRegisterValue(UInt16($0))) },
             finalSIDModel: c64.sid.model.rawValue,
             finalSIDAccuracyMode: c64.sid.accuracyMode.rawValue,
             finalSIDAudioSignature: SIDAudioSignatureRecord(
@@ -7690,6 +8033,19 @@ private enum MilestoneResultCategory: String {
         } else {
             lower = rawLower
         }
+        if lower.contains("vic $")
+            || lower.contains("vic ")
+            || lower.contains("vic.")
+            || lower.contains("raster")
+            || lower.contains("balinelow")
+            || lower.contains("aeclinelow")
+            || lower.contains("busowner")
+            || lower.contains("badline")
+            || lower.contains("bad line")
+            || lower.contains("sprite dma")
+            || lower.contains("border") {
+            return .vic
+        }
         if lower.contains("cpu") || lower.contains("jam") || lower.contains("$ffff") {
             return .cpu
         }
@@ -7750,15 +8106,6 @@ private enum MilestoneResultCategory: String {
             || lower.contains("color ram hash")
             || lower.contains("color ram $") {
             return .screen
-        }
-        if lower.contains("vic $")
-            || lower.contains("vic.")
-            || lower.contains("raster")
-            || lower.contains("badline")
-            || lower.contains("bad line")
-            || lower.contains("sprite dma")
-            || lower.contains("border") {
-            return .vic
         }
         if lower.contains("sid $")
             || lower.contains("sid.")
@@ -8021,6 +8368,17 @@ private struct LocalMilestone {
     var vicRegisters: [CompatibilityVICRegisterExpectation] = []
     var vicRasterLine: Int? = nil
     var vicRasterCycle: Int? = nil
+    var vicBALineLow: Bool? = nil
+    var vicAECLineLow: Bool? = nil
+    var vicBusOwner: CompatibilityVICBusOwner? = nil
+    var vicBusPhase: CompatibilityVICBusPhaseExpectation? = nil
+    var vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation? = nil
+    var vicHighPhaseMemoryReads: [Int] = []
+    var vicHighPhaseMemoryReadsSpecified: Bool = false
+    var vicHighPhaseColorRAMReads: [Int] = []
+    var vicHighPhaseColorRAMReadsSpecified: Bool = false
+    var vicLowPhaseMemoryReads: [Int] = []
+    var vicLowPhaseMemoryReadsSpecified: Bool = false
     var cia1Registers: [CompatibilityCIARegisterExpectation] = []
     var cia2Registers: [CompatibilityCIARegisterExpectation] = []
     var screenTextContains: [String] = []
@@ -8232,7 +8590,7 @@ private struct LowLevelTrackRecord: Codable, Equatable {
 }
 
 private struct MilestoneResultRecord: Codable, Equatable {
-    static let currentFormatVersion = 31
+    static let currentFormatVersion = 33
 
     let formatVersion: Int?
     let skipped: Bool?
@@ -8268,6 +8626,15 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let finalCPUInstructionCycle: Int?
     let finalVICRasterLine: Int?
     let finalVICRasterCycle: Int?
+    let finalVICBALineLow: Bool?
+    let finalVICAECLineLow: Bool?
+    let finalVICBusOwner: String?
+    let finalVICBusPhase: String?
+    let finalVICLowPhaseAccess: String?
+    let finalVICHighPhaseMemoryReads: [String]?
+    let finalVICHighPhaseColorRAMReads: [String]?
+    let finalVICLowPhaseMemoryReads: [String]?
+    let finalVICRegisterSnapshot: [String]?
     let finalSIDModel: String?
     let finalSIDAccuracyMode: String?
     let finalSIDAudioSignature: SIDAudioSignatureRecord?
@@ -8379,6 +8746,15 @@ private struct MilestoneResultRecord: Codable, Equatable {
         finalCPUInstructionCycle: Int? = nil,
         finalVICRasterLine: Int? = nil,
         finalVICRasterCycle: Int? = nil,
+        finalVICBALineLow: Bool? = nil,
+        finalVICAECLineLow: Bool? = nil,
+        finalVICBusOwner: String? = nil,
+        finalVICBusPhase: String? = nil,
+        finalVICLowPhaseAccess: String? = nil,
+        finalVICHighPhaseMemoryReads: [String]? = nil,
+        finalVICHighPhaseColorRAMReads: [String]? = nil,
+        finalVICLowPhaseMemoryReads: [String]? = nil,
+        finalVICRegisterSnapshot: [String]? = nil,
         finalSIDModel: String? = nil,
         finalSIDAccuracyMode: String? = nil,
         finalSIDAudioSignature: SIDAudioSignatureRecord? = nil,
@@ -8489,6 +8865,15 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.finalCPUInstructionCycle = finalCPUInstructionCycle
         self.finalVICRasterLine = finalVICRasterLine
         self.finalVICRasterCycle = finalVICRasterCycle
+        self.finalVICBALineLow = finalVICBALineLow
+        self.finalVICAECLineLow = finalVICAECLineLow
+        self.finalVICBusOwner = finalVICBusOwner
+        self.finalVICBusPhase = finalVICBusPhase
+        self.finalVICLowPhaseAccess = finalVICLowPhaseAccess
+        self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
+        self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
+        self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+        self.finalVICRegisterSnapshot = finalVICRegisterSnapshot
         self.finalSIDModel = finalSIDModel
         self.finalSIDAccuracyMode = finalSIDAccuracyMode
         self.finalSIDAudioSignature = finalSIDAudioSignature
@@ -8582,6 +8967,69 @@ private struct MilestoneFailureSummary: Codable, Equatable {
     let category: String
     let reason: String
     let elapsedCycles: UInt64
+    let finalPC: String?
+    let finalVICRasterLine: Int?
+    let finalVICRasterCycle: Int?
+    let finalVICBusOwner: String?
+    let finalVICBusPhase: String?
+    let finalVICLowPhaseAccess: String?
+    let finalVICHighPhaseMemoryReads: [String]?
+    let finalVICHighPhaseColorRAMReads: [String]?
+    let finalVICLowPhaseMemoryReads: [String]?
+
+    init(
+        key: MilestoneResultKey,
+        category: String,
+        reason: String,
+        elapsedCycles: UInt64,
+        finalPC: String? = nil,
+        finalVICRasterLine: Int? = nil,
+        finalVICRasterCycle: Int? = nil,
+        finalVICBusOwner: String? = nil,
+        finalVICBusPhase: String? = nil,
+        finalVICLowPhaseAccess: String? = nil,
+        finalVICHighPhaseMemoryReads: [String]? = nil,
+        finalVICHighPhaseColorRAMReads: [String]? = nil,
+        finalVICLowPhaseMemoryReads: [String]? = nil
+    ) {
+        self.key = key
+        self.category = category
+        self.reason = reason
+        self.elapsedCycles = elapsedCycles
+        self.finalPC = finalPC
+        self.finalVICRasterLine = finalVICRasterLine
+        self.finalVICRasterCycle = finalVICRasterCycle
+        self.finalVICBusOwner = finalVICBusOwner
+        self.finalVICBusPhase = finalVICBusPhase
+        self.finalVICLowPhaseAccess = finalVICLowPhaseAccess
+        self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
+        self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
+        self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+    }
+
+    var finalDiagnostics: String {
+        let vicTrace = [
+            ("vicHigh", finalVICHighPhaseMemoryReads),
+            ("vicColor", finalVICHighPhaseColorRAMReads),
+            ("vicLow", finalVICLowPhaseMemoryReads),
+        ]
+            .compactMap { label, values -> String? in
+                guard let values else { return nil }
+                return "\(label)=\(values.isEmpty ? "[]" : "[" + values.joined(separator: ",") + "]")"
+            }
+            .joined(separator: " ")
+        let fields: [String?] = [
+            finalPC.map { "pc=$\($0)" },
+            finalVICRasterLine.map { "vicLine=\($0)" },
+            finalVICRasterCycle.map { "vicCycle=\($0)" },
+            finalVICBusOwner.map { "vicOwner=\($0)" },
+            finalVICBusPhase.map { "vicPhase=\($0)" },
+            finalVICLowPhaseAccess.map { "vicLowPhase=\($0)" },
+            vicTrace.isEmpty ? nil : vicTrace,
+        ]
+        let compact = fields.compactMap(\.self).joined(separator: " ")
+        return compact.isEmpty ? "final=unknown" : compact
+    }
 }
 
 private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
@@ -8590,6 +9038,65 @@ private struct MilestoneExpectedFailureDriftSummary: Codable, Equatable {
     let reason: String
     let elapsedCycles: UInt64
     let mismatches: [String]
+    let finalPC: String?
+    let finalVICRasterLine: Int?
+    let finalVICRasterCycle: Int?
+    let finalVICBusOwner: String?
+    let finalVICBusPhase: String?
+    let finalVICLowPhaseAccess: String?
+    let finalVICHighPhaseMemoryReads: [String]?
+    let finalVICHighPhaseColorRAMReads: [String]?
+    let finalVICLowPhaseMemoryReads: [String]?
+
+    init(
+        key: MilestoneResultKey,
+        category: String,
+        reason: String,
+        elapsedCycles: UInt64,
+        mismatches: [String],
+        finalPC: String? = nil,
+        finalVICRasterLine: Int? = nil,
+        finalVICRasterCycle: Int? = nil,
+        finalVICBusOwner: String? = nil,
+        finalVICBusPhase: String? = nil,
+        finalVICLowPhaseAccess: String? = nil,
+        finalVICHighPhaseMemoryReads: [String]? = nil,
+        finalVICHighPhaseColorRAMReads: [String]? = nil,
+        finalVICLowPhaseMemoryReads: [String]? = nil
+    ) {
+        self.key = key
+        self.category = category
+        self.reason = reason
+        self.elapsedCycles = elapsedCycles
+        self.mismatches = mismatches
+        self.finalPC = finalPC
+        self.finalVICRasterLine = finalVICRasterLine
+        self.finalVICRasterCycle = finalVICRasterCycle
+        self.finalVICBusOwner = finalVICBusOwner
+        self.finalVICBusPhase = finalVICBusPhase
+        self.finalVICLowPhaseAccess = finalVICLowPhaseAccess
+        self.finalVICHighPhaseMemoryReads = finalVICHighPhaseMemoryReads
+        self.finalVICHighPhaseColorRAMReads = finalVICHighPhaseColorRAMReads
+        self.finalVICLowPhaseMemoryReads = finalVICLowPhaseMemoryReads
+    }
+
+    var finalDiagnostics: String {
+        MilestoneFailureSummary(
+            key: key,
+            category: category,
+            reason: reason,
+            elapsedCycles: elapsedCycles,
+            finalPC: finalPC,
+            finalVICRasterLine: finalVICRasterLine,
+            finalVICRasterCycle: finalVICRasterCycle,
+            finalVICBusOwner: finalVICBusOwner,
+            finalVICBusPhase: finalVICBusPhase,
+            finalVICLowPhaseAccess: finalVICLowPhaseAccess,
+            finalVICHighPhaseMemoryReads: finalVICHighPhaseMemoryReads,
+            finalVICHighPhaseColorRAMReads: finalVICHighPhaseColorRAMReads,
+            finalVICLowPhaseMemoryReads: finalVICLowPhaseMemoryReads
+        ).finalDiagnostics
+    }
 }
 
 private struct MilestonePhaseBreakdown: Codable, Equatable {
@@ -8643,7 +9150,7 @@ private enum MilestonePhaseOutcome {
 }
 
 private struct MilestoneRunSummary: Codable, Equatable {
-    var formatVersion: Int = 34
+    var formatVersion: Int = 37
     var runnerName: String = "LocalDiskMatrixTests"
     var resultRecordFormatVersion: Int = MilestoneResultRecord.currentFormatVersion
     var runID: String?
@@ -8999,7 +9506,16 @@ private struct MilestoneRunSummary: Codable, Equatable {
                 key: record.key,
                 category: category,
                 reason: record.reason,
-                elapsedCycles: record.elapsedCycles
+                elapsedCycles: record.elapsedCycles,
+                finalPC: record.finalPC,
+                finalVICRasterLine: record.finalVICRasterLine,
+                finalVICRasterCycle: record.finalVICRasterCycle,
+                finalVICBusOwner: record.finalVICBusOwner,
+                finalVICBusPhase: record.finalVICBusPhase,
+                finalVICLowPhaseAccess: record.finalVICLowPhaseAccess,
+                finalVICHighPhaseMemoryReads: record.finalVICHighPhaseMemoryReads,
+                finalVICHighPhaseColorRAMReads: record.finalVICHighPhaseColorRAMReads,
+                finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads
             )
             phaseFailureDetails[roadmapPhase, default: []].append(failureSummary)
             if record.expectedFailureMatched == true {
@@ -9017,7 +9533,16 @@ private struct MilestoneRunSummary: Codable, Equatable {
                     category: category,
                     reason: record.reason,
                     elapsedCycles: record.elapsedCycles,
-                    mismatches: mismatches
+                    mismatches: mismatches,
+                    finalPC: record.finalPC,
+                    finalVICRasterLine: record.finalVICRasterLine,
+                    finalVICRasterCycle: record.finalVICRasterCycle,
+                    finalVICBusOwner: record.finalVICBusOwner,
+                    finalVICBusPhase: record.finalVICBusPhase,
+                    finalVICLowPhaseAccess: record.finalVICLowPhaseAccess,
+                    finalVICHighPhaseMemoryReads: record.finalVICHighPhaseMemoryReads,
+                    finalVICHighPhaseColorRAMReads: record.finalVICHighPhaseColorRAMReads,
+                    finalVICLowPhaseMemoryReads: record.finalVICLowPhaseMemoryReads
                 )
                 expectedFailureDriftDetails.append(driftSummary)
                 phaseExpectedFailureDriftDetails[roadmapPhase, default: []].append(driftSummary)
@@ -9355,8 +9880,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "No unclassified milestone failures."
         }
         let details = unclassifiedFailureDetails.map { detail in
-            let idText = detail.key.id.map { "\($0) " } ?? ""
-            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
+            Self.failureSummaryLine(detail)
         }
         return "Unclassified milestone failures (\(unclassifiedFailureCount)):\n" + details.joined(separator: "\n")
     }
@@ -9366,8 +9890,7 @@ private struct MilestoneRunSummary: Codable, Equatable {
             return "No unexpected milestone failures."
         }
         let details = unexpectedFailureDetails.map { detail in
-            let idText = detail.key.id.map { "\($0) " } ?? ""
-            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason)"
+            Self.failureSummaryLine(detail)
         }
         return "Unexpected milestone failures (\(unexpectedFailures)):\n" + details.joined(separator: "\n")
     }
@@ -9378,9 +9901,14 @@ private struct MilestoneRunSummary: Codable, Equatable {
         }
         let details = expectedFailureDriftDetails.map { detail in
             let idText = detail.key.id.map { "\($0) " } ?? ""
-            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) reason=\(detail.reason) mismatches=\(detail.mismatches.joined(separator: "; "))"
+            return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) \(detail.finalDiagnostics) reason=\(detail.reason) mismatches=\(detail.mismatches.joined(separator: "; "))"
         }
         return "Expected-failure drift (\(expectedFailureDriftCount)):\n" + details.joined(separator: "\n")
+    }
+
+    private static func failureSummaryLine(_ detail: MilestoneFailureSummary) -> String {
+        let idText = detail.key.id.map { "\($0) " } ?? ""
+        return "\(idText)\(detail.key.file) \(detail.key.machineProfile)/\(detail.key.driveMode) command=\(detail.key.commandSummary) category=\(detail.category) cycles=\(detail.elapsedCycles) \(detail.finalDiagnostics) reason=\(detail.reason)"
     }
 
     var phaseAcceptanceFailureSummary: String {
@@ -9664,6 +10192,77 @@ private struct SIDVoiceStateRecord: Codable, Equatable {
         waveformOutput = state.waveformOutput
         waveformDACOutput = String(format: "%03X", state.waveformDACOutput)
         waveformDACHoldCyclesRemaining = state.waveformDACHoldCyclesRemaining
+    }
+}
+
+private extension CompatibilityVICBusOwner {
+    init(_ busOwner: VIC.BusOwner) {
+        switch busOwner {
+        case .cpu:
+            self = .cpu
+        case .vicBadLine:
+            self = .vicBadLine
+        case .vicSpriteDMA:
+            self = .vicSpriteDMA
+        }
+    }
+}
+
+private extension CompatibilityVICBusPhaseExpectation {
+    init(_ busPhase: VIC.BusPhase) {
+        switch busPhase {
+        case .cpu:
+            self.init(type: .cpu)
+        case .badLineBAWarning:
+            self.init(type: .badLineBAWarning)
+        case let .badLineCharacterFetch(column):
+            self.init(type: .badLineCharacterFetch, column: column)
+        case let .spriteBAWarning(sprite):
+            self.init(type: .spriteBAWarning, sprite: sprite)
+        case let .spriteDMA(sprite):
+            self.init(type: .spriteDMA, sprite: sprite)
+        }
+    }
+
+    var summary: String {
+        switch type {
+        case .badLineCharacterFetch:
+            return "\(type.rawValue)(column:\(column.map(String.init) ?? "nil"))"
+        case .spriteBAWarning, .spriteDMA:
+            return "\(type.rawValue)(sprite:\(sprite.map(String.init) ?? "nil"))"
+        case .cpu, .badLineBAWarning:
+            return type.rawValue
+        }
+    }
+}
+
+private extension CompatibilityVICLowPhaseAccessExpectation {
+    init(_ access: VIC.LowPhaseAccess) {
+        switch access {
+        case .idle:
+            self.init(type: .idle)
+        case let .refresh(index):
+            self.init(type: .refresh, index: index)
+        case let .displayData(column):
+            self.init(type: .displayData, column: column)
+        case let .spritePointer(sprite):
+            self.init(type: .spritePointer, sprite: sprite)
+        case let .spriteMiddleByte(sprite):
+            self.init(type: .spriteMiddleByte, sprite: sprite)
+        }
+    }
+
+    var summary: String {
+        switch type {
+        case .refresh:
+            return "\(type.rawValue)(index:\(index.map(String.init) ?? "nil"))"
+        case .displayData:
+            return "\(type.rawValue)(column:\(column.map(String.init) ?? "nil"))"
+        case .spritePointer, .spriteMiddleByte:
+            return "\(type.rawValue)(sprite:\(sprite.map(String.init) ?? "nil"))"
+        case .idle:
+            return type.rawValue
+        }
     }
 }
 

@@ -310,6 +310,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
     public let vicRegisters: [CompatibilityVICRegisterExpectation]
     public let vicRasterLine: Int?
     public let vicRasterCycle: Int?
+    public let vicBALineLow: Bool?
+    public let vicAECLineLow: Bool?
+    public let vicBusOwner: CompatibilityVICBusOwner?
+    public let vicBusPhase: CompatibilityVICBusPhaseExpectation?
+    public let vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation?
+    public let vicHighPhaseMemoryReads: [Int]
+    public let vicHighPhaseMemoryReadsSpecified: Bool
+    public let vicHighPhaseColorRAMReads: [Int]
+    public let vicHighPhaseColorRAMReadsSpecified: Bool
+    public let vicLowPhaseMemoryReads: [Int]
+    public let vicLowPhaseMemoryReadsSpecified: Bool
     public let cia1Registers: [CompatibilityCIARegisterExpectation]
     public let cia2Registers: [CompatibilityCIARegisterExpectation]
     public let screenTextContains: [String]
@@ -354,6 +365,14 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         case vicRegisters
         case vicRasterLine
         case vicRasterCycle
+        case vicBALineLow
+        case vicAECLineLow
+        case vicBusOwner
+        case vicBusPhase
+        case vicLowPhaseAccess
+        case vicHighPhaseMemoryReads
+        case vicHighPhaseColorRAMReads
+        case vicLowPhaseMemoryReads
         case cia1Registers
         case cia2Registers
         case screenTextContains
@@ -397,6 +416,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
         vicRasterLine: Int? = nil,
         vicRasterCycle: Int? = nil,
+        vicBALineLow: Bool? = nil,
+        vicAECLineLow: Bool? = nil,
+        vicBusOwner: CompatibilityVICBusOwner? = nil,
+        vicBusPhase: CompatibilityVICBusPhaseExpectation? = nil,
+        vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation? = nil,
+        vicHighPhaseMemoryReads: [Int] = [],
+        vicHighPhaseMemoryReadsSpecified: Bool = false,
+        vicHighPhaseColorRAMReads: [Int] = [],
+        vicHighPhaseColorRAMReadsSpecified: Bool = false,
+        vicLowPhaseMemoryReads: [Int] = [],
+        vicLowPhaseMemoryReadsSpecified: Bool = false,
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
         screenTextContains: [String] = [],
@@ -440,6 +470,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.vicRegisters = vicRegisters
         self.vicRasterLine = vicRasterLine
         self.vicRasterCycle = vicRasterCycle
+        self.vicBALineLow = vicBALineLow
+        self.vicAECLineLow = vicAECLineLow
+        self.vicBusOwner = vicBusOwner
+        self.vicBusPhase = vicBusPhase
+        self.vicLowPhaseAccess = vicLowPhaseAccess
+        self.vicHighPhaseMemoryReads = vicHighPhaseMemoryReads
+        self.vicHighPhaseMemoryReadsSpecified = vicHighPhaseMemoryReadsSpecified || !vicHighPhaseMemoryReads.isEmpty
+        self.vicHighPhaseColorRAMReads = vicHighPhaseColorRAMReads
+        self.vicHighPhaseColorRAMReadsSpecified = vicHighPhaseColorRAMReadsSpecified || !vicHighPhaseColorRAMReads.isEmpty
+        self.vicLowPhaseMemoryReads = vicLowPhaseMemoryReads
+        self.vicLowPhaseMemoryReadsSpecified = vicLowPhaseMemoryReadsSpecified || !vicLowPhaseMemoryReads.isEmpty
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
         self.screenTextContains = screenTextContains
@@ -484,6 +525,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         vicRegisters: [CompatibilityVICRegisterExpectation] = [],
         vicRasterLine: Int? = nil,
         vicRasterCycle: Int? = nil,
+        vicBALineLow: Bool? = nil,
+        vicAECLineLow: Bool? = nil,
+        vicBusOwner: CompatibilityVICBusOwner? = nil,
+        vicBusPhase: CompatibilityVICBusPhaseExpectation? = nil,
+        vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation? = nil,
+        vicHighPhaseMemoryReads: [Int] = [],
+        vicHighPhaseMemoryReadsSpecified: Bool = false,
+        vicHighPhaseColorRAMReads: [Int] = [],
+        vicHighPhaseColorRAMReadsSpecified: Bool = false,
+        vicLowPhaseMemoryReads: [Int] = [],
+        vicLowPhaseMemoryReadsSpecified: Bool = false,
         cia1Registers: [CompatibilityCIARegisterExpectation] = [],
         cia2Registers: [CompatibilityCIARegisterExpectation] = [],
         screenTextContains: [String] = [],
@@ -527,6 +579,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         self.vicRegisters = vicRegisters
         self.vicRasterLine = vicRasterLine
         self.vicRasterCycle = vicRasterCycle
+        self.vicBALineLow = vicBALineLow
+        self.vicAECLineLow = vicAECLineLow
+        self.vicBusOwner = vicBusOwner
+        self.vicBusPhase = vicBusPhase
+        self.vicLowPhaseAccess = vicLowPhaseAccess
+        self.vicHighPhaseMemoryReads = vicHighPhaseMemoryReads
+        self.vicHighPhaseMemoryReadsSpecified = vicHighPhaseMemoryReadsSpecified || !vicHighPhaseMemoryReads.isEmpty
+        self.vicHighPhaseColorRAMReads = vicHighPhaseColorRAMReads
+        self.vicHighPhaseColorRAMReadsSpecified = vicHighPhaseColorRAMReadsSpecified || !vicHighPhaseColorRAMReads.isEmpty
+        self.vicLowPhaseMemoryReads = vicLowPhaseMemoryReads
+        self.vicLowPhaseMemoryReadsSpecified = vicLowPhaseMemoryReadsSpecified || !vicLowPhaseMemoryReads.isEmpty
         self.cia1Registers = cia1Registers
         self.cia2Registers = cia2Registers
         self.screenTextContains = screenTextContains
@@ -600,6 +663,17 @@ public struct CompatibilityMilestone: Decodable, Equatable {
         vicRegisters = try container.decodeIfPresent([CompatibilityVICRegisterExpectation].self, forKey: .vicRegisters) ?? []
         vicRasterLine = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterLine, in: container)
         vicRasterCycle = try Self.decodeOptionalNonNegativeInteger(forKey: .vicRasterCycle, in: container)
+        vicBALineLow = try container.decodeIfPresent(Bool.self, forKey: .vicBALineLow)
+        vicAECLineLow = try container.decodeIfPresent(Bool.self, forKey: .vicAECLineLow)
+        vicBusOwner = try container.decodeIfPresent(CompatibilityVICBusOwner.self, forKey: .vicBusOwner)
+        vicBusPhase = try container.decodeIfPresent(CompatibilityVICBusPhaseExpectation.self, forKey: .vicBusPhase)
+        vicLowPhaseAccess = try container.decodeIfPresent(CompatibilityVICLowPhaseAccessExpectation.self, forKey: .vicLowPhaseAccess)
+        vicHighPhaseMemoryReads = try Self.decodeAddressList(from: container, forKey: .vicHighPhaseMemoryReads)
+        vicHighPhaseMemoryReadsSpecified = container.contains(.vicHighPhaseMemoryReads)
+        vicHighPhaseColorRAMReads = try Self.decodeAddressList(from: container, forKey: .vicHighPhaseColorRAMReads)
+        vicHighPhaseColorRAMReadsSpecified = container.contains(.vicHighPhaseColorRAMReads)
+        vicLowPhaseMemoryReads = try Self.decodeAddressList(from: container, forKey: .vicLowPhaseMemoryReads)
+        vicLowPhaseMemoryReadsSpecified = container.contains(.vicLowPhaseMemoryReads)
         cia1Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia1Registers) ?? []
         cia2Registers = try container.decodeIfPresent([CompatibilityCIARegisterExpectation].self, forKey: .cia2Registers) ?? []
         if let screenText = try? container.decode([String].self, forKey: .screenTextContains) {
@@ -648,6 +722,14 @@ public struct CompatibilityMilestone: Decodable, Equatable {
             )
         }
         return value
+    }
+
+    private static func decodeAddressList(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> [Int] {
+        guard container.contains(key) else { return [] }
+        return try container.decode([CompatibilityAddress].self, forKey: key).map(\.value)
     }
 
     public var command: String {
@@ -2326,6 +2408,263 @@ public struct CompatibilityVICRegisterExpectation: Decodable, Equatable {
         register = expectation.register
         value = expectation.value
         mask = expectation.mask
+    }
+}
+
+public struct CompatibilityAddress: Decodable, Equatable {
+    public let value: Int
+
+    public init(_ value: Int) {
+        self.value = value
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let decoded: Int
+        if let value = try? container.decode(Int.self) {
+            decoded = value
+        } else {
+            let rawValue = try container.decode(String.self)
+            let compact = rawValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "0x", with: "", options: .caseInsensitive)
+            guard let value = Int(compact, radix: 16) else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Expected decimal integer or hexadecimal string"
+                )
+            }
+            decoded = value
+        }
+        guard (0...0xFFFF).contains(decoded) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Address must be in 16-bit range"
+            )
+        }
+        value = decoded
+    }
+}
+
+public enum CompatibilityVICBusOwner: String, Decodable, Equatable {
+    case cpu
+    case vicBadLine
+    case vicSpriteDMA
+}
+
+public enum CompatibilityVICBusPhaseType: String, Decodable, Equatable {
+    case cpu
+    case badLineBAWarning
+    case badLineCharacterFetch
+    case spriteBAWarning
+    case spriteDMA
+}
+
+public struct CompatibilityVICBusPhaseExpectation: Decodable, Equatable {
+    public let type: CompatibilityVICBusPhaseType
+    public let column: Int?
+    public let sprite: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case column
+        case sprite
+    }
+
+    public init(type: CompatibilityVICBusPhaseType, column: Int? = nil, sprite: Int? = nil) {
+        self.type = type
+        self.column = column
+        self.sprite = sprite
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(CompatibilityVICBusPhaseType.self, forKey: .type)
+        column = try Self.decodeNonNegativeIfPresent(container, forKey: .column)
+        sprite = try Self.decodeNonNegativeIfPresent(container, forKey: .sprite)
+        try Self.validateAssociatedValues(type: type, column: column, sprite: sprite, in: container)
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else {
+            return nil
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
+    }
+
+    private static func validateAssociatedValues(
+        type: CompatibilityVICBusPhaseType,
+        column: Int?,
+        sprite: Int?,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        switch type {
+        case .badLineCharacterFetch:
+            try rejectAssociatedValue(sprite, forKey: .sprite, in: container)
+            guard let column, (0..<40).contains(column) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .column,
+                    in: container,
+                    debugDescription: "badLineCharacterFetch requires column 0...39"
+                )
+            }
+        case .spriteBAWarning, .spriteDMA:
+            try rejectAssociatedValue(column, forKey: .column, in: container)
+            guard let sprite, (0..<8).contains(sprite) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .sprite,
+                    in: container,
+                    debugDescription: "\(type.rawValue) requires sprite 0...7"
+                )
+            }
+        case .cpu, .badLineBAWarning:
+            try rejectAssociatedValue(column, forKey: .column, in: container)
+            try rejectAssociatedValue(sprite, forKey: .sprite, in: container)
+            break
+        }
+    }
+
+    private static func rejectAssociatedValue(
+        _ value: Int?,
+        forKey key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard value != nil else { return }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) is not valid for this VIC bus phase"
+        )
+    }
+}
+
+public enum CompatibilityVICLowPhaseAccessType: String, Decodable, Equatable {
+    case idle
+    case refresh
+    case displayData
+    case spritePointer
+    case spriteMiddleByte
+}
+
+public struct CompatibilityVICLowPhaseAccessExpectation: Decodable, Equatable {
+    public let type: CompatibilityVICLowPhaseAccessType
+    public let index: Int?
+    public let column: Int?
+    public let sprite: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case index
+        case column
+        case sprite
+    }
+
+    public init(
+        type: CompatibilityVICLowPhaseAccessType,
+        index: Int? = nil,
+        column: Int? = nil,
+        sprite: Int? = nil
+    ) {
+        self.type = type
+        self.index = index
+        self.column = column
+        self.sprite = sprite
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(CompatibilityVICLowPhaseAccessType.self, forKey: .type)
+        index = try Self.decodeNonNegativeIfPresent(container, forKey: .index)
+        column = try Self.decodeNonNegativeIfPresent(container, forKey: .column)
+        sprite = try Self.decodeNonNegativeIfPresent(container, forKey: .sprite)
+        try Self.validateAssociatedValues(type: type, index: index, column: column, sprite: sprite, in: container)
+    }
+
+    private static func decodeNonNegativeIfPresent(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int? {
+        guard let value = try container.decodeIfPresent(Int.self, forKey: key) else {
+            return nil
+        }
+        guard value >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be non-negative"
+            )
+        }
+        return value
+    }
+
+    private static func validateAssociatedValues(
+        type: CompatibilityVICLowPhaseAccessType,
+        index: Int?,
+        column: Int?,
+        sprite: Int?,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        switch type {
+        case .idle:
+            try rejectAssociatedValue(index, forKey: .index, in: container)
+            try rejectAssociatedValue(column, forKey: .column, in: container)
+            try rejectAssociatedValue(sprite, forKey: .sprite, in: container)
+            break
+        case .refresh:
+            try rejectAssociatedValue(column, forKey: .column, in: container)
+            try rejectAssociatedValue(sprite, forKey: .sprite, in: container)
+            guard let index, (0..<5).contains(index) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .index,
+                    in: container,
+                    debugDescription: "refresh requires index 0...4"
+                )
+            }
+        case .displayData:
+            try rejectAssociatedValue(index, forKey: .index, in: container)
+            try rejectAssociatedValue(sprite, forKey: .sprite, in: container)
+            guard let column, (0..<40).contains(column) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .column,
+                    in: container,
+                    debugDescription: "displayData requires column 0...39"
+                )
+            }
+        case .spritePointer, .spriteMiddleByte:
+            try rejectAssociatedValue(index, forKey: .index, in: container)
+            try rejectAssociatedValue(column, forKey: .column, in: container)
+            guard let sprite, (0..<8).contains(sprite) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .sprite,
+                    in: container,
+                    debugDescription: "\(type.rawValue) requires sprite 0...7"
+                )
+            }
+        }
+    }
+
+    private static func rejectAssociatedValue(
+        _ value: Int?,
+        forKey key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard value != nil else { return }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) is not valid for this VIC low-phase access"
+        )
     }
 }
 

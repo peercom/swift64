@@ -305,6 +305,14 @@ final class CompatibilityManifestTests: XCTestCase {
               ],
               "vicRasterLine": "$32",
               "vicRasterCycle": 17,
+              "vicBALineLow": true,
+              "vicAECLineLow": false,
+              "vicBusOwner": "cpu",
+              "vicBusPhase": { "type": "badLineCharacterFetch", "column": 3 },
+              "vicLowPhaseAccess": { "type": "displayData", "column": 3 },
+              "vicHighPhaseMemoryReads": ["$0400", 1025],
+              "vicHighPhaseColorRAMReads": ["$0000"],
+              "vicLowPhaseMemoryReads": ["$0400", "$1000"],
               "cia1Registers": [
                 { "register": "$DC0E", "value": "$41", "mask": "$41" }
               ],
@@ -573,6 +581,23 @@ final class CompatibilityManifestTests: XCTestCase {
         ])
         XCTAssertEqual(milestone.vicRasterLine, 0x32)
         XCTAssertEqual(milestone.vicRasterCycle, 17)
+        XCTAssertEqual(milestone.vicBALineLow, true)
+        XCTAssertEqual(milestone.vicAECLineLow, false)
+        XCTAssertEqual(milestone.vicBusOwner, .cpu)
+        XCTAssertEqual(
+            milestone.vicBusPhase,
+            CompatibilityVICBusPhaseExpectation(type: .badLineCharacterFetch, column: 3)
+        )
+        XCTAssertEqual(
+            milestone.vicLowPhaseAccess,
+            CompatibilityVICLowPhaseAccessExpectation(type: .displayData, column: 3)
+        )
+        XCTAssertEqual(milestone.vicHighPhaseMemoryReads, [0x0400, 1025])
+        XCTAssertEqual(milestone.vicHighPhaseMemoryReadsSpecified, true)
+        XCTAssertEqual(milestone.vicHighPhaseColorRAMReads, [0x0000])
+        XCTAssertEqual(milestone.vicHighPhaseColorRAMReadsSpecified, true)
+        XCTAssertEqual(milestone.vicLowPhaseMemoryReads, [0x0400, 0x1000])
+        XCTAssertEqual(milestone.vicLowPhaseMemoryReadsSpecified, true)
         XCTAssertEqual(milestone.cia1Registers, [
             CompatibilityCIARegisterExpectation(register: 0xDC0E, value: 0x41, mask: 0x41)
         ])
@@ -804,6 +829,125 @@ final class CompatibilityManifestTests: XCTestCase {
                 "Expected negative \(field) to be rejected"
             )
         }
+    }
+
+    func testManifestRejectsInvalidVICBusOwner() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicBusOwner": "vicEverything"
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestRejectsInvalidVICBusPhaseAndLowPhaseAccess() {
+        let invalidBusPhaseJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicBusPhase": { "type": "spriteDMA", "sprite": 8 }
+            }
+          ]
+        }
+        """
+        let extraBusPhaseFieldJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicBusPhase": { "type": "cpu", "sprite": 0 }
+            }
+          ]
+        }
+        """
+        let invalidLowPhaseJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicLowPhaseAccess": { "type": "refresh", "index": 5 }
+            }
+          ]
+        }
+        """
+        let extraLowPhaseFieldJSON = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicLowPhaseAccess": { "type": "displayData", "column": 3, "sprite": 0 }
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidBusPhaseJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(extraBusPhaseFieldJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(invalidLowPhaseJSON.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(extraLowPhaseFieldJSON.utf8)))
+    }
+
+    func testManifestRejectsInvalidVICMemoryTraceAddresses() {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicLowPhaseMemoryReads": ["$10000"]
+            }
+          ]
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8)))
+    }
+
+    func testManifestPreservesExplicitEmptyVICMemoryTraceExpectations() throws {
+        let json = """
+        {
+          "milestones": [
+            {
+              "file": "raster.prg",
+              "command": "RUN",
+              "vicHighPhaseMemoryReads": [],
+              "vicHighPhaseColorRAMReads": [],
+              "vicLowPhaseMemoryReads": []
+            },
+            {
+              "file": "legacy.prg",
+              "command": "RUN"
+            }
+          ]
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.milestones[0].vicHighPhaseMemoryReads, [])
+        XCTAssertEqual(manifest.milestones[0].vicHighPhaseMemoryReadsSpecified, true)
+        XCTAssertEqual(manifest.milestones[0].vicHighPhaseColorRAMReads, [])
+        XCTAssertEqual(manifest.milestones[0].vicHighPhaseColorRAMReadsSpecified, true)
+        XCTAssertEqual(manifest.milestones[0].vicLowPhaseMemoryReads, [])
+        XCTAssertEqual(manifest.milestones[0].vicLowPhaseMemoryReadsSpecified, true)
+        XCTAssertEqual(manifest.milestones[1].vicHighPhaseMemoryReads, [])
+        XCTAssertEqual(manifest.milestones[1].vicHighPhaseMemoryReadsSpecified, false)
+        XCTAssertEqual(manifest.milestones[1].vicHighPhaseColorRAMReads, [])
+        XCTAssertEqual(manifest.milestones[1].vicHighPhaseColorRAMReadsSpecified, false)
+        XCTAssertEqual(manifest.milestones[1].vicLowPhaseMemoryReads, [])
+        XCTAssertEqual(manifest.milestones[1].vicLowPhaseMemoryReadsSpecified, false)
     }
 
     func testManifestDecodesActionsOnlyMilestone() throws {
