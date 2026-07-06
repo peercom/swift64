@@ -3,6 +3,71 @@ import XCTest
 @testable import C64Core
 
 final class CompatibilityManifestTests: XCTestCase {
+    func testUsefulFeatureExampleManifestDecodesPrioritizedRoadmapMilestones() throws {
+        let manifestURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("C64/DISKS/compatibility.useful-features.example.json")
+        let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: Data(contentsOf: manifestURL))
+        let milestonesByID = Dictionary(uniqueKeysWithValues: manifest.milestones.compactMap { milestone in
+            milestone.id.map { ($0, milestone) }
+        })
+
+        XCTAssertEqual(Set(milestonesByID.keys), [
+            "phase4-giana-g64-title-true-drive",
+            "phase4-protected-loader-native-media",
+            "phase5-giana-sid-music",
+            "phase6-stock-tap-loader",
+            "phase7-fastload-cartridge-boot",
+        ])
+
+        let gianaDrive = try XCTUnwrap(milestonesByID["phase4-giana-g64-title-true-drive"])
+        XCTAssertEqual(gianaDrive.mediaType, .g64)
+        XCTAssertEqual(gianaDrive.machineProfile, .palC64)
+        XCTAssertEqual(gianaDrive.driveMode, .standard1541)
+        XCTAssertEqual(gianaDrive.roadmapPhase, .phase4DriveMedia)
+        XCTAssertTrue(gianaDrive.hasExplicitActions)
+        XCTAssertEqual(gianaDrive.maxCycles, 48_000_000)
+        XCTAssertEqual(gianaDrive.driveStatus?.minGCRReads, 512)
+        XCTAssertEqual(gianaDrive.driveStatus?.minByteReady, 256)
+        XCTAssertEqual(gianaDrive.mediaStatus?.isNativeLowLevel, true)
+        XCTAssertEqual(gianaDrive.mediaStatus?.preservesRawTrackLengths, true)
+        XCTAssertNotNil(gianaDrive.framebufferHash)
+        XCTAssertEqual(gianaDrive.expectedFailure?.category, .drive)
+        XCTAssertFalse(gianaDrive.expectedFailure?.note?.isEmpty ?? true)
+
+        let protectedLoader = try XCTUnwrap(milestonesByID["phase4-protected-loader-native-media"])
+        XCTAssertEqual(protectedLoader.mediaType, .nbz)
+        XCTAssertEqual(protectedLoader.roadmapPhase, .phase4DriveMedia)
+        XCTAssertEqual(protectedLoader.driveStatus?.minWeakBitReads, 1)
+        XCTAssertEqual(protectedLoader.driveStatus?.requiredVariableSpeedZones, [0, 1, 2, 3])
+        XCTAssertEqual(protectedLoader.mediaStatus?.preservesVariableSpeedZones, true)
+        XCTAssertEqual(protectedLoader.mediaStatus?.preservesWeakBitRanges, true)
+        XCTAssertEqual(protectedLoader.expectedFailure?.category, .protectedMedia)
+
+        let sidMusic = try XCTUnwrap(milestonesByID["phase5-giana-sid-music"])
+        XCTAssertEqual(sidMusic.mediaType, .g64)
+        XCTAssertEqual(sidMusic.roadmapPhase, .phase5SID)
+        XCTAssertEqual(sidMusic.sidModel, .mos6581)
+        XCTAssertEqual(sidMusic.sidAccuracyMode, .compatibility)
+        XCTAssertEqual(sidMusic.sidAudioSignature?.sampleCount, 2048)
+        XCTAssertEqual(sidMusic.expectedFailure?.category, .sid)
+
+        let tapeLoader = try XCTUnwrap(milestonesByID["phase6-stock-tap-loader"])
+        XCTAssertEqual(tapeLoader.mediaType, .tap)
+        XCTAssertEqual(tapeLoader.roadmapPhase, .phase6CIAInputTape)
+        XCTAssertEqual(tapeLoader.tapeStatus?.rawPlaybackActive, true)
+        XCTAssertEqual(tapeLoader.tapeStatus?.cassetteMotorEnabled, true)
+        XCTAssertEqual(tapeLoader.expectedFailure?.category, .tape)
+
+        let fastloadCartridge = try XCTUnwrap(milestonesByID["phase7-fastload-cartridge-boot"])
+        XCTAssertEqual(fastloadCartridge.mediaType, .crt)
+        XCTAssertEqual(fastloadCartridge.roadmapPhase, .phase7CartridgeExpansion)
+        XCTAssertEqual(fastloadCartridge.expectedPCRanges, [0x8000...0xBFFF, 0xE000...0xFFFE])
+        XCTAssertEqual(fastloadCartridge.expectedFailure?.category, .cartridge)
+    }
+
     func testPhase3VICExampleManifestDecodesRepresentativeDemoMilestones() throws {
         let manifestURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

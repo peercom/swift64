@@ -1,0 +1,172 @@
+{
+  "milestones": [
+    {
+      "id": "phase4-giana-g64-title-true-drive",
+      "name": "Phase 4 Great Giana Sisters G64 true-drive title",
+      "file": "phase4-drive/great-giana-sisters-reference.g64",
+      "mediaType": "g64",
+      "machineProfile": "palC64",
+      "driveMode": "standard1541",
+      "roadmapPhase": "phase4DriveMedia",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 28000000 },
+        { "action": "typeText", "command": "RUN\n" },
+        { "action": "waitCycles", "cycles": 12000000 }
+      ],
+      "maxCycles": 48000000,
+      "pcRanges": [
+        { "start": 2048, "end": 65534 }
+      ],
+      "driveStatus": {
+        "minGCRReads": 512,
+        "minByteReady": 256,
+        "minSyncDetections": 4,
+        "hasDisk": true,
+        "motorOn": true,
+        "hasNativeLowLevelImage": true
+      },
+      "mediaStatus": {
+        "isNativeLowLevel": true,
+        "preservesHalfTracks": true,
+        "preservesRawTrackLengths": true,
+        "preservesSpeedZones": true
+      },
+      "screenTextContains": ["GIANA"],
+      "framebufferHash": "0000000000000000",
+      "screenshotName": "phase4-giana-g64-title-true-drive",
+      "expectedFailure": {
+        "category": "drive",
+        "reasonContains": ["framebuffer hash", "GCR reads", "PC range"],
+        "note": "Template milestone: replace file and title/hash observations with a locally owned Great Giana Sisters calibration."
+      }
+    },
+    {
+      "id": "phase4-protected-loader-native-media",
+      "name": "Phase 4 protected-loader native media proof",
+      "file": "phase4-drive/protected-loader-reference.nbz",
+      "mediaType": "nbz",
+      "machineProfile": "palC64",
+      "driveMode": "standard1541",
+      "roadmapPhase": "phase4DriveMedia",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 36000000 }
+      ],
+      "maxCycles": 42000000,
+      "driveStatus": {
+        "minGCRReads": 1024,
+        "minByteReady": 512,
+        "minSyncDetections": 8,
+        "minWeakBitReads": 1,
+        "minVariableSpeedZoneSamples": 1,
+        "requiredVariableSpeedZones": [0, 1, 2, 3],
+        "hasDisk": true,
+        "hasNativeLowLevelImage": true
+      },
+      "mediaStatus": {
+        "isNativeLowLevel": true,
+        "preservesHalfTracks": true,
+        "preservesRawTrackLengths": true,
+        "preservesSpeedZones": true,
+        "preservesVariableSpeedZones": true,
+        "preservesWeakBitRanges": true
+      },
+      "expectedFailure": {
+        "category": "protectedMedia",
+        "reasonContains": ["weak", "speed", "byte-ready"],
+        "note": "Template milestone: replace with a local protected-loader image that exercises halftracks, weak bits, and speed zones."
+      }
+    },
+    {
+      "id": "phase5-giana-sid-music",
+      "name": "Phase 5 Great Giana Sisters SID music proof",
+      "file": "phase5-sid/great-giana-sisters-reference.g64",
+      "mediaType": "g64",
+      "machineProfile": "palC64",
+      "driveMode": "compat1541",
+      "roadmapPhase": "phase5SID",
+      "sidModel": "mos6581",
+      "sidAccuracyMode": "compatibility",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\"*\",8,1\n" },
+        { "action": "waitCycles", "cycles": 9000000 },
+        { "action": "typeText", "command": "RUN\n" },
+        { "action": "waitCycles", "cycles": 6000000 },
+        { "action": "typeText", "command": " " },
+        { "action": "waitCycles", "cycles": 8000000 }
+      ],
+      "maxCycles": 30000000,
+      "sidRegisters": [
+        { "register": "$D418", "value": "$00", "mask": "$0F" }
+      ],
+      "sidAudioSignature": {
+        "sampleCount": 2048,
+        "minimum": -0.1,
+        "maximum": 0.1,
+        "rootMeanSquare": 0.01,
+        "zeroCrossings": 1,
+        "lowBandRootMeanSquare": 0.005,
+        "midBandRootMeanSquare": 0.001,
+        "highBandRootMeanSquare": 0.001,
+        "tolerance": 0.25
+      },
+      "expectedFailure": {
+        "category": "sid",
+        "reasonContains": ["SID audio", "RMS", "signature"],
+        "note": "Template milestone: replace signature with a short local capture once the reference music window is calibrated."
+      }
+    },
+    {
+      "id": "phase6-stock-tap-loader",
+      "name": "Phase 6 stock TAP loader signal path",
+      "file": "phase6-tape/stock-loader-reference.tap",
+      "mediaType": "tap",
+      "machineProfile": "palC64",
+      "driveMode": "fastLoad",
+      "roadmapPhase": "phase6CIAInputTape",
+      "actions": [
+        { "action": "typeText", "command": "LOAD\n" },
+        { "action": "startTape" },
+        { "action": "waitCycles", "cycles": 12000000 }
+      ],
+      "maxCycles": 18000000,
+      "tapeStatus": {
+        "mountedTapeNameContains": "stock-loader-reference.tap",
+        "rawPlaybackActive": true,
+        "cassetteMotorEnabled": true,
+        "cassetteSenseLineHigh": false
+      },
+      "expectedFailure": {
+        "category": "tape",
+        "reasonContains": ["tape", "cassette", "FLAG"],
+        "note": "Template milestone: replace with a locally owned stock TAP image and calibrated load completion observables."
+      }
+    },
+    {
+      "id": "phase7-fastload-cartridge-boot",
+      "name": "Phase 7 fastload cartridge boot and disk path",
+      "file": "phase7-cartridge/fastload-reference.crt",
+      "mediaType": "crt",
+      "machineProfile": "palC64",
+      "driveMode": "compat1541",
+      "roadmapPhase": "phase7CartridgeExpansion",
+      "actions": [
+        { "action": "waitCycles", "cycles": 2000000 },
+        { "action": "typeText", "command": "LOAD\"$\",8\n" },
+        { "action": "waitCycles", "cycles": 6000000 }
+      ],
+      "maxCycles": 12000000,
+      "pcRanges": [
+        { "start": 32768, "end": 49151 },
+        { "start": 57344, "end": 65534 }
+      ],
+      "screenTextContains": ["READY."],
+      "expectedFailure": {
+        "category": "cartridge",
+        "reasonContains": ["cartridge", "fastload", "bank"],
+        "note": "Template milestone: replace with a local Epyx FastLoad, Action Replay, Final Cartridge, or EasyFlash reference."
+      }
+    }
+  ]
+}

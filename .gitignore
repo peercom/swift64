@@ -15,6 +15,7 @@ C64/*
 !C64/DISKS/
 C64/DISKS/*
 !C64/DISKS/compatibility.phase3-vic.example.json
+!C64/DISKS/compatibility.useful-features.example.json
 dist/
 script/
 !script/
