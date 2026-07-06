@@ -41,6 +41,7 @@ final class LocalDiskMatrixTests: XCTestCase {
     private let milestoneRequireVICProofsEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_VIC_PROOFS"
     private let milestoneRequireFailureCategoriesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_FAILURE_CATEGORIES"
     private let milestoneRequireActionTypesEnv = "SWIFT64_LOCAL_MILESTONE_REQUIRE_ACTION_TYPES"
+    private let milestoneUsefulFeatureGateEnv = "SWIFT64_LOCAL_MILESTONE_USEFUL_FEATURE_GATE"
     private let milestoneFailOnUnclassifiedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNCLASSIFIED"
     private let milestoneFailOnUnexpectedEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_ON_UNEXPECTED"
     private let milestoneFailPhasesEnv = "SWIFT64_LOCAL_MILESTONE_FAIL_PHASES"
@@ -309,6 +310,110 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(selection.invalid, [
             "phase5SIDD",
         ])
+    }
+
+    func testMilestoneUsefulFeatureGateDefaultsMergeWithExplicitSelections() {
+        let selection = Self.usefulFeatureGateSelection(
+            explicitPhases: (valid: [MilestoneRoadmapPhase.phase3VICII], invalid: ["phase9"]),
+            explicitMediaTypes: (valid: [CompatibilityMediaType.t64.rawValue], invalid: ["wav"]),
+            explicitMachineProfiles: (valid: [CompatibilityMachineProfile.ntscC64.rawValue], invalid: ["c128"]),
+            explicitDriveModes: (valid: [CompatibilityDriveMode.fastLoad.rawValue], invalid: ["turbo"]),
+            explicitSIDModels: (valid: [SID.Model.mos8580.rawValue], invalid: ["mos6582"]),
+            explicitSIDAccuracyModes: (valid: [SID.AccuracyMode.fast.rawValue], invalid: ["resid"]),
+            explicitObservableTypes: (valid: [MilestoneObservableType.cia], invalid: ["raster"]),
+            explicitFailureCategories: (valid: [CompatibilityFailureCategory.app.rawValue], invalid: ["video"]),
+            explicitActionTypes: (valid: [MilestoneActionType.stopTape], invalid: ["mouseDown"]),
+            enabled: true
+        )
+
+        XCTAssertEqual(selection.phases.valid, [
+            MilestoneRoadmapPhase.phase3VICII,
+            MilestoneRoadmapPhase.phase4DriveMedia,
+            MilestoneRoadmapPhase.phase5SID,
+            MilestoneRoadmapPhase.phase6CIAInputTape,
+            MilestoneRoadmapPhase.phase7CartridgeExpansion,
+        ])
+        XCTAssertEqual(selection.phases.invalid, ["phase9"])
+        XCTAssertEqual(selection.mediaTypes.valid, [
+            CompatibilityMediaType.t64.rawValue,
+            CompatibilityMediaType.prg.rawValue,
+            CompatibilityMediaType.d64.rawValue,
+            CompatibilityMediaType.g64.rawValue,
+            CompatibilityMediaType.tap.rawValue,
+            CompatibilityMediaType.crt.rawValue,
+        ])
+        XCTAssertEqual(selection.mediaTypes.invalid, ["wav"])
+        XCTAssertEqual(selection.machineProfiles.valid, [
+            CompatibilityMachineProfile.ntscC64.rawValue,
+            CompatibilityMachineProfile.palC64.rawValue,
+            CompatibilityMachineProfile.palC64C.rawValue,
+            CompatibilityMachineProfile.ntscC64C.rawValue,
+        ])
+        XCTAssertEqual(selection.machineProfiles.invalid, ["c128"])
+        XCTAssertEqual(selection.driveModes.valid, [
+            CompatibilityDriveMode.fastLoad.rawValue,
+            CompatibilityDriveMode.compat1541.rawValue,
+            CompatibilityDriveMode.standard1541.rawValue,
+        ])
+        XCTAssertEqual(selection.driveModes.invalid, ["turbo"])
+        XCTAssertEqual(selection.sidModels.valid, [
+            SID.Model.mos8580.rawValue,
+            SID.Model.mos6581.rawValue,
+        ])
+        XCTAssertEqual(selection.sidModels.invalid, ["mos6582"])
+        XCTAssertEqual(selection.sidAccuracyModes.valid, [
+            SID.AccuracyMode.fast.rawValue,
+            SID.AccuracyMode.compatibility.rawValue,
+        ])
+        XCTAssertEqual(selection.sidAccuracyModes.invalid, ["resid"])
+        XCTAssertEqual(selection.observableTypes.valid, [
+            MilestoneObservableType.cia,
+            MilestoneObservableType.pc,
+            MilestoneObservableType.drive,
+            MilestoneObservableType.media,
+            MilestoneObservableType.sid,
+            MilestoneObservableType.vic,
+            MilestoneObservableType.tape,
+            MilestoneObservableType.screen,
+            MilestoneObservableType.framebuffer,
+        ])
+        XCTAssertEqual(selection.observableTypes.invalid, ["raster"])
+        XCTAssertEqual(selection.failureCategories.valid, [
+            CompatibilityFailureCategory.app.rawValue,
+            CompatibilityFailureCategory.drive.rawValue,
+            CompatibilityFailureCategory.protectedMedia.rawValue,
+            CompatibilityFailureCategory.sid.rawValue,
+            CompatibilityFailureCategory.vic.rawValue,
+            CompatibilityFailureCategory.tape.rawValue,
+            CompatibilityFailureCategory.cartridge.rawValue,
+        ])
+        XCTAssertEqual(selection.failureCategories.invalid, ["video"])
+        XCTAssertEqual(selection.actionTypes.valid, [
+            MilestoneActionType.stopTape,
+            MilestoneActionType.typeText,
+            MilestoneActionType.waitCycles,
+            MilestoneActionType.joystickDown,
+            MilestoneActionType.joystickUp,
+            MilestoneActionType.keyDown,
+            MilestoneActionType.keyUp,
+            MilestoneActionType.startTape,
+        ])
+        XCTAssertEqual(selection.actionTypes.invalid, ["mouseDown"])
+
+        let disabled = Self.usefulFeatureGateSelection(
+            explicitPhases: (valid: [MilestoneRoadmapPhase.phase3VICII], invalid: []),
+            explicitMediaTypes: (valid: [], invalid: []),
+            explicitMachineProfiles: (valid: [], invalid: []),
+            explicitDriveModes: (valid: [], invalid: []),
+            explicitSIDModels: (valid: [], invalid: []),
+            explicitSIDAccuracyModes: (valid: [], invalid: []),
+            explicitObservableTypes: (valid: [], invalid: []),
+            explicitFailureCategories: (valid: [], invalid: []),
+            explicitActionTypes: (valid: [], invalid: []),
+            enabled: false
+        )
+        XCTAssertEqual(disabled.phases.valid, [MilestoneRoadmapPhase.phase3VICII])
+        XCTAssertTrue(disabled.mediaTypes.valid.isEmpty)
     }
 
     func testMilestoneIDSelectionTrimsAndDeduplicatesNames() {
@@ -2417,8 +2522,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             waveformDACHoldCyclesRemaining: 64
         )))
         XCTAssertEqual(records.last?.finalHeadBitPosition, 0)
-        XCTAssertEqual(records.last?.finalReadTrack, 18)
-        XCTAssertEqual(records.last?.finalReadHalfTrack, 34)
+        XCTAssertNil(records.last?.finalReadTrack)
+        XCTAssertNil(records.last?.finalReadHalfTrack)
         XCTAssertEqual(records.last?.finalUsingHalfTrackFallback, false)
         XCTAssertEqual(records.last?.finalWeakBitReadCount, 0)
         XCTAssertNil(records.last?.finalLastWeakBitHalfTrack)
@@ -5395,11 +5500,13 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private var shouldFailOnUnclassifiedMilestoneFailures: Bool {
-        ProcessInfo.processInfo.environment[milestoneFailOnUnclassifiedEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneFailOnUnclassifiedEnv] == "1"
     }
 
     private var shouldFailOnUnexpectedMilestoneFailures: Bool {
-        ProcessInfo.processInfo.environment[milestoneFailOnUnexpectedEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneFailOnUnexpectedEnv] == "1"
     }
 
     private var milestoneFailurePhaseSelection: (valid: [String], invalid: [String]) {
@@ -5407,31 +5514,35 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private var milestoneSelectedPhaseSelection: (valid: [String], invalid: [String]) {
+        usefulFeatureGateSelection.phases
+    }
+
+    private var rawMilestoneSelectedPhaseSelection: (valid: [String], invalid: [String]) {
         Self.parseMilestonePhaseSelection(ProcessInfo.processInfo.environment[milestonePhaseFilterEnv])
     }
 
     private var milestoneRequiredMediaTypeSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneMediaTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireMediaTypesEnv])
+        usefulFeatureGateSelection.mediaTypes
     }
 
     private var milestoneRequiredMachineProfileSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneMachineProfileSelection(ProcessInfo.processInfo.environment[milestoneRequireMachineProfilesEnv])
+        usefulFeatureGateSelection.machineProfiles
     }
 
     private var milestoneRequiredDriveModeSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneDriveModeSelection(ProcessInfo.processInfo.environment[milestoneRequireDriveModesEnv])
+        usefulFeatureGateSelection.driveModes
     }
 
     private var milestoneRequiredSIDModelSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneSIDModelSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDModelsEnv])
+        usefulFeatureGateSelection.sidModels
     }
 
     private var milestoneRequiredSIDAccuracyModeSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneSIDAccuracyModeSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDAccuracyModesEnv])
+        usefulFeatureGateSelection.sidAccuracyModes
     }
 
     private var milestoneRequiredObservableTypeSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneObservableTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireObservableTypesEnv])
+        usefulFeatureGateSelection.observableTypes
     }
 
     private var milestoneRequiredVICProofSelection: (valid: [String], invalid: [String]) {
@@ -5439,11 +5550,76 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private var milestoneRequiredFailureCategorySelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneFailureCategorySelection(ProcessInfo.processInfo.environment[milestoneRequireFailureCategoriesEnv])
+        usefulFeatureGateSelection.failureCategories
     }
 
     private var milestoneRequiredActionTypeSelection: (valid: [String], invalid: [String]) {
-        Self.parseMilestoneActionTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireActionTypesEnv])
+        usefulFeatureGateSelection.actionTypes
+    }
+
+    private var usefulFeatureGateSelection: UsefulFeatureGateSelection {
+        Self.usefulFeatureGateSelection(
+            explicitPhases: rawMilestoneSelectedPhaseSelection,
+            explicitMediaTypes: Self.parseMilestoneMediaTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireMediaTypesEnv]),
+            explicitMachineProfiles: Self.parseMilestoneMachineProfileSelection(ProcessInfo.processInfo.environment[milestoneRequireMachineProfilesEnv]),
+            explicitDriveModes: Self.parseMilestoneDriveModeSelection(ProcessInfo.processInfo.environment[milestoneRequireDriveModesEnv]),
+            explicitSIDModels: Self.parseMilestoneSIDModelSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDModelsEnv]),
+            explicitSIDAccuracyModes: Self.parseMilestoneSIDAccuracyModeSelection(ProcessInfo.processInfo.environment[milestoneRequireSIDAccuracyModesEnv]),
+            explicitObservableTypes: Self.parseMilestoneObservableTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireObservableTypesEnv]),
+            explicitFailureCategories: Self.parseMilestoneFailureCategorySelection(ProcessInfo.processInfo.environment[milestoneRequireFailureCategoriesEnv]),
+            explicitActionTypes: Self.parseMilestoneActionTypeSelection(ProcessInfo.processInfo.environment[milestoneRequireActionTypesEnv]),
+            enabled: ProcessInfo.processInfo.environment[milestoneUsefulFeatureGateEnv] == "1"
+        )
+    }
+
+    private static func usefulFeatureGateSelection(
+        explicitPhases: (valid: [String], invalid: [String]),
+        explicitMediaTypes: (valid: [String], invalid: [String]),
+        explicitMachineProfiles: (valid: [String], invalid: [String]),
+        explicitDriveModes: (valid: [String], invalid: [String]),
+        explicitSIDModels: (valid: [String], invalid: [String]),
+        explicitSIDAccuracyModes: (valid: [String], invalid: [String]),
+        explicitObservableTypes: (valid: [String], invalid: [String]),
+        explicitFailureCategories: (valid: [String], invalid: [String]),
+        explicitActionTypes: (valid: [String], invalid: [String]),
+        enabled: Bool
+    ) -> UsefulFeatureGateSelection {
+        guard enabled else {
+            return UsefulFeatureGateSelection(
+                phases: explicitPhases,
+                mediaTypes: explicitMediaTypes,
+                machineProfiles: explicitMachineProfiles,
+                driveModes: explicitDriveModes,
+                sidModels: explicitSIDModels,
+                sidAccuracyModes: explicitSIDAccuracyModes,
+                observableTypes: explicitObservableTypes,
+                failureCategories: explicitFailureCategories,
+                actionTypes: explicitActionTypes
+            )
+        }
+        return UsefulFeatureGateSelection(
+            phases: mergeSelection(explicitPhases, defaults: usefulFeaturePhaseDefaults),
+            mediaTypes: mergeSelection(explicitMediaTypes, defaults: usefulFeatureMediaTypeDefaults),
+            machineProfiles: mergeSelection(explicitMachineProfiles, defaults: usefulFeatureMachineProfileDefaults),
+            driveModes: mergeSelection(explicitDriveModes, defaults: usefulFeatureDriveModeDefaults),
+            sidModels: mergeSelection(explicitSIDModels, defaults: usefulFeatureSIDModelDefaults),
+            sidAccuracyModes: mergeSelection(explicitSIDAccuracyModes, defaults: usefulFeatureSIDAccuracyModeDefaults),
+            observableTypes: mergeSelection(explicitObservableTypes, defaults: usefulFeatureObservableTypeDefaults),
+            failureCategories: mergeSelection(explicitFailureCategories, defaults: usefulFeatureFailureCategoryDefaults),
+            actionTypes: mergeSelection(explicitActionTypes, defaults: usefulFeatureActionTypeDefaults)
+        )
+    }
+
+    private static func mergeSelection(
+        _ explicit: (valid: [String], invalid: [String]),
+        defaults: [String]
+    ) -> (valid: [String], invalid: [String]) {
+        var merged = explicit.valid
+        var seen = Set(merged)
+        for value in defaults where seen.insert(value).inserted {
+            merged.append(value)
+        }
+        return (merged, explicit.invalid)
     }
 
     private static func parseMilestonePhaseSelection(_ value: String?) -> (valid: [String], invalid: [String]) {
@@ -5879,12 +6055,95 @@ final class LocalDiskMatrixTests: XCTestCase {
         SID.AccuracyMode.compatibility.rawValue,
     ]
 
+    private struct UsefulFeatureGateSelection {
+        var phases: (valid: [String], invalid: [String])
+        var mediaTypes: (valid: [String], invalid: [String])
+        var machineProfiles: (valid: [String], invalid: [String])
+        var driveModes: (valid: [String], invalid: [String])
+        var sidModels: (valid: [String], invalid: [String])
+        var sidAccuracyModes: (valid: [String], invalid: [String])
+        var observableTypes: (valid: [String], invalid: [String])
+        var failureCategories: (valid: [String], invalid: [String])
+        var actionTypes: (valid: [String], invalid: [String])
+    }
+
+    private static let usefulFeaturePhaseDefaults = [
+        MilestoneRoadmapPhase.phase4DriveMedia,
+        MilestoneRoadmapPhase.phase5SID,
+        MilestoneRoadmapPhase.phase6CIAInputTape,
+        MilestoneRoadmapPhase.phase7CartridgeExpansion,
+    ]
+
+    private static let usefulFeatureMediaTypeDefaults = [
+        CompatibilityMediaType.prg.rawValue,
+        CompatibilityMediaType.d64.rawValue,
+        CompatibilityMediaType.g64.rawValue,
+        CompatibilityMediaType.tap.rawValue,
+        CompatibilityMediaType.crt.rawValue,
+    ]
+
+    private static let usefulFeatureMachineProfileDefaults = [
+        CompatibilityMachineProfile.palC64.rawValue,
+        CompatibilityMachineProfile.palC64C.rawValue,
+        CompatibilityMachineProfile.ntscC64.rawValue,
+        CompatibilityMachineProfile.ntscC64C.rawValue,
+    ]
+
+    private static let usefulFeatureDriveModeDefaults = [
+        CompatibilityDriveMode.compat1541.rawValue,
+        CompatibilityDriveMode.standard1541.rawValue,
+    ]
+
+    private static let usefulFeatureSIDModelDefaults = [
+        SID.Model.mos6581.rawValue,
+        SID.Model.mos8580.rawValue,
+    ]
+
+    private static let usefulFeatureSIDAccuracyModeDefaults = [
+        SID.AccuracyMode.compatibility.rawValue,
+    ]
+
+    private static let usefulFeatureObservableTypeDefaults = [
+        MilestoneObservableType.pc,
+        MilestoneObservableType.drive,
+        MilestoneObservableType.media,
+        MilestoneObservableType.sid,
+        MilestoneObservableType.vic,
+        MilestoneObservableType.tape,
+        MilestoneObservableType.screen,
+        MilestoneObservableType.framebuffer,
+    ]
+
+    private static let usefulFeatureFailureCategoryDefaults = [
+        CompatibilityFailureCategory.drive.rawValue,
+        CompatibilityFailureCategory.protectedMedia.rawValue,
+        CompatibilityFailureCategory.sid.rawValue,
+        CompatibilityFailureCategory.vic.rawValue,
+        CompatibilityFailureCategory.tape.rawValue,
+        CompatibilityFailureCategory.cartridge.rawValue,
+    ]
+
+    private static let usefulFeatureActionTypeDefaults = [
+        MilestoneActionType.typeText,
+        MilestoneActionType.waitCycles,
+        MilestoneActionType.joystickDown,
+        MilestoneActionType.joystickUp,
+        MilestoneActionType.keyDown,
+        MilestoneActionType.keyUp,
+        MilestoneActionType.startTape,
+    ]
+
+    private var shouldUseUsefulFeatureMilestoneGate: Bool {
+        ProcessInfo.processInfo.environment[milestoneUsefulFeatureGateEnv] == "1"
+    }
+
     private var shouldRequireAllMilestoneMedia: Bool {
         ProcessInfo.processInfo.environment[milestoneRequireAllMediaEnv] == "1"
     }
 
     private var shouldRequireSelectedMilestonePhases: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequirePhaseFilterMatchesEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequirePhaseFilterMatchesEnv] == "1"
     }
 
     private var shouldRequireSelectedMilestoneIDs: Bool {
@@ -5892,35 +6151,43 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private var shouldRequireMilestoneManifest: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireManifestEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireManifestEnv] == "1"
     }
 
     private var shouldRequireRoadmapPhasesForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireRoadmapPhasesEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireRoadmapPhasesEnv] == "1"
     }
 
     private var shouldRequireIDsForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireIDsEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireIDsEnv] == "1"
     }
 
     private var shouldRequireExpectedFailureNotesForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureNotesEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureNotesEnv] == "1"
     }
 
     private var shouldRequireExpectedFailureReasonsForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureReasonsEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireExpectedFailureReasonsEnv] == "1"
     }
 
     private var shouldRequireMaxCyclesForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireMaxCyclesEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireMaxCyclesEnv] == "1"
     }
 
     private var shouldRequireExplicitActionsForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireExplicitActionsEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireExplicitActionsEnv] == "1"
     }
 
     private var shouldRequireObservableExpectationsForManifestMilestones: Bool {
-        ProcessInfo.processInfo.environment[milestoneRequireObservableExpectationsEnv] == "1"
+        shouldUseUsefulFeatureMilestoneGate
+            || ProcessInfo.processInfo.environment[milestoneRequireObservableExpectationsEnv] == "1"
     }
 
     private var shouldRequirePhase3VICProofsForManifestMilestones: Bool {
