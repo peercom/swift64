@@ -600,7 +600,6 @@ public final class VIA6522 {
         case 0x0E: return ier | 0x80  // Bit 7 always reads as 1
 
         case 0x0F:  // ORA - Port A (no handshake)
-            onPortARead?()
             return portAReadValue
 
         default: return 0
@@ -627,8 +626,13 @@ public final class VIA6522 {
             onPortBWrite?()
         case 0x03:
             let previousPortAOut = portAOut
+            let previousDDRA = ddra
             ddra = value
-            notifyPortAChanged(from: previousPortAOut, reason: .dataDirection)
+            if ddra != previousDDRA {
+                onPortAWrite?(.dataDirection)
+            } else {
+                notifyPortAChanged(from: previousPortAOut, reason: .dataDirection)
+            }
 
         case 0x04:  // T1L-L (write to latch low)
             timer1Latch = (timer1Latch & 0xFF00) | UInt16(value)

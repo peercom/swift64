@@ -81,6 +81,22 @@ final class VIA6522Tests: XCTestCase {
         XCTAssertEqual(via.ifr & VIA6522.IRQ.any, 0)
     }
 
+    func testPortANoHandshakeReadDoesNotClearCA1OrInvokeReadCallback() {
+        let via = VIA6522()
+        var readCount = 0
+        via.onPortARead = { readCount += 1 }
+        via.writeRegister(0x0C, value: 0x01)
+        via.writeRegister(0x0E, value: 0x82)
+        via.ca1 = true
+        via.tick()
+
+        XCTAssertEqual(via.readRegister(0x0F), 0xFF)
+
+        XCTAssertEqual(readCount, 0)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.ca1, VIA6522.IRQ.ca1)
+        XCTAssertEqual(via.ifr & VIA6522.IRQ.any, VIA6522.IRQ.any)
+    }
+
     func testPortALatchCapturesInputOnCA1ActiveEdgeUntilHandshakeRead() {
         let via = VIA6522()
         via.writeRegister(0x0B, value: 0x01) // enable Port A input latch
@@ -145,6 +161,18 @@ final class VIA6522Tests: XCTestCase {
         via.writeRegister(0x03, value: 0xF0)
 
         XCTAssertEqual(observed, [0xF0])
+    }
+
+    func testDDRAWriteInvokesPortAOutputCallbackWhenDirectionChangesOnly() {
+        let via = VIA6522()
+        via.portAInput = 0x00
+        via.writeRegister(0x01, value: 0x00)
+        var observedReasons: [VIA6522.PortAChangeReason] = []
+        via.onPortAWrite = { observedReasons.append($0) }
+
+        via.writeRegister(0x03, value: 0xFF)
+
+        XCTAssertEqual(observedReasons, [.dataDirection])
     }
 
     func testCA2InputPositiveEdgeSetsIFRAndIRQWhenEnabled() {

@@ -131,6 +131,7 @@ public final class DiskDrive {
         var outputFileType: UInt8 = 0x82
         var outputTypeFilter: UInt8?
         var outputReplacesExisting: Bool = false
+        var usesDiskBufferPointer: Bool = false
 
         var hasData: Bool { position < data.count }
 
@@ -138,6 +139,9 @@ public final class DiskDrive {
             guard position < data.count else { return 0 }
             let byte = data[position]
             position += 1
+            if usesDiskBufferPointer {
+                writePosition = position
+            }
             return byte
         }
 
@@ -763,7 +767,7 @@ public final class DiskDrive {
         }
 
         if upper.hasPrefix("B-E") || upper.hasPrefix("BLOCK-EXECUTE") {
-            guard let result = blockRead(command: trimmed, acceptedPrefixes: ["B-E", "BLOCK-EXECUTE"]) else {
+            guard let result = blockRead(command: trimmed, acceptedPrefixes: ["B-E", "BLOCK-EXECUTE"], defaultMode: .rawSector) else {
                 commandStatus = "30, SYNTAX ERROR,00,00\r"
                 return false
             }
@@ -933,6 +937,11 @@ public final class DiskDrive {
         case syntaxError
     }
 
+    private enum BlockTransferMode {
+        case bufferPointer
+        case rawSector
+    }
+
     private enum BlockPointerResult: Equatable {
         case set
         case syntaxError
@@ -961,6 +970,18 @@ public final class DiskDrive {
         case syntaxError
     }
 
+    private enum BinaryBlockPointerParseResult {
+        case request(channel: Int, pointer: Int)
+        case notBinary
+        case syntaxError
+    }
+
+    private enum BinaryBlockAllocationParseResult {
+        case request(driveNumber: Int, track: Int, sector: Int)
+        case notBinary
+        case syntaxError
+    }
+
     private func parseNewDiskCommand(_ expression: String) -> NewDiskCommand? {
         let parts = expression.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
         let name = String(parts.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -979,17 +1000,19 @@ public final class DiskDrive {
 
     private func blockRead(
         command: String,
-        acceptedPrefixes: [String] = ["B-R", "BLOCK-READ", "U1", "UA"]
+        acceptedPrefixes: [String] = ["B-R", "BLOCK-READ", "U1", "UA"],
+        defaultMode: BlockTransferMode = .bufferPointer
     ) -> BlockReadResult? {
         guard isMounted else { return .invalidBlock(track: 0, sector: 0) }
         let upper = command.uppercased()
         guard let prefix = acceptedPrefixes.first(where: { upper.hasPrefix($0) }) else {
             return nil
         }
+        let mode: BlockTransferMode = upper.hasPrefix("U1") || upper.hasPrefix("UA") ? .rawSector : defaultMode
 
-        switch parseBinaryUserBlockCommand(command, userPrefixes: ["U1", "UA"]) {
+        switch parseBinaryBlockCommand(command, prefixes: acceptedPrefixes) {
         case .request(let request):
-            return blockRead(request: request)
+            return blockRead(request: request, mode: mode)
         case .syntaxError:
             return .syntaxError
         case .notBinary:
@@ -1004,10 +1027,10 @@ public final class DiskDrive {
         guard let request = parseTextBlockCommandRequest(expression) else {
             return .syntaxError
         }
-        return blockRead(request: request)
+        return blockRead(request: request, mode: mode)
     }
 
-    private func blockRead(request: BlockCommandRequest) -> BlockReadResult {
+    private func blockRead(request: BlockCommandRequest, mode: BlockTransferMode) -> BlockReadResult {
         guard (0...14).contains(request.channel), request.driveNumber == 0 else {
             return .syntaxError
         }
@@ -1021,7 +1044,30 @@ public final class DiskDrive {
         guard let sectorData = readSector(track: request.track, sector: request.sector) else {
             return .invalidBlock(track: request.track, sector: request.sector)
         }
-        channels[request.channel] = Channel(data: sectorData, position: 0, isOpen: true)
+        var channelState: Channel
+        switch mode {
+        case .rawSector:
+            channelState = Channel(
+                data: sectorData,
+                writeData: sectorData,
+                position: 0,
+                writePosition: 0,
+                isOpen: true,
+                usesDiskBufferPointer: true
+            )
+        case .bufferPointer:
+            let bufferEnd = Int(sectorData[0]) == 0 ? 256 : Int(sectorData[0])
+            let boundedEnd = min(bufferEnd + 1, 256)
+            channelState = Channel(
+                data: Array(sectorData[0..<boundedEnd]),
+                writeData: sectorData,
+                position: 1,
+                writePosition: 1,
+                isOpen: true,
+                usesDiskBufferPointer: true
+            )
+        }
+        channels[request.channel] = channelState
         return .read
     }
 
@@ -1042,9 +1088,10 @@ public final class DiskDrive {
             return nil
         }
 
-        switch parseBinaryUserBlockCommand(command, userPrefixes: ["U2", "UB"]) {
+        switch parseBinaryBlockCommand(command, prefixes: ["B-W", "BLOCK-WRITE", "U2", "UB"]) {
         case .request(let request):
-            return blockWrite(request: request)
+            let binaryMode: BlockTransferMode = upper.hasPrefix("U2") || upper.hasPrefix("UB") ? .rawSector : .bufferPointer
+            return blockWrite(request: request, mode: binaryMode)
         case .syntaxError:
             return .syntaxError
         case .notBinary:
@@ -1059,10 +1106,11 @@ public final class DiskDrive {
         guard let request = parseTextBlockCommandRequest(expression) else {
             return .syntaxError
         }
-        return blockWrite(request: request)
+        let mode: BlockTransferMode = upper.hasPrefix("U2") || upper.hasPrefix("UB") ? .rawSector : .bufferPointer
+        return blockWrite(request: request, mode: mode)
     }
 
-    private func blockWrite(request: BlockCommandRequest) -> BlockWriteResult {
+    private func blockWrite(request: BlockCommandRequest, mode: BlockTransferMode) -> BlockWriteResult {
         guard (0...14).contains(request.channel), request.driveNumber == 0 else {
             return .syntaxError
         }
@@ -1073,14 +1121,32 @@ public final class DiskDrive {
             return .invalidBlock(track: request.track, sector: request.sector)
         }
 
-        var sectorData = [UInt8](repeating: 0, count: 256)
-        let buffered = channels[request.channel].writeData
-        if !buffered.isEmpty {
-            sectorData.replaceSubrange(0..<min(buffered.count, 256), with: buffered.prefix(256))
+        let channel = channels[request.channel]
+        let sectorData: [UInt8]
+        switch mode {
+        case .rawSector:
+            var rawSector = [UInt8](repeating: 0, count: 256)
+            let buffered = channel.writeData
+            if !buffered.isEmpty {
+                rawSector.replaceSubrange(0..<min(buffered.count, 256), with: buffered.prefix(256))
+            }
+            sectorData = rawSector
+        case .bufferPointer:
+            guard var partialSector = readSector(track: request.track, sector: request.sector) else {
+                return .invalidBlock(track: request.track, sector: request.sector)
+            }
+            let writeLimit = min(channel.writePosition == 0 ? 256 : channel.writePosition, 256)
+            partialSector[0] = UInt8(truncatingIfNeeded: channel.writePosition)
+            let buffered = channel.writeData
+            for index in 1..<writeLimit {
+                partialSector[index] = index < buffered.count ? buffered[index] : 0
+            }
+            sectorData = partialSector
         }
-        writeSector(track: request.track, sector: request.sector, data: sectorData)
-        refreshDirectoryMetadataAfterSectorWrite(track: request.track)
-        markD64Modified()
+        if writeSector(track: request.track, sector: request.sector, data: sectorData) {
+            refreshDirectoryMetadataAfterSectorWrite(track: request.track)
+            markD64Modified()
+        }
         return .written
     }
 
@@ -1103,9 +1169,53 @@ public final class DiskDrive {
         return BlockCommandRequest(channel: channel, driveNumber: driveNumber, track: track, sector: sector)
     }
 
-    private func parseBinaryUserBlockCommand(_ command: String, userPrefixes: [String]) -> BinaryBlockCommandParseResult {
+    private func parseBinaryBlockCommand(_ command: String, prefixes: [String]) -> BinaryBlockCommandParseResult {
+        switch parseBinaryCommandPayload(command, prefixes: prefixes, byteCount: 4) {
+        case .payload(let payload):
+            return .request(BlockCommandRequest(
+                channel: Int(payload[0]),
+                driveNumber: Int(payload[1]),
+                track: Int(payload[2]),
+                sector: Int(payload[3])
+            ))
+        case .notBinary:
+            return .notBinary
+        case .syntaxError:
+            return .syntaxError
+        }
+    }
+
+    private func parseBinaryBlockPointerCommand(_ command: String, prefixes: [String]) -> BinaryBlockPointerParseResult {
+        switch parseBinaryCommandPayload(command, prefixes: prefixes, byteCount: 2) {
+        case .payload(let payload):
+            return .request(channel: Int(payload[0]), pointer: Int(payload[1]))
+        case .notBinary:
+            return .notBinary
+        case .syntaxError:
+            return .syntaxError
+        }
+    }
+
+    private func parseBinaryBlockAllocationCommand(_ command: String, prefixes: [String]) -> BinaryBlockAllocationParseResult {
+        switch parseBinaryCommandPayload(command, prefixes: prefixes, byteCount: 3) {
+        case .payload(let payload):
+            return .request(driveNumber: Int(payload[0]), track: Int(payload[1]), sector: Int(payload[2]))
+        case .notBinary:
+            return .notBinary
+        case .syntaxError:
+            return .syntaxError
+        }
+    }
+
+    private enum BinaryPayloadParseResult {
+        case payload([UInt8])
+        case notBinary
+        case syntaxError
+    }
+
+    private func parseBinaryCommandPayload(_ command: String, prefixes: [String], byteCount: Int) -> BinaryPayloadParseResult {
         let commandBytes = Array(command.utf8)
-        guard let prefix = userPrefixes.first(where: { asciiHasPrefix(commandBytes, $0) }) else {
+        guard let prefix = prefixes.first(where: { asciiHasPrefix(commandBytes, $0) }) else {
             return .notBinary
         }
 
@@ -1123,15 +1233,10 @@ public final class DiskDrive {
         guard payload.contains(where: { $0 < 0x20 }) else {
             return .notBinary
         }
-        guard payload.count == 4 else {
+        guard payload.count == byteCount else {
             return .syntaxError
         }
-        return .request(BlockCommandRequest(
-            channel: Int(payload[0]),
-            driveNumber: Int(payload[1]),
-            track: Int(payload[2]),
-            sector: Int(payload[3])
-        ))
+        return .payload(payload)
     }
 
     private func asciiHasPrefix(_ bytes: [UInt8], _ prefix: String) -> Bool {
@@ -1159,6 +1264,19 @@ public final class DiskDrive {
         var expression = String(command.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
         if expression.hasPrefix(":") || expression.hasPrefix(",") {
             expression.removeFirst()
+        }
+
+        switch parseBinaryBlockPointerCommand(command, prefixes: ["B-P", "BLOCK-POINTER"]) {
+        case .request(let channel, let pointer):
+            guard (0...14).contains(channel), (0...255).contains(pointer) else {
+                return .syntaxError
+            }
+            channels[channel].setBufferPointer(pointer)
+            return .set
+        case .syntaxError:
+            return .syntaxError
+        case .notBinary:
+            break
         }
 
         let parts = expression
@@ -1203,14 +1321,31 @@ public final class DiskDrive {
             expression.removeFirst()
         }
 
-        let parts = expression
-            .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
-            .map(String.init)
-        guard parts.count == 3,
-              let driveNumber = Int(parts[0]),
-              let track = Int(parts[1]),
-              let sector = Int(parts[2]),
-              driveNumber == 0 else {
+        let driveNumber: Int
+        let track: Int
+        let sector: Int
+        switch parseBinaryBlockAllocationCommand(command, prefixes: ["B-A", "BLOCK-ALLOCATE", "B-F", "BLOCK-FREE"]) {
+        case .request(let parsedDrive, let parsedTrack, let parsedSector):
+            driveNumber = parsedDrive
+            track = parsedTrack
+            sector = parsedSector
+        case .syntaxError:
+            return .syntaxError
+        case .notBinary:
+            let parts = expression
+                .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" })
+                .map(String.init)
+            guard parts.count == 3,
+                  let parsedDrive = Int(parts[0]),
+                  let parsedTrack = Int(parts[1]),
+                  let parsedSector = Int(parts[2]) else {
+                return .syntaxError
+            }
+            driveNumber = parsedDrive
+            track = parsedTrack
+            sector = parsedSector
+        }
+        guard driveNumber == 0 else {
             return .syntaxError
         }
 
@@ -1226,16 +1361,18 @@ public final class DiskDrive {
             return .alreadyAllocated(track: nextFree.track, sector: nextFree.sector)
         }
 
-        setBAMSector(track: track, sector: sector, free: !allocate)
-        markD64Modified()
+        if setBAMSector(track: track, sector: sector, free: !allocate) {
+            markD64Modified()
+        }
         return .changed
     }
 
     private func nextFreeBlock(afterTrack track: Int, sector: Int) -> (track: Int, sector: Int)? {
         guard let geometry = mountedGeometry else { return nil }
+        let lastBAMTrack = min(geometry.trackCount, Self.standardBAMTrackLimit)
 
         func firstFree(on track: Int, in sectors: Range<Int>) -> (track: Int, sector: Int)? {
-            guard track >= 1 && track <= geometry.trackCount else { return nil }
+            guard track >= 1 && track <= lastBAMTrack else { return nil }
             for candidateSector in sectors where isBAMSectorFree(track: track, sector: candidateSector) {
                 return (track, candidateSector)
             }
@@ -1247,8 +1384,8 @@ public final class DiskDrive {
            let next = firstFree(on: track, in: (sector + 1)..<sectorsOnRequestedTrack) {
             return next
         }
-        if track < geometry.trackCount {
-            for candidateTrack in (track + 1)...geometry.trackCount {
+        if track < lastBAMTrack {
+            for candidateTrack in (track + 1)...lastBAMTrack {
                 if let next = firstFree(on: candidateTrack, in: 0..<geometry.sectorsPerTrack[candidateTrack]) {
                     return next
                 }
@@ -2142,13 +2279,14 @@ public final class DiskDrive {
         clearSectorErrorCode(track: 18, sector: 0)
     }
 
-    private func setBAMSector(track: Int, sector: Int, free: Bool) {
+    @discardableResult
+    private func setBAMSector(track: Int, sector: Int, free: Bool) -> Bool {
         let wasFree = isBAMSectorFree(track: track, sector: sector)
-        guard wasFree != free else { return }
+        guard wasFree != free else { return false }
 
         markBAMSector(track: track, sector: sector, free: free)
         let countOffset = bamEntryOffset(forTrack: track)
-        guard countOffset < (imageData?.count ?? 0) else { return }
+        guard countOffset < (imageData?.count ?? 0) else { return true }
 
         if free {
             let count = imageData?[countOffset] ?? 0
@@ -2156,6 +2294,7 @@ public final class DiskDrive {
         } else if let count = imageData?[countOffset], count > 0 {
             imageData?[countOffset] = count - 1
         }
+        return true
     }
 
     private func bamEntryOffset(forTrack track: Int) -> Int {
@@ -2181,36 +2320,51 @@ public final class DiskDrive {
         writeSector(track: slot.track, sector: slot.sector, data: sectorData)
     }
 
-    private func writeSector(track: Int, sector: Int, data: [UInt8]) {
+    @discardableResult
+    private func writeSector(track: Int, sector: Int, data: [UInt8]) -> Bool {
         guard var image = imageData,
               let geometry = mountedGeometry,
               track >= 1 && track <= geometry.trackCount,
               sector >= 0 && sector < geometry.sectorsPerTrack[track],
-              data.count == 256 else { return }
+              data.count == 256 else { return false }
 
         let offset = geometry.trackOffsets[track] + sector * 256
-        guard offset + 256 <= image.count else { return }
-        image.replaceSubrange(offset..<offset + 256, with: data)
-        clearSectorErrorCode(track: track, sector: sector, in: &image, geometry: geometry)
+        guard offset + 256 <= image.count else { return false }
+        let byteRange = offset..<offset + 256
+        let bytesChanged = !image[byteRange].elementsEqual(data)
+        if bytesChanged {
+            image.replaceSubrange(byteRange, with: data)
+        }
+        let errorChanged = clearSectorErrorCode(track: track, sector: sector, in: &image, geometry: geometry)
+        guard bytesChanged || errorChanged else { return false }
         imageData = image
+        return true
     }
 
-    private func clearSectorErrorCode(track: Int, sector: Int) {
-        guard var image = imageData, let geometry = mountedGeometry else { return }
-        clearSectorErrorCode(track: track, sector: sector, in: &image, geometry: geometry)
+    @discardableResult
+    private func clearSectorErrorCode(track: Int, sector: Int) -> Bool {
+        guard var image = imageData, let geometry = mountedGeometry else { return false }
+        let changed = clearSectorErrorCode(track: track, sector: sector, in: &image, geometry: geometry)
         imageData = image
+        return changed
     }
 
-    private func clearSectorErrorCode(track: Int, sector: Int, in image: inout [UInt8], geometry: D64Geometry) {
+    @discardableResult
+    private func clearSectorErrorCode(track: Int, sector: Int, in image: inout [UInt8], geometry: D64Geometry) -> Bool {
         guard let errorInfoOffset = geometry.errorInfoOffset,
               let ordinal = sectorOrdinal(track: track, sector: sector, geometry: geometry) else {
-            return
+            return false
         }
 
         let errorOffset = errorInfoOffset + ordinal
-        if errorOffset < image.count {
-            image[errorOffset] = 0x01
+        guard errorOffset < image.count else {
+            return false
         }
+        guard image[errorOffset] != 0x01 else {
+            return false
+        }
+        image[errorOffset] = 0x01
+        return true
     }
 
     public func generateDirectoryListing() -> [UInt8] {
@@ -2429,7 +2583,7 @@ public final class DiskDrive {
 
         let request = parseDiskFilename(filename)
         if request.name.hasPrefix("#") {
-            channels[channel] = Channel(data: [], writeData: [], position: 0, isOpen: true)
+            channels[channel] = Channel(data: [], writeData: [], position: 0, isOpen: true, usesDiskBufferPointer: true)
             return true
         }
 

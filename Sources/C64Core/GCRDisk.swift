@@ -33,6 +33,7 @@ public final class GCRDisk {
     /// Zone 3 = 26 cycles, Zone 2 = 28, Zone 1 = 30, Zone 0 = 32
     public static let cyclesPerByte = [32, 30, 28, 26]
     private static let weakBitExtensionMagic = Array("SW64WKB1".utf8)
+    private static let bitLengthExtensionMagic = Array("SW64BIT1".utf8)
     private static let nibMagic = Array("MNIB-1541-RAW".utf8)
     private static let nibHeaderSize = 0x100
     private static let nibTrackLength = 0x2000
@@ -196,26 +197,47 @@ public final class GCRDisk {
                 trackLengths: trackLengths
             )
         )
-        if let weakRanges = Self.g64WeakBitExtension(
+        let extensions = Self.g64Swift64Extensions(
             from: bytes,
             startingAt: standardPayloadEnd,
             trackInfos: newTrackInfos
-        ) {
-            for (halfTrack, ranges) in weakRanges {
-                guard let existing = newTrackInfos[halfTrack] else { continue }
-                let updated = DiskImage.Track(
-                    halfTrack: existing.halfTrack,
-                    bytes: existing.bytes,
-                    bitLength: existing.bitLength,
-                    speedZone: existing.speedZone,
-                    speedZoneMap: existing.speedZoneMap,
-                    weakBitRanges: ranges,
-                    isNativeLowLevel: existing.isNativeLowLevel,
-                    duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
-                )
-                newTracks[halfTrack] = updated.bytes
-                newTrackInfos[halfTrack] = updated
+        )
+        for (halfTrack, bitLength) in extensions.bitLengths {
+            guard let existing = newTrackInfos[halfTrack],
+                  bitLength > 0,
+                  bitLength <= existing.bytes.count * 8 else {
+                continue
             }
+            let updated = DiskImage.Track(
+                halfTrack: existing.halfTrack,
+                bytes: existing.bytes,
+                bitLength: bitLength,
+                speedZone: existing.speedZone,
+                speedZoneMap: existing.speedZoneMap,
+                weakBitRanges: existing.weakBitRanges,
+                isNativeLowLevel: existing.isNativeLowLevel,
+                duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
+            )
+            newTracks[halfTrack] = updated.bytes
+            newTrackInfos[halfTrack] = updated
+        }
+        for (halfTrack, ranges) in Self.validatedWeakBitRanges(
+            extensions.weakRanges,
+            trackInfos: newTrackInfos
+        ) {
+            guard let existing = newTrackInfos[halfTrack] else { continue }
+            let updated = DiskImage.Track(
+                halfTrack: existing.halfTrack,
+                bytes: existing.bytes,
+                bitLength: existing.bitLength,
+                speedZone: existing.speedZone,
+                speedZoneMap: existing.speedZoneMap,
+                weakBitRanges: ranges,
+                isNativeLowLevel: existing.isNativeLowLevel,
+                duplicateSectorHeaderCount: existing.duplicateSectorHeaderCount
+            )
+            newTracks[halfTrack] = updated.bytes
+            newTrackInfos[halfTrack] = updated
         }
 
         tracks = newTracks
@@ -555,6 +577,7 @@ public final class GCRDisk {
             DiskImage.Track.WeakBitRange(startBit: $0.lowerBound, endBit: $0.upperBound)
         }
         let weakBitRanges = Self.mergedWeakBitRanges(existing.weakBitRanges + addedRanges)
+        let changed = weakBitRanges != existing.weakBitRanges
         let updated = DiskImage.Track(
             halfTrack: existing.halfTrack,
             bytes: existing.bytes,
@@ -575,7 +598,9 @@ public final class GCRDisk {
                 sectorErrorCodes: image.sectorErrorCodes
             )
         }
-        hasUnsavedLowLevelWrites = true
+        if changed {
+            hasUnsavedLowLevelWrites = true
+        }
         return true
     }
 
@@ -651,12 +676,19 @@ public final class GCRDisk {
             return false
         }
 
+        let writtenBitRanges = [byteIndex * 8...(byteIndex * 8 + 7)]
+        if bytes[byteIndex] == value,
+           !writeTouchesSpeedZoneChange(writtenBitRanges, halfTrack: halfTrack, speedZone: speedZone, byteCount: bytes.count),
+           !writeTouchesWeakBitRanges(writtenBitRanges, halfTrack: halfTrack) {
+            return true
+        }
+
         bytes[byteIndex] = value
         tracks[halfTrack] = bytes
         updateTrackAfterWrite(
             halfTrack: halfTrack,
             bytes: bytes,
-            writtenBitRanges: [byteIndex * 8...(byteIndex * 8 + 7)],
+            writtenBitRanges: writtenBitRanges,
             writtenSpeedZone: speedZone,
             rebuildImage: true
         )
@@ -682,6 +714,7 @@ public final class GCRDisk {
         guard totalBits > 0 else { return false }
         let wrappedBitPosition = ((bitPosition % totalBits) + totalBits) % totalBits
         let writtenBitRanges = Self.bitRanges(start: wrappedBitPosition, count: 8, totalBits: totalBits)
+        let originalBytes = bytes
 
         for sourceBitOffset in 0..<8 {
             let targetBit = (wrappedBitPosition + sourceBitOffset) % totalBits
@@ -696,6 +729,12 @@ public final class GCRDisk {
             } else {
                 bytes[byteIndex] |= mask
             }
+        }
+
+        if bytes == originalBytes,
+           !writeTouchesSpeedZoneChange(writtenBitRanges, halfTrack: halfTrack, speedZone: speedZone, byteCount: bytes.count),
+           !writeTouchesWeakBitRanges(writtenBitRanges, halfTrack: halfTrack) {
+            return true
         }
 
         tracks[halfTrack] = bytes
@@ -732,17 +771,25 @@ public final class GCRDisk {
         guard byteIndex >= 0 && byteIndex < bytes.count else { return false }
 
         let mask = UInt8(1 << bitIndex)
+        let originalByte = bytes[byteIndex]
         if bit {
             bytes[byteIndex] |= mask
         } else {
             bytes[byteIndex] &= ~mask
         }
 
+        let writtenBitRanges = [wrappedBitPosition...wrappedBitPosition]
+        if bytes[byteIndex] == originalByte,
+           !writeTouchesSpeedZoneChange(writtenBitRanges, halfTrack: halfTrack, speedZone: speedZone, byteCount: bytes.count),
+           !writeTouchesWeakBitRanges(writtenBitRanges, halfTrack: halfTrack) {
+            return true
+        }
+
         tracks[halfTrack] = bytes
         updateTrackAfterWrite(
             halfTrack: halfTrack,
             bytes: bytes,
-            writtenBitRanges: [wrappedBitPosition...wrappedBitPosition],
+            writtenBitRanges: writtenBitRanges,
             writtenSpeedZone: speedZone,
             rebuildImage: false
         )
@@ -761,7 +808,8 @@ public final class GCRDisk {
         speedZone: Int,
         fillByte: UInt8 = 0x55
     ) -> Bool {
-        guard image?.hasNativeLowLevelTracks == true,
+        guard !writeProtected,
+              image?.hasNativeLowLevelTracks == true,
               halfTrack >= 0 && halfTrack < tracks.count else {
             return false
         }
@@ -791,6 +839,52 @@ public final class GCRDisk {
             )
         }
         hasUnsavedLowLevelWrites = true
+        return true
+    }
+
+    /// Replace a native low-level track with a freshly formatted byte stream.
+    ///
+    /// This models the representable part of low-level formatting for native
+    /// preservation media: the track payload, nominal speed zone, exact bit
+    /// length, weak/random annotations, and per-byte speed map are reset
+    /// together instead of leaving stale metadata attached to new bytes.
+    @discardableResult
+    public func formatWritableTrack(
+        halfTrack: Int,
+        speedZone: Int,
+        fillByte: UInt8 = 0x55
+    ) -> Bool {
+        guard !writeProtected,
+              image?.hasNativeLowLevelTracks == true,
+              halfTrack >= 0 && halfTrack < tracks.count else {
+            return false
+        }
+
+        let zone = max(0, min(3, speedZone))
+        let byteCount = Self.trackLengths[zone]
+        let bytes = [UInt8](repeating: fillByte, count: byteCount)
+        let formatted = DiskImage.Track(
+            halfTrack: halfTrack,
+            bytes: bytes,
+            speedZone: zone,
+            isNativeLowLevel: true
+        )
+
+        let changed = tracks[halfTrack] != bytes || trackInfos[halfTrack] != formatted
+        tracks[halfTrack] = bytes
+        trackInfos[halfTrack] = formatted
+        if let image {
+            let maxTrackSize = image.maxTrackSize.map { max($0, byteCount) } ?? byteCount
+            self.image = DiskImage(
+                format: image.format,
+                tracks: trackInfos,
+                maxTrackSize: maxTrackSize,
+                sectorErrorCodes: image.sectorErrorCodes
+            )
+        }
+        if changed {
+            hasUnsavedLowLevelWrites = true
+        }
         return true
     }
 
@@ -923,6 +1017,7 @@ public final class GCRDisk {
             Self.writeLittleEndian32(speedEntries[trackIndex], into: &data, at: speedTableStart + trackIndex * 4)
         }
 
+        Self.appendBitLengthExtension(from: trackInfos, to: &data)
         Self.appendWeakBitExtension(from: trackInfos, to: &data)
         return Data(data)
     }
@@ -965,6 +1060,50 @@ public final class GCRDisk {
         rebuildMountedImage(maxTrackSizeFloor: bytes.count)
     }
 
+    private func writeTouchesWeakBitRanges(_ writtenBitRanges: [ClosedRange<Int>], halfTrack: Int) -> Bool {
+        guard let weakBitRanges = trackInfos[halfTrack]?.weakBitRanges,
+              !weakBitRanges.isEmpty else {
+            return false
+        }
+        return writtenBitRanges.contains { writtenRange in
+            weakBitRanges.contains { weakRange in
+                writtenRange.lowerBound <= weakRange.endBit && writtenRange.upperBound >= weakRange.startBit
+            }
+        }
+    }
+
+    private func writeTouchesSpeedZoneChange(
+        _ writtenBitRanges: [ClosedRange<Int>],
+        halfTrack: Int,
+        speedZone: Int?,
+        byteCount: Int
+    ) -> Bool {
+        guard byteCount > 0,
+              let speedZone else {
+            return false
+        }
+
+        let targetZone = UInt8(max(0, min(3, speedZone)))
+        let trackInfo = trackInfos[halfTrack]
+        let baseZone = UInt8(max(0, min(3, trackInfo?.speedZone ?? Self.speedZone(for: halfTrack / 2 + 1))))
+        guard let speedZoneMap = trackInfo?.speedZoneMap, !speedZoneMap.isEmpty else {
+            return targetZone != baseZone
+        }
+
+        for range in writtenBitRanges {
+            let startByte = max(0, range.lowerBound / 8)
+            let endByte = min(byteCount - 1, range.upperBound / 8)
+            guard startByte <= endByte else { continue }
+            for byteIndex in startByte...endByte {
+                let currentZone = byteIndex < speedZoneMap.count ? speedZoneMap[byteIndex] : baseZone
+                if currentZone != targetZone {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private func rebuildMountedImage(maxTrackSizeFloor: Int? = nil) {
         guard let image else { return }
         let maxTrackSize: Int?
@@ -984,11 +1123,12 @@ public final class GCRDisk {
     private static func bitRanges(start: Int, count: Int, totalBits: Int) -> [ClosedRange<Int>] {
         guard count > 0, totalBits > 0 else { return [] }
         let cappedCount = min(count, totalBits)
-        let end = start + cappedCount - 1
+        let normalizedStart = ((start % totalBits) + totalBits) % totalBits
+        let end = normalizedStart + cappedCount - 1
         if end < totalBits {
-            return [start...end]
+            return [normalizedStart...end]
         }
-        return [start...(totalBits - 1), 0...(end % totalBits)]
+        return [normalizedStart...(totalBits - 1), 0...(end % totalBits)]
     }
 
     private static func updatedSpeedZoneState(
@@ -1303,9 +1443,13 @@ public final class GCRDisk {
             bytes[byteIndex] |= UInt8(1 << bitIndex)
 
             if pulse.strength < Self.p64StrongPulseStrength {
-                let start = max(0, cell - 1)
-                let end = min(bitCount - 1, cell + 1)
-                weakRanges.append(DiskImage.Track.WeakBitRange(startBit: start, endBit: end))
+                weakRanges.append(contentsOf: bitRanges(
+                    start: cell - 1,
+                    count: 3,
+                    totalBits: bitCount
+                ).map {
+                    DiskImage.Track.WeakBitRange(startBit: $0.lowerBound, endBit: $0.upperBound)
+                })
             }
         }
 
@@ -1363,6 +1507,29 @@ public final class GCRDisk {
         }
     }
 
+    private static func appendBitLengthExtension(from trackInfos: [DiskImage.Track?], to data: inout [UInt8]) {
+        let records = trackInfos.enumerated().compactMap { halfTrack, track -> (Int, Int)? in
+            guard let track,
+                  track.bitLength > 0,
+                  track.bitLength != track.bytes.count * 8 else {
+                return nil
+            }
+            return (halfTrack, track.bitLength)
+        }
+        guard !records.isEmpty, records.count <= Int(UInt16.max) else { return }
+
+        data.append(contentsOf: bitLengthExtensionMagic)
+        appendLittleEndian16(UInt16(records.count), to: &data)
+        for (halfTrack, bitLength) in records {
+            guard halfTrack <= UInt8.max,
+                  bitLength <= Int(UInt32.max) else {
+                continue
+            }
+            data.append(UInt8(halfTrack))
+            appendLittleEndian32(UInt32(bitLength), to: &data)
+        }
+    }
+
     private static func appendWeakBitExtension(from trackInfos: [DiskImage.Track?], to data: inout [UInt8]) {
         let records = trackInfos.enumerated().flatMap { halfTrack, track -> [(Int, DiskImage.Track.WeakBitRange)] in
             guard let track else { return [] }
@@ -1385,6 +1552,76 @@ public final class GCRDisk {
         }
     }
 
+    private static func g64Swift64Extensions(
+        from bytes: [UInt8],
+        startingAt offset: Int,
+        trackInfos: [DiskImage.Track?]
+    ) -> (bitLengths: [Int: Int], weakRanges: [Int: [DiskImage.Track.WeakBitRange]]) {
+        var bitLengths: [Int: Int] = [:]
+        var weakRanges: [Int: [DiskImage.Track.WeakBitRange]] = [:]
+        var cursor = offset
+
+        while cursor >= 0 && cursor < bytes.count {
+            if cursor + bitLengthExtensionMagic.count + 2 <= bytes.count,
+               Array(bytes[cursor..<(cursor + bitLengthExtensionMagic.count)]) == bitLengthExtensionMagic {
+                guard let parsed = g64BitLengthExtension(from: bytes, startingAt: cursor, trackInfos: trackInfos) else {
+                    break
+                }
+                for (halfTrack, bitLength) in parsed.records {
+                    bitLengths[halfTrack] = bitLength
+                }
+                cursor = parsed.nextOffset
+                continue
+            }
+
+            if cursor + weakBitExtensionMagic.count + 2 <= bytes.count,
+               Array(bytes[cursor..<(cursor + weakBitExtensionMagic.count)]) == weakBitExtensionMagic {
+                guard let parsed = g64WeakBitExtension(from: bytes, startingAt: cursor) else {
+                    break
+                }
+                for (halfTrack, ranges) in parsed.records {
+                    weakRanges[halfTrack, default: []].append(contentsOf: ranges)
+                }
+                cursor = parsed.nextOffset
+                continue
+            }
+
+            break
+        }
+
+        return (bitLengths, weakRanges.mapValues(Self.mergedWeakBitRanges))
+    }
+
+    private static func g64BitLengthExtension(
+        from bytes: [UInt8],
+        startingAt offset: Int,
+        trackInfos: [DiskImage.Track?]
+    ) -> (records: [Int: Int], nextOffset: Int)? {
+        var cursor = offset + bitLengthExtensionMagic.count
+        guard let recordCount = littleEndian16(from: bytes, at: cursor) else { return nil }
+        cursor += 2
+        guard cursor + Int(recordCount) * 5 <= bytes.count else { return nil }
+
+        var bitLengths: [Int: Int] = [:]
+        for _ in 0..<recordCount {
+            let halfTrack = Int(bytes[cursor])
+            cursor += 1
+            guard let bitLength = littleEndian32(from: bytes, at: cursor) else { return nil }
+            cursor += 4
+
+            guard halfTrack >= 0,
+                  halfTrack < trackInfos.count,
+                  let track = trackInfos[halfTrack],
+                  bitLength > 0,
+                  bitLength <= UInt32(track.bytes.count * 8) else {
+                continue
+            }
+            bitLengths[halfTrack] = Int(bitLength)
+        }
+
+        return (bitLengths, cursor)
+    }
+
     private static func g64StandardPayloadEnd(
         from bytes: [UInt8],
         speedTableStart: Int,
@@ -1405,17 +1642,8 @@ public final class GCRDisk {
 
     private static func g64WeakBitExtension(
         from bytes: [UInt8],
-        startingAt offset: Int,
-        trackInfos: [DiskImage.Track?]
-    ) -> [Int: [DiskImage.Track.WeakBitRange]]? {
-        guard offset >= 0,
-              offset + weakBitExtensionMagic.count + 2 <= bytes.count else {
-            return nil
-        }
-        guard Array(bytes[offset..<(offset + weakBitExtensionMagic.count)]) == weakBitExtensionMagic else {
-            return nil
-        }
-
+        startingAt offset: Int
+    ) -> (records: [Int: [DiskImage.Track.WeakBitRange]], nextOffset: Int)? {
         var cursor = offset + weakBitExtensionMagic.count
         guard let recordCount = littleEndian16(from: bytes, at: cursor) else { return nil }
         cursor += 2
@@ -1432,10 +1660,8 @@ public final class GCRDisk {
             cursor += 8
 
             guard halfTrack >= 0,
-                  halfTrack < trackInfos.count,
-                  let track = trackInfos[halfTrack],
-                  startBit <= endBit,
-                  endBit < UInt32(track.bitLength) else {
+                  halfTrack < Self.maxHalfTracks,
+                  startBit <= endBit else {
                 continue
             }
 
@@ -1445,7 +1671,29 @@ public final class GCRDisk {
             ))
         }
 
-        return rangesByHalfTrack.mapValues(Self.mergedWeakBitRanges)
+        return (rangesByHalfTrack.mapValues(Self.mergedWeakBitRanges), cursor)
+    }
+
+    private static func validatedWeakBitRanges(
+        _ weakRanges: [Int: [DiskImage.Track.WeakBitRange]],
+        trackInfos: [DiskImage.Track?]
+    ) -> [Int: [DiskImage.Track.WeakBitRange]] {
+        var valid: [Int: [DiskImage.Track.WeakBitRange]] = [:]
+        for (halfTrack, ranges) in weakRanges {
+            guard halfTrack >= 0,
+                  halfTrack < trackInfos.count,
+                  let track = trackInfos[halfTrack] else {
+                continue
+            }
+            let filtered = ranges.filter {
+                $0.startBit >= 0
+                    && $0.startBit <= $0.endBit
+                    && $0.endBit < track.bitLength
+            }
+            guard !filtered.isEmpty else { continue }
+            valid[halfTrack] = mergedWeakBitRanges(filtered)
+        }
+        return valid
     }
 
     /// Bounded Swift decoder for the NBZ compression stream used by NIBTOOLS.

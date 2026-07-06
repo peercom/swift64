@@ -406,7 +406,7 @@ public final class Drive1541 {
     }
 
     public var statusSnapshot: StatusSnapshot {
-        let readTrackResolution = resolvedReadTrack(forHalfTrack: halfTrack)
+        let readTrackResolution = motorOn ? resolvedReadTrack(forHalfTrack: halfTrack) : nil
         return StatusSnapshot(
             enabled: enabled,
             model: driveModel,
@@ -461,11 +461,15 @@ public final class Drive1541 {
         value = value &* 1099511628211 &+ gcrWriteByteCount
         value = value &* 1099511628211 &+ gcrWriteEraseBitCount
         value = value &* 1099511628211 &+ gcrWriteSpliceCount
+        value = value &* 1099511628211 &+ mediaChangeCount
         value = value &* 1099511628211 &+ UInt64(decodedIECCommandBytes.count)
         value = value &* 1099511628211 &+ UInt64(decodedIECDataBytes.count)
         if gcrWriteGateActive { value &+= 0x0800_0000 }
         if motorOn { value &+= 0x1000_0000 }
         if ledOn { value &+= 0x2000_0000 }
+        if disk.hasDisk { value &+= 0x4000_0000 }
+        if disk.writeProtected { value &+= 0x8000_0000 }
+        if mediaChanged { value &+= 0x1_0000_0000 }
         if let iec = iecBus?.snapshot {
             if iec.atnLine { value &+= 1 }
             if iec.clockLine { value &+= 2 }
@@ -635,6 +639,7 @@ public final class Drive1541 {
         soDelay = 0
         via2.portAInput = 0x00
         via2.ca1 = true
+        updateVIA2Inputs()
     }
 
     // MARK: - Tick (one drive clock cycle)
@@ -713,14 +718,8 @@ public final class Drive1541 {
         updateMotorAndStepper()
         updateGCRWriteGateSpliceState()
 
-        // GCR head: advance disk and feed bytes to VIA2
-        if motorOn {
-            tickGCRHead()
-        } else if soDelay > 0 {
-            // Drain pending byte-ready even if motor just stopped
-            soDelay = 0
-            fireByteReady()
-        }
+        // GCR head: advance disk and feed bytes to VIA2.
+        tickGCRHead()
 
         // Update VIA2 PB input (sync, WP) after GCR head so sync state is current
         updateVIA2Inputs()
@@ -803,13 +802,22 @@ public final class Drive1541 {
         if newPhase != stepperPhase {
             let delta = (newPhase - stepperPhase + 4) % 4
             let oldTrack = track
+            let oldHalfTrack = halfTrack
             if delta == 1 {
                 if halfTrack < GCRDisk.maxHalfTracks - 1 { halfTrack += 1 }
             } else if delta == 3 {
                 if halfTrack > 0 { halfTrack -= 1 }
             }
-            if track != oldTrack {
-                debugBytesRead = 0
+            if halfTrack != oldHalfTrack {
+                if previousGCRWriteGateActive {
+                    closeGCRWriteGateIfActive(forHalfTrack: oldHalfTrack)
+                    updateGCRWriteGateSpliceState()
+                } else {
+                    clearGCRReadPresentation()
+                }
+                if track != oldTrack {
+                    debugBytesRead = 0
+                }
             }
             if track != oldTrack && gcrTraceLog < 200 {
                 gcrTraceLog += 1
@@ -862,6 +870,11 @@ public final class Drive1541 {
             return
         }
 
+        guard motorOn else {
+            clearGCRReadPresentation()
+            return
+        }
+
         guard let resolvedTrack = resolvedReadTrack(forHalfTrack: halfTrack) else {
             clearGCRReadPresentation()
             return
@@ -911,6 +924,7 @@ public final class Drive1541 {
                         bitPosition: headBitPosition
                     )
                     headBitPosition += 1
+                    if headBitPosition >= totalBits { headBitPosition = 0 }
 
                     // 10-bit shift register (per VICE: last_read_data)
                     shiftRegister = ((shiftRegister << 1) | bit) & 0x3FF
@@ -946,6 +960,7 @@ public final class Drive1541 {
                 }
             }
         }
+        updateVIA2Inputs()
     }
 
     private func updateGCRWriteGateSpliceState() {
@@ -960,14 +975,14 @@ public final class Drive1541 {
         }
     }
 
-    private func closeGCRWriteGateIfActive() {
+    private func closeGCRWriteGateIfActive(forHalfTrack halfTrack: Int? = nil) {
         guard previousGCRWriteGateActive else { return }
-        markGCRWriteSplice(startBitOffset: 0)
+        markGCRWriteSplice(startBitOffset: 0, forHalfTrack: halfTrack ?? self.halfTrack)
         previousGCRWriteGateActive = false
     }
 
-    private func markGCRWriteSplice(startBitOffset: Int) {
-        guard let target = resolvedWritableTrack(forHalfTrack: halfTrack) else { return }
+    private func markGCRWriteSplice(startBitOffset: Int, forHalfTrack halfTrack: Int? = nil) {
+        guard let target = resolvedWritableTrack(forHalfTrack: halfTrack ?? self.halfTrack) else { return }
         let totalBits = target.info?.bitLength ?? target.bytes.count * 8
         guard totalBits > 0 else { return }
 
@@ -1017,6 +1032,7 @@ public final class Drive1541 {
                         speedZone: viaSpeedZone
                     ) {
                         headBitPosition += 1
+                        if headBitPosition >= totalBits { headBitPosition = 0 }
                         if hasFreshDataBit {
                             gcrWriteFreshBitsRemaining -= 1
                             gcrWriteBitOffset = (gcrWriteBitOffset + 1) & 0x07
@@ -1109,6 +1125,7 @@ public final class Drive1541 {
             gcrWriteFreshBitsRemaining = 0
             return
         }
+        updateGCRWriteGateSpliceState()
         gcrWriteBitOffset = 0
         switch reason {
         case .outputRegister, .outputRegisterNoHandshake:
@@ -1123,6 +1140,7 @@ public final class Drive1541 {
         byteReadyLevel = false
         soDelay = 0
         via2.ca1 = true
+        updateVIA2Inputs()
     }
 
     private func resolvedWritableTrack(

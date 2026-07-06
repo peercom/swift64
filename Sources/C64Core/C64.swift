@@ -532,13 +532,13 @@ public final class C64 {
     public func mountDisk(_ data: Data, fileName: String) -> Bool {
         let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
         let format: DiskImage.Format
-        if ext == "g64" || (ext != "d64" && data.starts(with: Array("GCR-1541".utf8))) {
+        if data.starts(with: Array("GCR-1541".utf8)) || ext == "g64" {
             format = .g64
-        } else if ext == "nib" || (ext != "d64" && data.starts(with: Array("MNIB-1541-RAW".utf8))) {
+        } else if data.starts(with: Array("MNIB-1541-RAW".utf8)) || ext == "nib" {
             format = .nib
         } else if ext == "nbz" {
             format = .nbz
-        } else if ext == "p64" || (ext != "d64" && data.starts(with: Array("P64-1541".utf8))) {
+        } else if data.starts(with: Array("P64-1541".utf8)) || ext == "p64" {
             format = .p64
         } else {
             format = .d64
@@ -580,7 +580,14 @@ public final class C64 {
 
     /// Mount a D64 disk image from data.
     public func mountDisk(_ data: Data) -> Bool {
-        mountDisk(data, fileName: "memory.d64")
+        mountDisk(data, fileName: "memory")
+    }
+
+    public func unmountDisk() {
+        diskDrive.unmount()
+        drive1541.ejectDisk()
+        mountedDiskName = nil
+        clearFailureStatus()
     }
 
     /// Mount a T64/TAP tape image.

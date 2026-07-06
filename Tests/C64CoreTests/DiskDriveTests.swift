@@ -595,7 +595,7 @@ final class DiskDriveTests: XCTestCase {
 
         XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "26, WRITE PROTECT ON,00,00\r")
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "V"))
@@ -1130,7 +1130,50 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertFalse(drive.hasUnsavedChanges)
     }
 
-    func testCommandChannelBlockReadCopiesSectorIntoTargetChannel() {
+    func testCommandChannelBlockReadUsesBufferPointerLength() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0x04
+        image[sectorOffset + 1] = 0xAD
+        image[sectorOffset + 2] = 0xBE
+        image[sectorOffset + 3] = 0xEF
+        image[sectorOffset + 4] = 0x80
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xAD)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xBE)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xEF)
+        let last = drive.readByte(channel: 2)
+        XCTAssertEqual(last.byte, 0x80)
+        XCTAssertTrue(last.eof)
+    }
+
+    func testCommandChannelBlockReadAcceptsBinarySyntaxWithBufferPointerLength() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0x03
+        image[sectorOffset + 1] = 0xA1
+        image[sectorOffset + 2] = 0xA2
+        image[sectorOffset + 3] = 0xA3
+        XCTAssertTrue(drive.mount(Data(image)))
+        let binaryRead = String(decoding: [0x42, 0x2D, 0x52, 0x3A, 0x02, 0x00, 0x01, 0x02], as: UTF8.self)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: binaryRead))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xA1)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xA2)
+        let last = drive.readByte(channel: 2)
+        XCTAssertEqual(last.byte, 0xA3)
+        XCTAssertTrue(last.eof)
+    }
+
+    func testCommandChannelUser1CopiesRawSectorIntoTargetChannel() {
         let drive = DiskDrive()
         var image = [UInt8](makeBlankWritableD64())
         let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
@@ -1139,7 +1182,7 @@ final class DiskDriveTests: XCTestCase {
         image[sectorOffset + 255] = 0x7F
         XCTAssertTrue(drive.mount(Data(image)))
 
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,1,2"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U1:2,0,1,2"))
 
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         XCTAssertEqual(drive.readByte(channel: 2).byte, 0xDE)
@@ -1183,15 +1226,16 @@ final class DiskDriveTests: XCTestCase {
         let drive = DiskDrive()
         var image = [UInt8](makeBlankWritableD64())
         let sourceSectorOffset = DiskDrive.trackOffset[1] + 2 * 256
-        image[sourceSectorOffset] = 0x11
-        image[sourceSectorOffset + 1] = 0x22
+        image[sourceSectorOffset] = 0x03
+        image[sourceSectorOffset + 1] = 0x11
+        image[sourceSectorOffset + 2] = 0x22
         XCTAssertTrue(drive.mount(Data(image)))
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "BLOCK-READ:2,0,1,2"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         XCTAssertEqual(drive.readByte(channel: 2).byte, 0x11)
 
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "BLOCK-POINTER:2,1"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "BLOCK-POINTER:2,2"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         XCTAssertEqual(drive.readByte(channel: 2).byte, 0x22)
 
@@ -1203,11 +1247,11 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
 
         let writtenSector = try XCTUnwrap(drive.readSector(track: 1, sector: 3))
-        XCTAssertEqual(Array(writtenSector.prefix(3)), [0xA9, 0x42, 0x60])
+        XCTAssertEqual(Array(writtenSector.prefix(3)), [0x03, 0x42, 0x60])
 
         XCTAssertTrue(drive.openFile(channel: 15, filename: "BLOCK-EXECUTE:4,0,1,3"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
-        XCTAssertEqual(readChannelBytes(drive, channel: 4, count: 3), [0xA9, 0x42, 0x60])
+        XCTAssertEqual(readChannelBytes(drive, channel: 4, count: 3), [0x03, 0x42, 0x60])
 
         let freeBlocksAfterWrite = drive.freeBlocks()
         XCTAssertTrue(drive.openFile(channel: 15, filename: "BLOCK-ALLOCATE:0,1,4"))
@@ -1309,13 +1353,186 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xBE))
 
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
 
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
         XCTAssertEqual(Array(sector.prefix(4)), [0xDE, 0xAD, 0xBE, 0x00])
         XCTAssertEqual(drive.readSectorErrorCode(track: 1, sector: 2), 0x01)
         XCTAssertTrue(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelRawBlockWriteDoesNotDirtyUnchangedSector() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0xDE
+        image[sectorOffset + 1] = 0xAD
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(3)), [0xDE, 0xAD, 0x00])
+        XCTAssertFalse(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelBlockWriteDoesNotDirtyUnchangedBufferPointerSector() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0x03
+        image[sectorOffset + 1] = 0xAD
+        image[sectorOffset + 2] = 0xBE
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0x03))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xBE))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(4)), [0x03, 0xAD, 0xBE, 0x00])
+        XCTAssertFalse(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelBlockWriteStoresBufferPointerInFirstSectorByte() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image.replaceSubrange(sectorOffset..<(sectorOffset + 256), with: [UInt8](repeating: 0x55, count: 256))
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-P:2,5"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(8)), [0x07, 0, 0, 0, 0, 0xDE, 0xAD, 0x55])
+        XCTAssertEqual(sector[255], 0x55)
+    }
+
+    func testCommandChannelBlockWriteAcceptsBinarySyntaxWithBufferPointerSemantics() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image.replaceSubrange(sectorOffset..<(sectorOffset + 256), with: [UInt8](repeating: 0x55, count: 256))
+        XCTAssertTrue(drive.mount(Data(image)))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-P:2,5"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
+        let binaryWrite = String(decoding: [0x42, 0x2D, 0x57, 0x3A, 0x02, 0x00, 0x01, 0x02], as: UTF8.self)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: binaryWrite))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(8)), [0x07, 0, 0, 0, 0, 0xDE, 0xAD, 0x55])
+        XCTAssertEqual(sector[255], 0x55)
+    }
+
+    func testCommandChannelBlockReadModifyWritePreservesLoadedBufferBytes() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0x06
+        image[sectorOffset + 1] = 0xA1
+        image[sectorOffset + 2] = 0xA2
+        image[sectorOffset + 3] = 0xA3
+        image[sectorOffset + 4] = 0xA4
+        image[sectorOffset + 5] = 0xA5
+        image[sectorOffset + 6] = 0xA6
+        image[sectorOffset + 7] = 0x77
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,1,2"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-P:2,3"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEF))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(8)), [0x05, 0xA1, 0xA2, 0xEE, 0xEF, 0xA5, 0xA6, 0x77])
+    }
+
+    func testCommandChannelBlockReadAdvancesSharedBufferPointerForWrites() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image[sectorOffset] = 0x06
+        image[sectorOffset + 1] = 0xA1
+        image[sectorOffset + 2] = 0xA2
+        image[sectorOffset + 3] = 0xA3
+        image[sectorOffset + 4] = 0xA4
+        image[sectorOffset + 5] = 0xA5
+        image[sectorOffset + 6] = 0xA6
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-R:2,0,1,2"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xA1)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0xA2)
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEE))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(7)), [0x04, 0xA1, 0xA2, 0xEE, 0xA4, 0xA5, 0xA6])
+    }
+
+    func testCommandChannelUserReadModifyWritePreservesLoadedRawSectorBytes() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image.replaceSubrange(sectorOffset..<(sectorOffset + 256), with: (0...255).map(UInt8.init))
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U1:2,0,1,2"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-P:2,250"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEF))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector[248...255]), [248, 249, 0xEE, 0xEF, 252, 253, 254, 255])
+    }
+
+    func testCommandChannelUserReadAdvancesSharedBufferPointerForWrites() throws {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        let sectorOffset = DiskDrive.trackOffset[1] + 2 * 256
+        image.replaceSubrange(sectorOffset..<(sectorOffset + 256), with: (0...255).map(UInt8.init))
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U1:2,0,1,2"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 0)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 1)
+        XCTAssertEqual(drive.readByte(channel: 2).byte, 2)
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xEE))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(6)), [0, 1, 2, 0xEE, 4, 5])
     }
 
     func testCommandChannelBlockWriteClearsExtendedD64SectorError() throws {
@@ -1333,7 +1550,7 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0x00))
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xC0))
 
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,41,15"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,41,15"))
 
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         XCTAssertEqual(drive.readSectorErrorCode(track: 41, sector: 15), 0x01)
@@ -1382,11 +1599,32 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
         XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
 
-        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-W:2,0,1,2"))
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
 
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
         XCTAssertEqual(Array(sector.prefix(8)), [0, 0, 0, 0, 0, 0xDE, 0xAD, 0])
+    }
+
+    func testCommandChannelBlockPointerAcceptsBinarySyntax() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        XCTAssertTrue(drive.openFile(channel: 2, filename: "#"))
+        let binaryPointer = String(decoding: [0x42, 0x2D, 0x50, 0x3A, 0x02, 0x05], as: UTF8.self)
+        XCTAssertTrue(drive.openFile(channel: 15, filename: binaryPointer))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(drive.writeByte(channel: 2, byte: 0xAD))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "U2:2,0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        let sector = try XCTUnwrap(drive.readSector(track: 1, sector: 2))
+        XCTAssertEqual(Array(sector.prefix(8)), [0, 0, 0, 0, 0, 0xDE, 0xAD, 0])
+
+        let malformedPointer = String(decoding: [0x42, 0x2D, 0x50, 0x02], as: UTF8.self)
+        XCTAssertTrue(drive.openFile(channel: 15, filename: malformedPointer))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "30, SYNTAX ERROR,00,00\r")
     }
 
     func testCommandChannelBlockWriteAcceptsU2AliasAndReportsErrors() {
@@ -1437,6 +1675,51 @@ final class DiskDriveTests: XCTestCase {
         XCTAssertTrue(drive.openFile(channel: 15, filename: "B-F:0,1,2"))
         XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
         XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+    }
+
+    func testCommandChannelBlockFreeAlreadyFreeSectorDoesNotDirtyD64() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-F:0,1,2"))
+
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+        XCTAssertFalse(drive.hasUnsavedChanges)
+    }
+
+    func testCommandChannelBlockAllocateAndFreeAcceptBinarySyntax() {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let initialFreeBlocks = drive.freeBlocks()
+        let allocate = String(decoding: [0x42, 0x2D, 0x41, 0x3A, 0x00, 0x01, 0x02], as: UTF8.self)
+        let free = String(decoding: [0x42, 0x2D, 0x46, 0x3A, 0x00, 0x01, 0x02], as: UTF8.self)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: allocate))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks - 1)
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: free))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+        XCTAssertEqual(drive.freeBlocks(), initialFreeBlocks)
+
+        let malformedAllocate = String(decoding: [0x42, 0x2D, 0x41, 0x00, 0x01], as: UTF8.self)
+        XCTAssertTrue(drive.openFile(channel: 15, filename: malformedAllocate))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "30, SYNTAX ERROR,00,00\r")
+    }
+
+    func testCommandChannelBlockAllocateNextFreeHintStaysWithinStandardBAMTracksOnExtendedD64() {
+        let drive = DiskDrive()
+        var image = [UInt8](makeBlankWritableD64())
+        image.append(contentsOf: [UInt8](repeating: 0, count: 196_608 - image.count))
+        XCTAssertTrue(drive.mount(Data(image)))
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:0,35,16"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "00, OK,00,00\r")
+
+        XCTAssertTrue(drive.openFile(channel: 15, filename: "B-A:0,35,16"))
+        XCTAssertEqual(readChannelString(drive, channel: 15), "65, NO BLOCK,01,00\r")
     }
 
     func testCommandChannelBlockAllocateReportsErrorsAndReadOnlyMedia() {

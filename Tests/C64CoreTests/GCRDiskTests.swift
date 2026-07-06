@@ -257,6 +257,47 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.capabilities.preservesWeakBitRanges, true)
     }
 
+    func testP64WeakPulseAnnotationWrapsAroundTrackStart() {
+        let p64 = makeP64(
+            halfTrack: 0,
+            gcrPrefix: [0x80],
+            weakBitIndexes: [0]
+        )
+        let disk = GCRDisk()
+
+        XCTAssertTrue(disk.loadP64(Data(p64)))
+
+        let info = disk.trackInfo(halfTrack: 0)
+        XCTAssertEqual(info?.bytes.first, 0x80)
+        XCTAssertEqual(info?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 1),
+            DiskImage.Track.WeakBitRange(startBit: 61_538, endBit: 61_538),
+        ])
+        XCTAssertEqual(disk.image?.capabilities.weakBitRangeCount, 2)
+        XCTAssertEqual(disk.image?.capabilities.weakBitTotalBitCount, 3)
+    }
+
+    func testExportedG64PreservesP64BitLengthAndWeakRangesInSwift64Extensions() throws {
+        let p64 = makeP64(
+            halfTrack: 0,
+            gcrPrefix: [0x80],
+            weakBitIndexes: [0]
+        )
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadP64(Data(p64)))
+        let sourceInfo = try XCTUnwrap(disk.trackInfo(halfTrack: 0))
+
+        let exported = try XCTUnwrap(disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+
+        let reloadedInfo = try XCTUnwrap(reloaded.trackInfo(halfTrack: 0))
+        XCTAssertEqual(reloadedInfo.bytes, sourceInfo.bytes)
+        XCTAssertEqual(reloadedInfo.bitLength, sourceInfo.bitLength)
+        XCTAssertEqual(reloadedInfo.weakBitRanges, sourceInfo.weakBitRanges)
+        XCTAssertEqual(reloaded.image?.capabilities.weakBitTotalBitCount, 3)
+    }
+
     func testP64LoadRejectsMalformedImages() {
         let disk = GCRDisk()
 
@@ -837,6 +878,199 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.bytes[2], 0x10)
     }
 
+    func testSameByteWriteDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x12, 0x34],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByte(0x34, halfTrack: 34, byteIndex: 1))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x12, 0x34])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameByteAtBitPositionWriteDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0xA5, 0x5A],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByteAtBitPosition(0x5A, halfTrack: 34, bitPosition: 8))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0xA5, 0x5A])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameBitWriteDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x10],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 1)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeBitAtBitPosition(true, halfTrack: 34, bitPosition: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x10])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameValueWriteWithActiveSpeedZoneStillUpdatesSpeedMap() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x10, 0x20],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByte(0x20, halfTrack: 34, byteIndex: 1, speedZone: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x10, 0x20])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZoneMap, [2, 3])
+        XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameValueWriteWithUnchangedActiveSpeedZoneDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x10, 0x20],
+            speedZone: 2,
+            speedZoneMap: [2, 3],
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByte(0x20, halfTrack: 34, byteIndex: 1, speedZone: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x10, 0x20])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZoneMap, [2, 3])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameUnalignedByteWriteWithUnchangedActiveSpeedZoneDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0xA5, 0x5A],
+            speedZone: 2,
+            speedZoneMap: [3, 3],
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByteAtBitPosition(0x5A, halfTrack: 34, bitPosition: 8, speedZone: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0xA5, 0x5A])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.speedZoneMap, [3, 3])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameBitWriteWithUnchangedActiveSpeedZoneDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x10],
+            speedZone: 3,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 1)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeBitAtBitPosition(true, halfTrack: 34, bitPosition: 3, speedZone: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x10])
+        XCTAssertNil(disk.trackInfo(halfTrack: 34)?.speedZoneMap)
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameByteWriteStillClearsTouchedWeakBitRange() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x12, 0x34],
+            speedZone: 2,
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 8, endBit: 15)],
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeByte(0x34, halfTrack: 34, byteIndex: 1))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x12, 0x34])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.weakBitRanges, [])
+        XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testSameBitWriteStillSplitsTouchedWeakBitRange() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x10],
+            speedZone: 2,
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 7)],
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 1)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.writeBitAtBitPosition(true, halfTrack: 34, bitPosition: 3))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.bytes, [0x10])
+        XCTAssertEqual(disk.trackInfo(halfTrack: 34)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 2),
+            DiskImage.Track.WeakBitRange(startBit: 4, endBit: 7),
+        ])
+        XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
+    }
+
     func testAddWeakBitRangeMergesAndWrapsAroundTrackEnd() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
         tracks[2] = DiskImage.Track(
@@ -860,6 +1094,28 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
     }
 
+    func testDuplicateWeakBitRangeDoesNotDirtyLowLevelImage() {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[2] = DiskImage.Track(
+            halfTrack: 2,
+            bytes: [0x00, 0x00],
+            speedZone: 3,
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15)],
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+
+        XCTAssertTrue(disk.addWeakBitRange(startBit: 0, bitCount: 16, forHalfTrack: 2))
+
+        XCTAssertEqual(disk.trackInfo(halfTrack: 2)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 0, endBit: 15),
+        ])
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+    }
+
     func testEnsureWritableTrackCreatesNativeG64TrackForLowLevelFormatting() {
         var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
         tracks[34] = DiskImage.Track(
@@ -872,6 +1128,7 @@ final class GCRDiskTests: XCTestCase {
         disk.tracks = tracks.map { $0?.bytes }
         disk.trackInfos = tracks
         disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = false
 
         XCTAssertTrue(disk.ensureWritableTrack(halfTrack: 35, speedZone: 3))
 
@@ -890,6 +1147,7 @@ final class GCRDiskTests: XCTestCase {
         ])
         let disk = GCRDisk()
         XCTAssertTrue(disk.loadNIB(Data(nib)))
+        disk.writeProtected = false
 
         XCTAssertTrue(disk.ensureWritableTrack(halfTrack: 1, speedZone: 1, fillByte: 0x33))
 
@@ -914,6 +1172,7 @@ final class GCRDiskTests: XCTestCase {
         let p64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5])
         let disk = GCRDisk()
         XCTAssertTrue(disk.loadP64(Data(p64)))
+        disk.writeProtected = false
 
         XCTAssertTrue(disk.ensureWritableTrack(halfTrack: 1, speedZone: 0, fillByte: 0x44))
 
@@ -927,12 +1186,101 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(disk.image?.maxTrackSize, 7_693)
     }
 
+    func testFormatWritableTrackReplacesNativeTrackAndClearsLowLevelMetadata() throws {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x12, 0x34, 0x56, 0x78],
+            bitLength: 29,
+            speedZone: 1,
+            speedZoneMap: [0, 1, 2, 3],
+            weakBitRanges: [DiskImage.Track.WeakBitRange(startBit: 4, endBit: 12)],
+            isNativeLowLevel: true,
+            duplicateSectorHeaderCount: 2
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 4)
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.formatWritableTrack(halfTrack: 34, speedZone: 3, fillByte: 0x6A))
+
+        let formatted = try XCTUnwrap(disk.trackInfo(halfTrack: 34))
+        XCTAssertEqual(formatted.bytes.count, GCRDisk.trackLengths[3])
+        XCTAssertEqual(formatted.bytes.first, 0x6A)
+        XCTAssertEqual(formatted.bitLength, GCRDisk.trackLengths[3] * 8)
+        XCTAssertEqual(formatted.speedZone, 3)
+        XCTAssertNil(formatted.speedZoneMap)
+        XCTAssertEqual(formatted.weakBitRanges, [])
+        XCTAssertEqual(formatted.duplicateSectorHeaderCount, 0)
+        XCTAssertTrue(formatted.isNativeLowLevel)
+        XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
+        XCTAssertEqual(disk.image?.maxTrackSize, GCRDisk.trackLengths[3])
+
+        let exported = try XCTUnwrap(disk.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.bytes.count, GCRDisk.trackLengths[3])
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.bytes.first, 0x6A)
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.speedZone, 3)
+        XCTAssertNil(reloaded.trackInfo(halfTrack: 34)?.speedZoneMap)
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 34)?.weakBitRanges, [])
+    }
+
+    func testFormatWritableTrackCreatesMissingNativeHalfTrack() throws {
+        let nib = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
+        ])
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadNIB(Data(nib)))
+        disk.writeProtected = false
+
+        XCTAssertTrue(disk.formatWritableTrack(halfTrack: 1, speedZone: 0, fillByte: 0x22))
+
+        let formatted = try XCTUnwrap(disk.trackInfo(halfTrack: 1))
+        XCTAssertEqual(formatted.bytes.count, GCRDisk.trackLengths[0])
+        XCTAssertEqual(formatted.bytes.first, 0x22)
+        XCTAssertEqual(formatted.speedZone, 0)
+        XCTAssertEqual(formatted.weakBitRanges, [])
+        XCTAssertNil(formatted.speedZoneMap)
+        XCTAssertTrue(formatted.isNativeLowLevel)
+        XCTAssertTrue(disk.hasUnsavedLowLevelWrites)
+    }
+
+    func testNativeTrackCreationAndFormattingHonorWriteProtect() throws {
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[34] = DiskImage.Track(
+            halfTrack: 34,
+            bytes: [0x12, 0x34],
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        let disk = GCRDisk()
+        disk.tracks = tracks.map { $0?.bytes }
+        disk.trackInfos = tracks
+        disk.image = DiskImage(format: .g64, tracks: tracks, maxTrackSize: 2)
+        disk.writeProtected = true
+
+        XCTAssertFalse(disk.ensureWritableTrack(halfTrack: 35, speedZone: 3))
+        XCTAssertFalse(disk.formatWritableTrack(halfTrack: 34, speedZone: 1, fillByte: 0x55))
+
+        let original = try XCTUnwrap(disk.trackInfo(halfTrack: 34))
+        XCTAssertEqual(original.bytes, [0x12, 0x34])
+        XCTAssertEqual(original.speedZone, 2)
+        XCTAssertNil(disk.trackInfo(halfTrack: 35))
+        XCTAssertFalse(disk.hasUnsavedLowLevelWrites)
+        XCTAssertEqual(disk.image?.maxTrackSize, 2)
+    }
+
     func testEnsureWritableTrackRejectsD64AndOutOfRangeHalfTracks() {
         let disk = GCRDisk()
         XCTAssertTrue(disk.loadD64(makeBlankD64()))
 
         XCTAssertFalse(disk.ensureWritableTrack(halfTrack: 1, speedZone: 3))
         XCTAssertFalse(disk.ensureWritableTrack(halfTrack: GCRDisk.maxHalfTracks, speedZone: 3))
+        XCTAssertFalse(disk.formatWritableTrack(halfTrack: 1, speedZone: 3))
+        XCTAssertFalse(disk.formatWritableTrack(halfTrack: GCRDisk.maxHalfTracks, speedZone: 3))
     }
 
     func testDecodedD64ImagePatchesCleanlyDecodedLowLevelSectorWrites() throws {
@@ -1333,6 +1681,33 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
     }
 
+    func testC64MemoryDataMountDetectsG64SignatureWithoutFilename() {
+        let g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: [0xFF, 0xFF, 0x52, 0xA5])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(g64)))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "memory")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .g64)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+        XCTAssertTrue(c64.emulationStatus.canExportModifiedG64)
+    }
+
+    func testC64DataMountLetsG64SignatureOverrideMisleadingD64Filename() {
+        let g64 = makeSingleTrackG64(halfTrack: 34, rawTrack: [0xFF, 0xFF, 0x52, 0xA5])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(g64), fileName: "misnamed.d64"))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "misnamed.d64")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .g64)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+    }
+
     func testC64DataMountPreservesNIBFormatFromFilename() {
         let nib = makeNIB(entries: [
             (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
@@ -1351,6 +1726,37 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertTrue(c64.emulationStatus.canExportModifiedG64)
         XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .nib)
+    }
+
+    func testC64MemoryDataMountDetectsNIBSignatureWithoutFilename() {
+        let nib = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
+        ])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(nib)))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "memory")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .nib)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .nib)
+    }
+
+    func testC64DataMountLetsNIBSignatureOverrideMisleadingD64Filename() {
+        let nib = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x03, bytes: [UInt8](repeating: 0xAA, count: 0x2000)),
+        ])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(nib), fileName: "misnamed.d64"))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "misnamed.d64")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .nib)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
         XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .nib)
     }
 
@@ -1390,6 +1796,33 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertFalse(c64.emulationStatus.canExportModifiedD64)
         XCTAssertTrue(c64.emulationStatus.canExportModifiedG64)
         XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .p64)
+    }
+
+    func testC64MemoryDataMountDetectsP64SignatureWithoutFilename() {
+        let p64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(p64)))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "memory")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .p64)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
+        XCTAssertEqual(c64.emulationStatus.drive.hasNativeLowLevelImage, true)
+        XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .p64)
+    }
+
+    func testC64DataMountLetsP64SignatureOverrideMisleadingD64Filename() {
+        let p64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5])
+        let c64 = C64()
+
+        XCTAssertTrue(c64.mountDisk(Data(p64), fileName: "misnamed.d64"))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "misnamed.d64")
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .p64)
+        XCTAssertNil(c64.emulationStatus.highLevelDiskFormat)
+        XCTAssertFalse(c64.diskDrive.isMounted)
         XCTAssertEqual(c64.emulationStatus.mediaCapabilities?.format, .p64)
     }
 
