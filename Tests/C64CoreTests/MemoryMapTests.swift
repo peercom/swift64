@@ -119,6 +119,53 @@ final class MemoryMapTests: XCTestCase {
         XCTAssertFalse(snapshot.charen)
     }
 
+    func testCPUPortWriteObserverReportsAddressValueAndEffectiveSnapshot() {
+        let memory = MemoryMap()
+        var writes: [(UInt16, UInt8, MemoryMap.CPUPortSnapshot)] = []
+        memory.onCPUPortWrite = { address, value, snapshot in
+            writes.append((address, value, snapshot))
+        }
+
+        memory.write(0x0000, value: 0x2F)
+        memory.write(0x0001, value: 0x34)
+
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertEqual(writes[0].0, 0x0000)
+        XCTAssertEqual(writes[0].1, 0x2F)
+        XCTAssertEqual(writes[0].2.direction, 0x2F)
+        XCTAssertEqual(writes[0].2.data, 0x37)
+        XCTAssertEqual(writes[0].2.effective, 0x37)
+        XCTAssertEqual(writes[1].0, 0x0001)
+        XCTAssertEqual(writes[1].1, 0x34)
+        XCTAssertEqual(writes[1].2.direction, 0x2F)
+        XCTAssertEqual(writes[1].2.data, 0x34)
+        XCTAssertEqual(writes[1].2.effective, 0x34)
+        XCTAssertFalse(writes[1].2.loram)
+        XCTAssertFalse(writes[1].2.hiram)
+        XCTAssertTrue(writes[1].2.charen)
+    }
+
+    func testRAMWriteObserverReportsCommittedNormalRAMWritesOnly() {
+        let memory = MemoryMap()
+        var writes: [(UInt16, UInt8)] = []
+        memory.onRAMWrite = { address, value in
+            writes.append((address, value))
+        }
+
+        memory.write(0x0801, value: 0xAB)
+        memory.write(0xD020, value: 0x05)
+        memory.write(0xD400, value: 0x11)
+        memory.write(0x0001, value: 0x34)
+        memory.write(0xD400, value: 0x22)
+        memory.write(0xA000, value: 0xCD)
+
+        XCTAssertEqual(writes.map(\.0), [0x0801, 0xD400, 0xA000])
+        XCTAssertEqual(writes.map(\.1), [0xAB, 0x22, 0xCD])
+        XCTAssertEqual(memory.ram[0x0801], 0xAB)
+        XCTAssertEqual(memory.ram[0xD400], 0x22)
+        XCTAssertEqual(memory.ram[0xA000], 0xCD)
+    }
+
     func testCPUDataPortExposesCassetteOutputLineLevels() {
         let memory = MemoryMap()
         memory.write(0x0000, value: 0x28)

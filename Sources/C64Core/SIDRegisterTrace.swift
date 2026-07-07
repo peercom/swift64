@@ -16,6 +16,12 @@ public struct SIDRegisterWriteTraceEvent: Codable, Equatable {
     public let reachedChip: Bool
     public let sidModel: SID.Model
     public let sidAccuracyMode: SID.AccuracyMode
+    public let cpuPortDirection: UInt8?
+    public let cpuPortData: UInt8?
+    public let cpuPortEffective: UInt8?
+    public let loram: Bool?
+    public let hiram: Bool?
+    public let charen: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case cycle
@@ -27,6 +33,12 @@ public struct SIDRegisterWriteTraceEvent: Codable, Equatable {
         case reachedChip
         case sidModel
         case sidAccuracyMode
+        case cpuPortDirection
+        case cpuPortData
+        case cpuPortEffective
+        case loram
+        case hiram
+        case charen
     }
 
     public init(
@@ -38,7 +50,13 @@ public struct SIDRegisterWriteTraceEvent: Codable, Equatable {
         value: UInt8,
         reachedChip: Bool = true,
         sidModel: SID.Model,
-        sidAccuracyMode: SID.AccuracyMode
+        sidAccuracyMode: SID.AccuracyMode,
+        cpuPortDirection: UInt8? = nil,
+        cpuPortData: UInt8? = nil,
+        cpuPortEffective: UInt8? = nil,
+        loram: Bool? = nil,
+        hiram: Bool? = nil,
+        charen: Bool? = nil
     ) {
         self.cycle = cycle
         self.pc = pc
@@ -49,6 +67,12 @@ public struct SIDRegisterWriteTraceEvent: Codable, Equatable {
         self.reachedChip = reachedChip
         self.sidModel = sidModel
         self.sidAccuracyMode = sidAccuracyMode
+        self.cpuPortDirection = cpuPortDirection
+        self.cpuPortData = cpuPortData
+        self.cpuPortEffective = cpuPortEffective
+        self.loram = loram
+        self.hiram = hiram
+        self.charen = charen
     }
 
     public init(from decoder: Decoder) throws {
@@ -62,7 +86,13 @@ public struct SIDRegisterWriteTraceEvent: Codable, Equatable {
             value: try container.decode(UInt8.self, forKey: .value),
             reachedChip: try container.decode(Bool.self, forKey: .reachedChip),
             sidModel: try container.decode(SID.Model.self, forKey: .sidModel),
-            sidAccuracyMode: try container.decode(SID.AccuracyMode.self, forKey: .sidAccuracyMode)
+            sidAccuracyMode: try container.decode(SID.AccuracyMode.self, forKey: .sidAccuracyMode),
+            cpuPortDirection: try container.decodeIfPresent(UInt8.self, forKey: .cpuPortDirection),
+            cpuPortData: try container.decodeIfPresent(UInt8.self, forKey: .cpuPortData),
+            cpuPortEffective: try container.decodeIfPresent(UInt8.self, forKey: .cpuPortEffective),
+            loram: try container.decodeIfPresent(Bool.self, forKey: .loram),
+            hiram: try container.decodeIfPresent(Bool.self, forKey: .hiram),
+            charen: try container.decodeIfPresent(Bool.self, forKey: .charen)
         )
     }
 }

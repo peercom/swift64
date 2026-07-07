@@ -81,6 +81,9 @@ public final class C64 {
     public let drive1541: Drive1541
     public let iecBus: IECBus
 
+    /// Optional diagnostic hook for CIA2 Port A reads after IEC bus lines have been sampled.
+    public var onCIA2PortARead: ((UInt8, IECBus.Snapshot) -> Void)?
+
     /// Machine/chip timing profile. PAL C64 + 1541C is the default compatibility target.
     public var machineProfile: MachineProfile = .palC64 {
         didSet {
@@ -152,6 +155,8 @@ public final class C64 {
     public var onSIDRegisterWriteTrace: ((SIDRegisterWriteTraceEvent) -> Void)?
 
     private var pcFFFFCycleCount: UInt64 = 0
+    private var pcFFFFVectorBounceCycleCount: UInt64 = 0
+    private var pcFFFFVectorBounceMask: UInt8 = 0
     private var loadNoProgressCycleCount: UInt64 = 0
     private var lastProgressSignature: UInt64 = 0
     private var lastFailureWasClearedAtCycle: UInt64 = 0
@@ -273,6 +278,7 @@ public final class C64 {
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
             let result = 0x3F | self.iecBus.c64ReadClk | self.iecBus.c64ReadData
+            self.onCIA2PortARead?(result, self.iecBus.snapshot)
             // Log reads in Kernal serial bus code regions
             if self.trueDriveEmulationMode != .off && self.cia2ReadLog < 500 {
                 let pc = self.cpu.pc
@@ -906,7 +912,13 @@ public final class C64 {
         case .off:
             return true
         case .compat1541:
-            return diskDrive.isMounted && kernalTraps.isDiskIORequest()
+            guard diskDrive.isMounted && kernalTraps.isDiskIORequest() else { return false }
+            if drive1541.disk.hasNativeLowLevelImage,
+               kernalTraps.handledLoadTrapCount > 0,
+               kernalTraps.isDiskLoadRequest() {
+                return false
+            }
+            return true
         case .standard1541:
             return false
         }
@@ -934,6 +946,8 @@ public final class C64 {
         drive1541.lastFailureReason = nil
         drive1541.noProgressCycleCount = 0
         pcFFFFCycleCount = 0
+        pcFFFFVectorBounceCycleCount = 0
+        pcFFFFVectorBounceMask = 0
         loadNoProgressCycleCount = 0
         lastProgressSignature = progressSignature
         lastFailureWasClearedAtCycle = cpu.totalCycles
@@ -978,6 +992,21 @@ public final class C64 {
             }
         } else {
             pcFFFFCycleCount = 0
+        }
+
+        switch cpu.pc {
+        case 0xFFFF:
+            pcFFFFVectorBounceCycleCount += 1
+            pcFFFFVectorBounceMask |= 0x01
+        case 0x0002:
+            pcFFFFVectorBounceCycleCount += 1
+            pcFFFFVectorBounceMask |= 0x02
+        default:
+            pcFFFFVectorBounceCycleCount = 0
+            pcFFFFVectorBounceMask = 0
+        }
+        if pcFFFFVectorBounceMask == 0x03 && pcFFFFVectorBounceCycleCount > 20_000 {
+            recordFailure("C64 PC bouncing between $FFFF and $0002")
         }
     }
 
@@ -1046,7 +1075,8 @@ public final class C64 {
     }
 
     private func sidRegisterWriteTraceEvent(register: UInt16, value: UInt8, reachedChip: Bool) -> SIDRegisterWriteTraceEvent {
-        SIDRegisterWriteTraceEvent(
+        let port = memory.cpuPortSnapshot
+        return SIDRegisterWriteTraceEvent(
             cycle: cpu.totalCycles,
             pc: cpu.pc,
             rasterLine: Int(vic.rasterLine),
@@ -1055,7 +1085,13 @@ public final class C64 {
             value: value,
             reachedChip: reachedChip,
             sidModel: sid.model,
-            sidAccuracyMode: sid.accuracyMode
+            sidAccuracyMode: sid.accuracyMode,
+            cpuPortDirection: port.direction,
+            cpuPortData: port.data,
+            cpuPortEffective: port.effective,
+            loram: port.loram,
+            hiram: port.hiram,
+            charen: port.charen
         )
     }
 

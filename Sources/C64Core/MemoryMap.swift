@@ -69,6 +69,12 @@ public final class MemoryMap: Bus {
     /// Called when the effective cassette motor-control output level changes.
     public var onCassetteMotorLineChange: ((Bool) -> Void)?
 
+    /// Called after CPU writes to the internal 6510 port registers at $0000/$0001.
+    public var onCPUPortWrite: ((UInt16, UInt8, CPUPortSnapshot) -> Void)?
+
+    /// Called after a normal CPU RAM write has been committed.
+    public var onRAMWrite: ((UInt16, UInt8) -> Void)?
+
     /// Called after a CPU-visible SID register write, with the normalized 5-bit register.
     public var onSIDRegisterWrite: ((UInt16, UInt8) -> Void)?
 
@@ -230,6 +236,7 @@ public final class MemoryMap: Bus {
                 previousWriteLine: previousWriteLine,
                 previousMotorLine: previousMotorLine
             )
+            onCPUPortWrite?(address, value, cpuPortSnapshot)
             return
         }
         if addr == 0x0001 {
@@ -240,6 +247,7 @@ public final class MemoryMap: Bus {
                 previousWriteLine: previousWriteLine,
                 previousMotorLine: previousMotorLine
             )
+            onCPUPortWrite?(address, value, cpuPortSnapshot)
             return
         }
 
@@ -264,6 +272,7 @@ public final class MemoryMap: Bus {
 
         // All writes go to RAM underneath
         ram[addr] = value
+        onRAMWrite?(address, value)
     }
 
     func finishRead(_ address: UInt16, value: UInt8) -> UInt8 {

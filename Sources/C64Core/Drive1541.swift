@@ -128,6 +128,9 @@ public final class Drive1541 {
     /// SO delay in 16 MHz sub-ticks (aligned to 16-cycle boundary, range 10-25)
     var soDelay: Int = 0
 
+    /// Diagnostic timing adjustment for the byte-ready SO pulse, in 16 MHz sub-ticks.
+    public var byteReadySODelayAdjustment: Int = 0
+
     /// Byte-ready generation enabled (controlled by VIA2 CA2 output state)
     var byteReadyActive: Bool = true
 
@@ -169,9 +172,11 @@ public final class Drive1541 {
     /// Decoded IEC command bytes observed by the 1541 ROM ATN handler.
     /// This is a compact acceptance-test/debug aid; the ROM remains authoritative.
     public private(set) var decodedIECCommandBytes: [UInt8] = []
+    private let decodedIECCommandByteLimit = 512
 
     /// Decoded IEC listener data bytes observed by the 1541 ROM receive path.
     public private(set) var decodedIECDataBytes: [UInt8] = []
+    private let decodedIECDataByteLimit = 2048
 
     /// Diagnostic fields populated by the host C64 progress monitor.
     public var noProgressCycleCount: UInt64 = 0
@@ -187,6 +192,15 @@ public final class Drive1541 {
 
     /// Debug: cycle counter for periodic logging
     var debugCycleCount: UInt64 = 0
+
+    /// Optional diagnostic hook fired when VIA1 changes the IEC bus outputs.
+    public var onIECBusOutputChange: ((UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot) -> Void)?
+
+    /// Optional diagnostic hook fired whenever the 1541 writes VIA1 port B or DDRB.
+    public var onVIA1PortBWrite: ((UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot?) -> Void)?
+
+    /// Optional diagnostic hook fired when the 1541 CPU reads the GCR data register.
+    public var onVIA2PortARead: ((UInt64, UInt16, UInt8, UInt64, Int, Int) -> Void)?
 
     /// IEC trace log counter (limits output)
     var iecTraceLog: Int = 0
@@ -228,6 +242,15 @@ public final class Drive1541 {
                 }
             }
             self?.updateBusFromVIA1()
+            if let self {
+                self.onVIA1PortBWrite?(
+                    self.debugCycleCount,
+                    self.cpu.pc,
+                    self.via1.portB,
+                    self.via1.ddrb,
+                    self.iecBus?.snapshot
+                )
+            }
         }
 
         // VIA1 DDRB write also affects driven outputs
@@ -250,6 +273,14 @@ public final class Drive1541 {
             if s.via2PortAReadBytes.count < 512 {
                 s.via2PortAReadBytes.append(s.via2.portAInput)
             }
+            s.onVIA2PortARead?(
+                s.debugCycleCount,
+                s.cpu.pc,
+                s.via2.portAInput,
+                s.byteReadyCount,
+                s.halfTrack,
+                s.headBitPosition
+            )
             s.byteReadyLevel = false
             s.byteReadyEdge = false
             s.via2.ca1 = true  // release byte-ready line to idle high
@@ -727,11 +758,11 @@ public final class Drive1541 {
         // Tick CPU
         cpu.tick()
 
-        if cpu.cycle == 0 && cpu.pc == 0xE887 && decodedIECCommandBytes.count < 64 {
+        if cpu.cycle == 0 && cpu.pc == 0xE887 && decodedIECCommandBytes.count < decodedIECCommandByteLimit {
             decodedIECCommandBytes.append(cpu.a)
             driveLog("[DRV-CMD] @\(debugCycleCount) byte=$\(String(format:"%02X", cpu.a))")
         }
-        if cpu.cycle == 0 && cpu.pc == 0xEA47 && decodedIECDataBytes.count < 256 {
+        if cpu.cycle == 0 && cpu.pc == 0xEA47 && decodedIECDataBytes.count < decodedIECDataByteLimit {
             decodedIECDataBytes.append(cpu.a)
             driveLog("[DRV-DATA] @\(debugCycleCount) byte=$\(String(format:"%02X", cpu.a))")
         }
@@ -763,7 +794,12 @@ public final class Drive1541 {
     /// Push VIA1 output state to the IEC bus.
     func updateBusFromVIA1() {
         guard let bus = iecBus else { return }
+        let previous = bus.snapshot
         bus.updateFromDrive(portB: via1.portB, ddrb: via1.ddrb)
+        let current = bus.snapshot
+        if current != previous {
+            onIECBusOutputChange?(debugCycleCount, cpu.pc, via1.portB, via1.ddrb, current)
+        }
     }
 
     // MARK: - Disk controller (VIA2)
@@ -952,8 +988,7 @@ public final class Drive1541 {
 
                             // Schedule byte-ready with SO delay (aligned to 16-cycle boundary)
                             if byteReadyActive {
-                                soDelay = 16 - subTick
-                                if soDelay < 10 { soDelay += 16 }
+                                soDelay = scheduledByteReadySODelay(afterSubTick: subTick)
                             }
                         }
                     }
@@ -961,6 +996,12 @@ public final class Drive1541 {
             }
         }
         updateVIA2Inputs()
+    }
+
+    private func scheduledByteReadySODelay(afterSubTick subTick: Int) -> Int {
+        var delay = 16 - subTick
+        if delay < 10 { delay += 16 }
+        return max(1, delay + byteReadySODelayAdjustment)
     }
 
     private func updateGCRWriteGateSpliceState() {

@@ -190,8 +190,36 @@ final class SIDTests: XCTestCase {
         XCTAssertTrue(events[0].reachedChip)
         XCTAssertEqual(events[0].sidModel, .mos6581)
         XCTAssertEqual(events[0].sidAccuracyMode, .compatibility)
+        XCTAssertEqual(events[0].cpuPortDirection, 0x2F)
+        XCTAssertEqual(events[0].cpuPortData, 0x37)
+        XCTAssertEqual(events[0].cpuPortEffective, 0x37)
+        XCTAssertEqual(events[0].loram, true)
+        XCTAssertEqual(events[0].hiram, true)
+        XCTAssertEqual(events[0].charen, true)
         XCTAssertEqual(events[1].register, 0x04)
         XCTAssertEqual(events[1].value, 0x21)
+    }
+
+    func testC64SIDRegisterWriteTraceEventsIncludeBankedOutPortState() {
+        let c64 = C64(machineProfile: .palC64)
+        c64.powerOn()
+        var events: [SIDRegisterWriteTraceEvent] = []
+        c64.onSIDRegisterWriteTrace = { events.append($0) }
+
+        c64.memory.write(0x0000, value: 0x2F)
+        c64.memory.write(0x0001, value: 0x30)
+        c64.memory.write(0xD404, value: 0x21)
+
+        let event = try! XCTUnwrap(events.last)
+        XCTAssertFalse(event.reachedChip)
+        XCTAssertEqual(event.register, 0x04)
+        XCTAssertEqual(event.value, 0x21)
+        XCTAssertEqual(event.cpuPortDirection, 0x2F)
+        XCTAssertEqual(event.cpuPortData, 0x30)
+        XCTAssertEqual(event.cpuPortEffective, 0x30)
+        XCTAssertEqual(event.loram, false)
+        XCTAssertEqual(event.hiram, false)
+        XCTAssertEqual(event.charen, false)
     }
 
     func testSIDRegisterTracePlayerReplaysWritesAndProducesAudioSignature() throws {
@@ -489,6 +517,15 @@ final class SIDTests: XCTestCase {
         let captureSkip = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_CAPTURE_SKIP"] ?? "") ?? 0
         let textureWindow = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_TEXTURE_WINDOW"] ?? "") ?? 0
         let textureStride = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_TEXTURE_STRIDE"] ?? "") ?? 0
+        let requiredCapturedRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_CAPTURED_RMS"] ?? "")
+        let requiredCapturedLowRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_CAPTURED_LOW_RMS"] ?? "")
+        let requiredCapturedMidRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_CAPTURED_MID_RMS"] ?? "")
+        let requiredCapturedHighRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_CAPTURED_HIGH_RMS"] ?? "")
+        let requiredCapturedZeroCrossingRate = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_CAPTURED_ZCR"] ?? "")
+        let requiredBestTextureRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_TEXTURE_RMS"] ?? "")
+        let requiredBestTextureMidRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_TEXTURE_MID_RMS"] ?? "")
+        let requiredBestTextureHighRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_TEXTURE_HIGH_RMS"] ?? "")
+        let requiredBestTextureZeroCrossingRate = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_SID_TRACE_REPLAY_REQUIRE_TEXTURE_ZCR"] ?? "")
         let result = try player.replay(
             events,
             tailCycles: tailCycles,
@@ -521,6 +558,33 @@ final class SIDTests: XCTestCase {
         XCTAssertFalse(events.isEmpty)
         XCTAssertGreaterThan(result.samplesGenerated, 0)
         XCTAssertGreaterThan(result.signature.rootMeanSquare, 0)
+        if let requiredCapturedRMS {
+            XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.rootMeanSquare, requiredCapturedRMS)
+        }
+        if let requiredCapturedLowRMS {
+            XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.lowBandRootMeanSquare, requiredCapturedLowRMS)
+        }
+        if let requiredCapturedMidRMS {
+            XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.midBandRootMeanSquare, requiredCapturedMidRMS)
+        }
+        if let requiredCapturedHighRMS {
+            XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.highBandRootMeanSquare, requiredCapturedHighRMS)
+        }
+        if let requiredCapturedZeroCrossingRate {
+            XCTAssertGreaterThanOrEqual(result.capturedAudioSummary.zeroCrossingRate, requiredCapturedZeroCrossingRate)
+        }
+        if let requiredBestTextureRMS {
+            XCTAssertGreaterThanOrEqual(result.bestAudioTextureWindow.summary.rootMeanSquare, requiredBestTextureRMS)
+        }
+        if let requiredBestTextureMidRMS {
+            XCTAssertGreaterThanOrEqual(result.bestAudioTextureWindow.summary.midBandRootMeanSquare, requiredBestTextureMidRMS)
+        }
+        if let requiredBestTextureHighRMS {
+            XCTAssertGreaterThanOrEqual(result.bestAudioTextureWindow.summary.highBandRootMeanSquare, requiredBestTextureHighRMS)
+        }
+        if let requiredBestTextureZeroCrossingRate {
+            XCTAssertGreaterThanOrEqual(result.bestAudioTextureWindow.summary.zeroCrossingRate, requiredBestTextureZeroCrossingRate)
+        }
     }
 
     func testResetClearsCompatibilityAudioAccumulator() {

@@ -45,6 +45,27 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertTrue(c64.iecBus.dataLine)
     }
 
+    func testCIA2PortAReadDiagnosticReportsIECBusSnapshot() {
+        let c64 = C64()
+        var observations: [(UInt8, IECBus.Snapshot)] = []
+        c64.onCIA2PortARead = { value, snapshot in
+            observations.append((value, snapshot))
+        }
+
+        c64.iecBus.driveClk = true
+        c64.iecBus.driveData = false
+
+        let value = c64.cia2.readRegister(0x00)
+
+        XCTAssertEqual(value, 0xBF)
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].0, 0xBF)
+        XCTAssertFalse(observations[0].1.clockLine)
+        XCTAssertTrue(observations[0].1.dataLine)
+        XCTAssertTrue(observations[0].1.driveClock)
+        XCTAssertFalse(observations[0].1.driveData)
+    }
+
     func testResetClearsVICIRQAndSIDVoiceState() {
         let c64 = C64()
         c64.vic.rasterLine = 0x0034

@@ -51,6 +51,76 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(drive.statusSnapshot.byteReady)
     }
 
+    func testIECBusOutputDiagnosticReportsVIA1OutputChanges() {
+        let drive = Drive1541()
+        let bus = IECBus()
+        drive.iecBus = bus
+        var observations: [(UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot)] = []
+        drive.onIECBusOutputChange = { cycle, pc, portB, ddrB, snapshot in
+            observations.append((cycle, pc, portB, ddrB, snapshot))
+        }
+
+        drive.via1.writeRegister(0x02, value: 0x0A)
+        drive.via1.writeRegister(0x00, value: 0x08)
+
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].2, 0x08)
+        XCTAssertEqual(observations[0].3, 0x0A)
+        XCTAssertFalse(observations[0].4.clockLine)
+        XCTAssertTrue(observations[0].4.driveClock)
+        XCTAssertFalse(observations[0].4.driveData)
+    }
+
+    func testVIA1PortBWriteDiagnosticReportsRepeatedWritesEvenWhenBusDoesNotChange() {
+        let drive = Drive1541()
+        let bus = IECBus()
+        drive.iecBus = bus
+        var observations: [(UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot?)] = []
+        drive.onVIA1PortBWrite = { cycle, pc, portB, ddrB, snapshot in
+            observations.append((cycle, pc, portB, ddrB, snapshot))
+        }
+
+        drive.via1.writeRegister(0x02, value: 0x1A)
+        drive.via1.writeRegister(0x00, value: 0x0A)
+        drive.via1.writeRegister(0x00, value: 0x0A)
+
+        XCTAssertEqual(observations.count, 3)
+        XCTAssertEqual(observations[0].3, 0x1A)
+        XCTAssertEqual(observations[1].2, 0x0A)
+        XCTAssertEqual(observations[2].2, 0x0A)
+        XCTAssertEqual(observations[2].3, 0x1A)
+        XCTAssertFalse(observations[2].4?.clockLine ?? true)
+        XCTAssertFalse(observations[2].4?.dataLine ?? true)
+    }
+
+    func testVIA2PortAReadDiagnosticReportsConsumedGCRByte() {
+        let drive = Drive1541()
+        var observations: [(UInt64, UInt16, UInt8, UInt64, Int, Int)] = []
+        drive.onVIA2PortARead = { cycle, pc, value, byteReadyCount, halfTrack, headBitPosition in
+            observations.append((cycle, pc, value, byteReadyCount, halfTrack, headBitPosition))
+        }
+
+        drive.via2.portAInput = 0xA5
+        drive.fireByteReady()
+        _ = drive.via2.readRegister(0x01)
+
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].2, 0xA5)
+        XCTAssertEqual(observations[0].3, 1)
+        XCTAssertEqual(observations[0].4, drive.halfTrack)
+        XCTAssertEqual(observations[0].5, drive.headBitPosition)
+    }
+
+    func testByteReadySODelayAdjustmentShiftsPulseTimingWithoutChangingDefault() {
+        let baseline = firstByteReadyCycle(adjustment: 0)
+        let earlier = firstByteReadyCycle(adjustment: -16)
+        let later = firstByteReadyCycle(adjustment: 16)
+
+        XCTAssertGreaterThan(baseline, 0)
+        XCTAssertLessThan(earlier, baseline)
+        XCTAssertGreaterThan(later, baseline)
+    }
+
     func testVIA2PortANoHandshakeReadDoesNotClearByteReady() {
         let drive = Drive1541()
 
@@ -1346,6 +1416,18 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertNil(c64.emulationStatus.lastFailureReason)
     }
 
+    func testC64EmulationStatusReportsFFFFVectorBounce() {
+        let c64 = C64()
+        for _ in 0..<10_050 {
+            c64.cpu.pc = 0xFFFF
+            c64.tickOneCycle()
+            c64.cpu.pc = 0x0002
+            c64.tickOneCycle()
+        }
+
+        XCTAssertEqual(c64.emulationStatus.lastFailureReason, "C64 PC bouncing between $FFFF and $0002")
+    }
+
     func testC64TypeTextQueuesCommandsLongerThanKeyboardBuffer() {
         let c64 = C64()
 
@@ -1936,6 +2018,80 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(sawEOFStatus, "Kernal serial status should report EOF after the directory stream")
     }
 
+    func testTrueDriveCommandChannelMemoryWriteViaBasicPrintNumberSign15() throws {
+        try requireSlowTrueDriveTests()
+        let c64 = try makeBootedTrueDriveC64WithMinimalD64()
+
+        c64.typeText("OPEN15,8,15\rPRINT#15,\"M-W\";CHR$(0);CHR$(4);CHR$(2);CHR$(186);CHR$(94)\r")
+
+        var sawCommandChannelSecondary = false
+        var sawMemoryWriteCommand = false
+        var sawMemoryWritePayload = false
+        var wroteMemory = false
+
+        for _ in 0..<12_000_000 {
+            c64.tickOneCycle()
+
+            sawCommandChannelSecondary = sawCommandChannelSecondary || c64.drive1541.decodedIECCommandBytes.contains(0x6F)
+            let data = c64.drive1541.decodedIECDataBytes
+            sawMemoryWriteCommand = sawMemoryWriteCommand || containsBytes(in: data, from: 0, to: data.count, Array("M-W".utf8))
+            sawMemoryWritePayload = sawMemoryWritePayload || containsBytes(in: data, from: 0, to: data.count, [0x00, 0x04, 0x02, 0xBA, 0x5E])
+
+            if c64.drive1541.memory.ram[0x0400] == 0xBA,
+               c64.drive1541.memory.ram[0x0401] == 0x5E {
+                wroteMemory = true
+                break
+            }
+        }
+
+        print(
+            "True-drive M-W diagnostic commandBytes=\(hexBytes(c64.drive1541.decodedIECCommandBytes)) " +
+            "dataBytes=\(hexBytes(c64.drive1541.decodedIECDataBytes)) " +
+            "ram0400=\(hexBytes(c64.drive1541.memory.ram[0x0400..<0x0408]))"
+        )
+        XCTAssertTrue(sawCommandChannelSecondary, "1541 should receive command-channel secondary address 15")
+        XCTAssertTrue(sawMemoryWriteCommand, "1541 should receive M-W command bytes over listener data")
+        XCTAssertTrue(sawMemoryWritePayload, "1541 should receive binary M-W address/count/data payload")
+        XCTAssertTrue(wroteMemory, "1541 ROM should apply M-W to drive RAM at $0400")
+    }
+
+    func testTrueDriveCommandChannelMemoryWriteExecutesWithoutCarriageReturnOnUnlisten() throws {
+        try requireSlowTrueDriveTests()
+        let c64 = try makeBootedTrueDriveC64WithMinimalD64()
+
+        c64.typeText("OPEN15,8,15\rPRINT#15,\"M-W\";CHR$(2);CHR$(4);CHR$(2);CHR$(202);CHR$(254);\r")
+
+        var sawCommandChannelSecondary = false
+        var sawMemoryWriteCommand = false
+        var sawMemoryWritePayload = false
+        var wroteMemory = false
+
+        for _ in 0..<12_000_000 {
+            c64.tickOneCycle()
+
+            sawCommandChannelSecondary = sawCommandChannelSecondary || c64.drive1541.decodedIECCommandBytes.contains(0x6F)
+            let data = c64.drive1541.decodedIECDataBytes
+            sawMemoryWriteCommand = sawMemoryWriteCommand || containsBytes(in: data, from: 0, to: data.count, Array("M-W".utf8))
+            sawMemoryWritePayload = sawMemoryWritePayload || containsBytes(in: data, from: 0, to: data.count, [0x02, 0x04, 0x02, 0xCA, 0xFE])
+
+            if c64.drive1541.memory.ram[0x0402] == 0xCA,
+               c64.drive1541.memory.ram[0x0403] == 0xFE {
+                wroteMemory = true
+                break
+            }
+        }
+
+        print(
+            "True-drive M-W no-CR diagnostic commandBytes=\(hexBytes(c64.drive1541.decodedIECCommandBytes)) " +
+            "dataBytes=\(hexBytes(c64.drive1541.decodedIECDataBytes)) " +
+            "ram0400=\(hexBytes(c64.drive1541.memory.ram[0x0400..<0x0408]))"
+        )
+        XCTAssertTrue(sawCommandChannelSecondary, "1541 should receive command-channel secondary address 15")
+        XCTAssertTrue(sawMemoryWriteCommand, "1541 should receive M-W command bytes over listener data")
+        XCTAssertTrue(sawMemoryWritePayload, "1541 should receive binary M-W address/count/data payload")
+        XCTAssertTrue(wroteMemory, "1541 ROM should execute unterminated M-W when the C64 sends UNLISTEN")
+    }
+
     func testTrueDriveD64PrgLoadUsesFileAddress() throws {
         try requireSlowTrueDriveTests()
         let c64 = try makeBootedTrueDriveC64WithMinimalD64()
@@ -2083,6 +2239,22 @@ final class Drive1541Tests: XCTestCase {
         prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
 
         XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+    }
+
+    func testCompatTrueDriveDoesNotTrapSubsequentNativeG64LoadAfterBootstrapTrap() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+        XCTAssertTrue(c64.mountDisk(makeMinimalG64(), fileName: "decoded-native.g64"))
+        XCTAssertTrue(c64.diskDrive.isMounted)
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasNativeLowLevelImage)
+
+        prepareKernalLoadTrap(c64, filename: "*", device: 8, secondary: 1)
+        XCTAssertTrue(c64.shouldUseKernalTrapAtCurrentInstruction())
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertEqual(c64.kernalTraps.handledLoadTrapCount, 1)
+
+        prepareKernalLoadTrap(c64, filename: "1", device: 8, secondary: 1)
+        XCTAssertFalse(c64.shouldUseKernalTrapAtCurrentInstruction())
     }
 
     func testStandardTrueDriveDoesNotTrapDecodedNativeG64Load() {
@@ -2245,6 +2417,19 @@ final class Drive1541Tests: XCTestCase {
             }
         }
         return bytes
+    }
+
+    private func firstByteReadyCycle(adjustment: Int) -> Int {
+        let drive = makeDriveWithTrack(bytes: [UInt8](repeating: 0x00, count: 128), speedZone: 2)
+        drive.byteReadySODelayAdjustment = adjustment
+        for cycle in 0..<2_000 {
+            drive.tickGCRHead()
+            if drive.statusSnapshot.byteReady {
+                return cycle
+            }
+        }
+        XCTFail("Timed out waiting for byte-ready pulse")
+        return -1
     }
 
     private func runWriteHead(_ drive: Drive1541, completeBytes: UInt64) {
