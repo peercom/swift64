@@ -197,6 +197,20 @@ final class G64ParserTests: XCTestCase {
         XCTAssertEqual(stats.duplicateSectorHeaderCount, 1)
     }
 
+    func testSyncLandmarksIdentifyHeaderAndDataBlocks() throws {
+        let trackData = buildGCRTrack(track: 18, sectors: [(3, buildBAMSector())])
+
+        let landmarks = G64Parser.syncLandmarks(from: trackData, track: 18)
+
+        let header = try XCTUnwrap(landmarks.first { $0.kind == .header })
+        XCTAssertEqual(header.track, 18)
+        XCTAssertEqual(header.sector, 3)
+        let data = try XCTUnwrap(landmarks.first { $0.kind == .data })
+        XCTAssertEqual(data.track, 18)
+        XCTAssertEqual(data.sector, 3)
+        XCTAssertLessThan(header.syncEndBit, data.syncEndBit)
+    }
+
     // MARK: - Test: Mount G64 via DiskDrive
 
     func testMountG64() {

@@ -2888,15 +2888,18 @@ public enum CompatibilityHash {
 
     public static func framebuffer(_ framebuffer: [UInt32], width: Int, height: Int) -> String {
         let pixelCount = min(framebuffer.count, max(0, width * height))
-        let bytes = framebuffer.prefix(pixelCount).flatMap { pixel in
-            [
-                UInt8(pixel & 0x000000FF),
-                UInt8((pixel & 0x0000FF00) >> 8),
-                UInt8((pixel & 0x00FF0000) >> 16),
-                UInt8((pixel & 0xFF000000) >> 24)
-            ]
+        var hash: UInt64 = 0xcbf29ce484222325
+        func mix(_ byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
         }
-        return fnv1a64(bytes)
+        for pixel in framebuffer.prefix(pixelCount) {
+            mix(UInt8(pixel & 0x000000FF))
+            mix(UInt8((pixel & 0x0000FF00) >> 8))
+            mix(UInt8((pixel & 0x00FF0000) >> 16))
+            mix(UInt8((pixel & 0xFF000000) >> 24))
+        }
+        return String(format: "%016llx", hash)
     }
 
     public static func vicRegisterSnapshot(_ registers: [UInt8]) -> String {

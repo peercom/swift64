@@ -4,6 +4,7 @@ import Emu6502
 
 final class Drive1541Tests: XCTestCase {
     private static let slowTrueDriveEnv = "SWIFT64_SLOW_TRUE_DRIVE_TESTS"
+    private static let typedLoadSmokeEnv = "SWIFT64_TYPED_LOAD_SMOKE_TESTS"
 
     func testDriveRAMMirrorsThroughAddressRangeBeforeVIAWindows() {
         let memory = DriveMemoryMap()
@@ -96,7 +97,7 @@ final class Drive1541Tests: XCTestCase {
     func testVIA2PortAReadDiagnosticReportsConsumedGCRByte() {
         let drive = Drive1541()
         var observations: [(UInt64, UInt16, UInt8, UInt64, Int, Int)] = []
-        drive.onVIA2PortARead = { cycle, pc, value, byteReadyCount, halfTrack, headBitPosition in
+        drive.onVIA2PortARead = { cycle, pc, value, byteReadyCount, halfTrack, headBitPosition, _, _ in
             observations.append((cycle, pc, value, byteReadyCount, halfTrack, headBitPosition))
         }
 
@@ -109,6 +110,22 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(observations[0].3, 1)
         XCTAssertEqual(observations[0].4, drive.halfTrack)
         XCTAssertEqual(observations[0].5, drive.headBitPosition)
+    }
+
+    func testVIA2PortAReadDiagnosticReportsPresentedSourceBits() {
+        let drive = makeDriveWithTrack(bytes: [0x12, 0x34, 0x56, 0x78])
+        var observations: [(UInt8, Int, Int)] = []
+        drive.onVIA2PortARead = { _, _, value, _, _, _, sourceStartBit, sourceEndBit in
+            observations.append((value, sourceStartBit, sourceEndBit))
+        }
+
+        let bytes = readPresentedGCRBytes(from: drive, count: 1)
+
+        XCTAssertEqual(bytes, [0x12])
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].0, 0x12)
+        XCTAssertEqual(observations[0].1, 0)
+        XCTAssertEqual(observations[0].2, 7)
     }
 
     func testByteReadySODelayAdjustmentShiftsPulseTimingWithoutChangingDefault() {
@@ -475,6 +492,36 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertEqual(drive.soDelay, 0)
         XCTAssertTrue(drive.via2.ca1)
         XCTAssertEqual(drive.via2.readRegister(0x00) & 0x80, 0x80)
+    }
+
+    func testStepperMotionPreservesAngularPositionAcrossDifferentTrackLengths() {
+        let drive = Drive1541()
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[36] = DiskImage.Track(
+            halfTrack: 36,
+            bytes: [UInt8](repeating: 0x00, count: 10),
+            bitLength: 80,
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        tracks[37] = DiskImage.Track(
+            halfTrack: 37,
+            bytes: [UInt8](repeating: 0x00, count: 20),
+            bitLength: 160,
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: 20)))
+        drive.halfTrack = 36
+        drive.headBitPosition = 20
+        drive.stepperPhase = 0
+        drive.motorOn = true
+
+        drive.via2.portB = 0x05
+        drive.updateMotorAndStepper()
+
+        XCTAssertEqual(drive.statusSnapshot.halfTrack, 37)
+        XCTAssertEqual(drive.statusSnapshot.headBitPosition, 40)
     }
 
     func testInsertDiskRefreshesVIA2WriteProtectAndSyncInputs() {
@@ -872,6 +919,54 @@ final class Drive1541Tests: XCTestCase {
         ])
     }
 
+    func testStepperMotionSplicesActiveGCRWriteGateAtOldAngleAcrossDifferentTrackLengths() {
+        let drive = Drive1541()
+        var tracks = [DiskImage.Track?](repeating: nil, count: GCRDisk.maxHalfTracks)
+        tracks[36] = DiskImage.Track(
+            halfTrack: 36,
+            bytes: [UInt8](repeating: 0x00, count: 10),
+            bitLength: 80,
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        tracks[37] = DiskImage.Track(
+            halfTrack: 37,
+            bytes: [UInt8](repeating: 0x00, count: 20),
+            bitLength: 160,
+            speedZone: 2,
+            isNativeLowLevel: true
+        )
+        XCTAssertTrue(drive.insertDiskImage(DiskImage(format: .g64, tracks: tracks, maxTrackSize: 20)))
+        drive.setWriteProtected(false)
+        drive.halfTrack = 36
+        drive.headBitPosition = 24
+        drive.stepperPhase = 0
+        drive.motorOn = true
+        drive.via2.writeRegister(0x03, value: 0xFF)
+
+        drive.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(drive, completeBytes: 1)
+
+        XCTAssertEqual(drive.statusSnapshot.headBitPosition, 32)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 8, endBit: 23),
+        ])
+
+        drive.via2.portB = 0x05
+        drive.updateMotorAndStepper()
+
+        XCTAssertEqual(drive.statusSnapshot.halfTrack, 37)
+        XCTAssertEqual(drive.statusSnapshot.headBitPosition, 64)
+        XCTAssertEqual(drive.statusSnapshot.gcrWriteSpliceCount, 3)
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 8, endBit: 23),
+            DiskImage.Track.WeakBitRange(startBit: 32, endBit: 47),
+        ])
+        XCTAssertEqual(drive.disk.trackInfo(halfTrack: 37)?.weakBitRanges, [
+            DiskImage.Track.WeakBitRange(startBit: 48, endBit: 63),
+        ])
+    }
+
     func testVIA2PortADirectionChangeClosesWriteGateEvenWhenOutputValueIsUnchanged() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x00, count: 8))))
@@ -1165,6 +1260,29 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(c64.emulationStatus.diskHasUnsavedChanges)
     }
 
+    func testC64MarkExportedG64ImageSavedRejectsNonG64LowLevelChanges() throws {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(), fileName: "disk.d64"))
+        c64.setMountedDiskWriteProtected(false)
+        c64.drive1541.halfTrack = 0
+        c64.drive1541.headBitPosition = 0
+        c64.drive1541.motorOn = true
+        c64.drive1541.via2.writeRegister(0x03, value: 0xFF)
+
+        c64.drive1541.via2.writeRegister(0x01, value: 0xA5)
+        runWriteHead(c64.drive1541, completeBytes: 1)
+
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertFalse(c64.emulationStatus.canExportModifiedG64)
+        XCTAssertNil(c64.exportedG64Image)
+
+        XCTAssertFalse(c64.markExportedG64ImageSaved())
+
+        XCTAssertTrue(c64.drive1541.disk.hasUnsavedLowLevelWrites)
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+    }
+
     func testVIA2PortAWriteHonorsWriteProtectAndMotorGate() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x00, 0x11, 0x22, 0x33])))
@@ -1392,6 +1510,30 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(status.drive.mediaChanged)
         XCTAssertEqual(status.drive.mediaChangeCount, generation + 1)
         XCTAssertNil(status.lastFailureReason)
+    }
+
+    func testC64MountDiskClearsHighLevelSessionStateButKeepsDriveMemory() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(), fileName: "first.d64"))
+
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 2, filename: "#"))
+        XCTAssertTrue(c64.diskDrive.writeByte(channel: 2, byte: 0xDE))
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "M-W:$0400,1,$7F"))
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "M-E:$0400"))
+        XCTAssertEqual(c64.diskDrive.lastMemoryExecuteAddress, 0x0400)
+        XCTAssertEqual(c64.emulationStatus.highLevelDriveExecuteAddress, 0x0400)
+
+        XCTAssertTrue(c64.mountDisk(makeMinimalD64(), fileName: "second.d64"))
+
+        XCTAssertEqual(c64.emulationStatus.mountedDiskName, "second.d64")
+        XCTAssertNil(c64.diskDrive.lastMemoryExecuteAddress)
+        XCTAssertNil(c64.emulationStatus.highLevelDriveExecuteAddress)
+        XCTAssertTrue(c64.diskDrive.readByte(channel: 2).eof)
+        XCTAssertTrue(c64.diskDrive.openFile(channel: 15, filename: "M-R:$0400,1"))
+        XCTAssertEqual(c64.diskDrive.readByte(channel: 15).byte, 0x7F)
+        XCTAssertEqual(c64.diskDrive.currentCommandStatus, "00, OK,00,00\r")
+        XCTAssertTrue(c64.drive1541.statusSnapshot.hasDisk)
+        XCTAssertEqual(c64.emulationStatus.mountedDiskFormat, .d64)
     }
 
     func testC64EmulationStatusReportsFFFFHang() {
@@ -2271,6 +2413,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTypedFastLoadWildcardD64ReachesKernalTrap() throws {
+        try requireTypedLoadSmokeTests()
         let c64 = C64()
         try loadBundledROMs(into: c64)
         c64.trueDriveEmulationMode = .off
@@ -2290,6 +2433,7 @@ final class Drive1541Tests: XCTestCase {
     }
 
     func testTypedCompatTrueDriveWildcardD64ReachesCompatibilityTrap() throws {
+        try requireTypedLoadSmokeTests()
         let c64 = C64()
         try loadBundledROMs(into: c64)
         c64.trueDriveEmulationMode = .compat1541
@@ -2354,6 +2498,12 @@ final class Drive1541Tests: XCTestCase {
     private func requireSlowTrueDriveTests() throws {
         guard ProcessInfo.processInfo.environment[Self.slowTrueDriveEnv] == "1" else {
             throw XCTSkip("Set \(Self.slowTrueDriveEnv)=1 to run slow true-drive serial load milestones")
+        }
+    }
+
+    private func requireTypedLoadSmokeTests() throws {
+        guard ProcessInfo.processInfo.environment[Self.typedLoadSmokeEnv] == "1" else {
+            throw XCTSkip("Set \(Self.typedLoadSmokeEnv)=1 to run typed LOAD smoke milestones")
         }
     }
 

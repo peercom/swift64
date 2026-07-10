@@ -357,6 +357,11 @@ public final class VIC {
     /// RGBA framebuffer (width × height × 4 bytes)
     public var framebuffer: [UInt32]
     public var frameReady: Bool = false
+    private var graphicsLineScratch = [UInt32](repeating: 0, count: VIC.screenWidth)
+    private var foregroundMaskScratch = [Bool](repeating: false, count: VIC.screenWidth)
+    private var backgroundColorSourceScratch = [Int8](repeating: -1, count: VIC.screenWidth)
+    private var finalLineScratch = [UInt32](repeating: 0, count: VIC.screenWidth)
+    private var spriteForegroundMaskScratch = [Bool](repeating: false, count: VIC.screenWidth)
 
     // MARK: - Memory access callback
 
@@ -611,6 +616,12 @@ public final class VIC {
     }
 
     func clearRasterTrace() {
+        if !rasterTraceHasSamples && !spriteTraceHasSamples {
+            rasterTraceLine = nil
+            rasterTraceHasDisplayOpen = false
+            spriteTraceLine = nil
+            return
+        }
         rasterTraceLine = nil
         rasterTraceHasSamples = false
         rasterTraceHasDisplayOpen = false
@@ -1108,7 +1119,6 @@ public final class VIC {
         let fbY = Int(rasterLine) - VIC.firstVisibleLine
         guard fbY >= 0 && fbY < VIC.screenHeight else { return }
 
-        let borderCol = ColorPalette.rgba[Int(borderColor & 0x0F)]
         let bgCol = ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)]
         let lineOffset = fbY * VIC.screenWidth
 
@@ -1121,10 +1131,12 @@ public final class VIC {
         let lineInDisplay = Int(rasterLine) >= topBorder && Int(rasterLine) < bottomBorder
         let graphicsY = Int(rasterLine) - VIC.displayTop
 
-        // Render character/bitmap graphics for this line
-        var graphicsLine = [UInt32](repeating: bgCol, count: VIC.screenWidth)
-        var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
-        var backgroundColorSource = [Int8](repeating: -1, count: VIC.screenWidth)
+        // Render character/bitmap graphics for this line.
+        for px in 0..<VIC.screenWidth {
+            graphicsLineScratch[px] = bgCol
+            foregroundMaskScratch[px] = false
+            backgroundColorSourceScratch[px] = -1
+        }
 
         let useRasterTrace = rasterTraceHasSamples && rasterTraceLine == rasterLine
         if ((lineInDisplay && displayActive && displayEnabled) || (useRasterTrace && rasterTraceHasDisplayOpen)) && graphicsY >= 0 {
@@ -1133,22 +1145,21 @@ public final class VIC {
             let pixelRow = hasAnyLatchedMatrixColumn(rowBase: rowBase) ? rowCounter & 0x07 : graphicsY % 8
 
             renderGraphicsLine(
-                &graphicsLine,
-                foregroundMask: &foregroundMask,
+                &graphicsLineScratch,
+                foregroundMask: &foregroundMaskScratch,
                 charRow: charRow,
                 pixelRow: pixelRow,
                 leftBorder: VIC.displayLeft,
                 rightBorder: rightBorder,
                 markBackgroundPixel: { pixel, backgroundIndex in
                     guard pixel >= 0 && pixel < VIC.screenWidth else { return }
-                    backgroundColorSource[pixel] = Int8(backgroundIndex)
+                    self.backgroundColorSourceScratch[pixel] = Int8(backgroundIndex)
                 }
             )
         }
 
         // Compose final line with borders, then draw sprites over it. C64 sprites
         // can appear in the border while still colliding with display graphics.
-        var finalLine = [UInt32](repeating: borderCol, count: VIC.screenWidth)
         for px in 0..<VIC.screenWidth {
             let traceValid = useRasterTrace && rasterTraceValid[px]
             let fallbackDisplayOpen = lineInDisplay
@@ -1161,19 +1172,18 @@ public final class VIC {
                 : fallbackDisplayOpen
 
             if displayOpen {
-                let backgroundIndex = Int(backgroundColorSource[px])
+                let backgroundIndex = Int(backgroundColorSourceScratch[px])
                 if traceValid && backgroundIndex >= 0 {
-                    finalLine[px] = ColorPalette.rgba[Int(rasterTraceBackgroundColor(backgroundIndex, pixel: px) & 0x0F)]
+                    finalLineScratch[px] = ColorPalette.rgba[Int(rasterTraceBackgroundColor(backgroundIndex, pixel: px) & 0x0F)]
                 } else {
-                    finalLine[px] = graphicsLine[px]
+                    finalLineScratch[px] = graphicsLineScratch[px]
                 }
             } else {
                 let color = traceValid ? rasterTraceBorderColor[px] : borderColor
-                finalLine[px] = ColorPalette.rgba[Int(color & 0x0F)]
+                finalLineScratch[px] = ColorPalette.rgba[Int(color & 0x0F)]
             }
         }
 
-        var spriteForegroundMask = foregroundMask
         for px in 0..<VIC.screenWidth {
             let traceValid = useRasterTrace && rasterTraceValid[px]
             let fallbackDisplayOpen = lineInDisplay
@@ -1184,19 +1194,17 @@ public final class VIC {
             let displayOpen = traceValid
                 ? rasterTraceDisplayOpen[px]
                 : fallbackDisplayOpen
-            if !displayOpen {
-                spriteForegroundMask[px] = false
-            }
+            spriteForegroundMaskScratch[px] = displayOpen ? foregroundMaskScratch[px] : false
         }
 
         if useRasterTrace && spriteTraceHasSamples && spriteTraceLine == rasterLine {
-            applySpriteTrace(&finalLine)
+            applySpriteTrace(&finalLineScratch)
         } else {
-            renderSprites(&finalLine, fbY: fbY, foregroundMask: spriteForegroundMask)
+            renderSprites(&finalLineScratch, fbY: fbY, foregroundMask: spriteForegroundMaskScratch)
         }
 
         for px in 0..<VIC.screenWidth {
-            framebuffer[lineOffset + px] = finalLine[px]
+            framebuffer[lineOffset + px] = finalLineScratch[px]
         }
 
         // Update video counter at end of display line

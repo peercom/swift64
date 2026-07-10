@@ -16,9 +16,13 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.driveROMPath) private var driveROMPath = ""
     @AppStorage(PreferenceKey.crtShaderEnabled) private var crtShaderEnabled = false
     @AppStorage(PreferenceKey.crtShaderIntensity) private var crtShaderIntensity = 0.65
+    @AppStorage(PreferenceKey.showInspector) private var showInspector = false
+    @AppStorage(PreferenceKey.showStatusBar) private var showStatusBar = true
+    @AppStorage(PreferenceKey.romAssistantDismissed) private var romAssistantDismissed = false
+    @State private var selectedTab = "general"
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             Form {
                 Section("Presets") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 10)], spacing: 10) {
@@ -100,11 +104,12 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem {
-                Label("Emulation", systemImage: "slider.horizontal.3")
+                Label("General", systemImage: "slider.horizontal.3")
             }
+            .tag("general")
 
             Form {
-                Section("C64 ROMs") {
+                Section("Required C64 ROMs") {
                     ROMPathRow(title: "BASIC", path: $basicROMPath, bookmarkKey: PreferenceKey.basicROMBookmark, importedPathKey: PreferenceKey.basicROMImportedPath, storedFileName: "basic.rom") {
                         emulator.romStatusMessage = $0
                     }
@@ -120,6 +125,11 @@ struct SettingsView: View {
                     ROMPathRow(title: "1541 Drive", path: $driveROMPath, bookmarkKey: PreferenceKey.driveROMBookmark, importedPathKey: PreferenceKey.driveROMImportedPath, storedFileName: "1541.rom") {
                         emulator.romStatusMessage = $0
                     }
+                }
+
+                Section("Status") {
+                    Label(emulator.romSetupState.summary, systemImage: emulator.romSetupState.isComplete ? "checkmark.circle" : "exclamationmark.triangle")
+                        .foregroundStyle(emulator.romSetupState.isComplete ? Color.secondary : Color.orange)
                 }
 
                 Section {
@@ -149,6 +159,7 @@ struct SettingsView: View {
             .tabItem {
                 Label("ROMs", systemImage: "folder")
             }
+            .tag("roms")
 
             Form {
                 Section("CRT") {
@@ -162,6 +173,14 @@ struct SettingsView: View {
                             .frame(width: 44, alignment: .trailing)
                     }
                     .disabled(!crtShaderEnabled)
+                }
+
+                Section("Window") {
+                    Toggle("Show Bottom Status Bar", isOn: $showStatusBar)
+                    Toggle("Show Inspector by Default", isOn: $showInspector)
+                    Text("Full screen always hides app chrome and inspector for a real C64 display feel.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -180,6 +199,30 @@ struct SettingsView: View {
             .tabItem {
                 Label("Display", systemImage: "display")
             }
+            .tag("display")
+
+            Form {
+                Section("ROM Assistant") {
+                    Toggle("Do Not Show Automatically", isOn: $romAssistantDismissed)
+                    Button {
+                        romAssistantDismissed = false
+                    } label: {
+                        Label("Show ROM Setup on Next Check", systemImage: "folder.badge.gearshape")
+                    }
+                }
+
+                Section("Diagnostics") {
+                    LabeledContent("Mounted Disk", value: emulator.mediaSummary.disk)
+                    LabeledContent("Mounted Tape", value: emulator.mediaSummary.tape)
+                    LabeledContent("Cartridge", value: emulator.mediaSummary.cartridge)
+                    LabeledContent("Unsaved Media", value: emulator.mediaSummary.hasUnsavedChanges ? "yes" : "no")
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("Advanced", systemImage: "wrench.and.screwdriver")
+            }
+            .tag("advanced")
         }
         .frame(width: 740, height: 520)
         .scenePadding()

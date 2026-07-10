@@ -21,6 +21,9 @@ enum PreferenceKey {
     static let driveROMImportedPath = "c64.rom.drive1541ImportedPath"
     static let crtShaderEnabled = "c64.display.crtShaderEnabled"
     static let crtShaderIntensity = "c64.display.crtShaderIntensity"
+    static let showInspector = "c64.ui.showInspector"
+    static let showStatusBar = "c64.ui.showStatusBar"
+    static let romAssistantDismissed = "c64.ui.romAssistantDismissed"
 }
 
 enum ROMFileStore {

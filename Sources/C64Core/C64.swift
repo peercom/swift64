@@ -47,6 +47,7 @@ public final class C64 {
         public let highLevelDiskFormat: DiskImage.Format?
         public let diskHasUnsavedChanges: Bool
         public let highLevelDiskWriteProtected: Bool
+        public let highLevelDriveExecuteAddress: UInt16?
         public let canExportModifiedD64: Bool
         public let canExportModifiedG64: Bool
         public let d64ExportBlockedByLowLevelWrites: Bool
@@ -507,6 +508,7 @@ public final class C64 {
                 || drive1541.disk.hasUnsavedLowLevelWrites
                 || drive1541.hasPendingGCRWriteGateSplice,
             highLevelDiskWriteProtected: diskDrive.isWriteProtected,
+            highLevelDriveExecuteAddress: diskDrive.lastMemoryExecuteAddress.map { UInt16(truncatingIfNeeded: $0) },
             canExportModifiedD64: canExportD64Image,
             canExportModifiedG64: drive1541.disk.exportedG64Image != nil,
             d64ExportBlockedByLowLevelWrites: d64ExportBlockedByLowLevelWrites,
@@ -861,8 +863,10 @@ public final class C64 {
 
         // At instruction boundaries: trace, check traps and breakpoints
         if !cpuStalledByVIC && cpu.cycle == 0 {
-            debugger.traceInstruction()
-            if !debugger.checkBreakpoint() { return }
+            if debugger.hasBoundaryWork {
+                debugger.traceInstruction()
+                if !debugger.checkBreakpoint() { return }
+            }
             if shouldUseKernalTrapAtCurrentInstruction() {
                 _ = kernalTraps.checkTrap()
             }

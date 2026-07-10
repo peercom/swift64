@@ -143,6 +143,10 @@ public final class Drive1541 {
     /// Bytes consumed from VIA2 Port A by the 1541 ROM read path.
     public private(set) var via2PortAReadBytes: [UInt8] = []
 
+    /// Source bit window for the byte currently presented on VIA2 Port A.
+    public private(set) var presentedGCRByteStartBit: Int = 0
+    public private(set) var presentedGCRByteEndBit: Int = 0
+
     /// Total SYNC detections since power-on/reset.
     public private(set) var syncDetectionCount: UInt64 = 0
 
@@ -200,7 +204,7 @@ public final class Drive1541 {
     public var onVIA1PortBWrite: ((UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot?) -> Void)?
 
     /// Optional diagnostic hook fired when the 1541 CPU reads the GCR data register.
-    public var onVIA2PortARead: ((UInt64, UInt16, UInt8, UInt64, Int, Int) -> Void)?
+    public var onVIA2PortARead: ((UInt64, UInt16, UInt8, UInt64, Int, Int, Int, Int) -> Void)?
 
     /// IEC trace log counter (limits output)
     var iecTraceLog: Int = 0
@@ -234,7 +238,7 @@ public final class Drive1541 {
 
         // VIA1 PB write → immediately push new output to bus
         via1.onPortBWrite = { [weak self] in
-            if let pc = self?.cpu.pc {
+            if C64Trace.isEnabled(.drive), let pc = self?.cpu.pc {
                 let pbVal = self?.via1.portB ?? 0
                 self?.driveLog("[DRV-VIA1] onPortBWrite PC=$\(String(format:"%04X", pc)) PB=$\(String(format:"%02X", pbVal))")
                 if pbVal == 0x10 {
@@ -279,7 +283,9 @@ public final class Drive1541 {
                 s.via2.portAInput,
                 s.byteReadyCount,
                 s.halfTrack,
-                s.headBitPosition
+                s.headBitPosition,
+                s.presentedGCRByteStartBit,
+                s.presentedGCRByteEndBit
             )
             s.byteReadyLevel = false
             s.byteReadyEdge = false
@@ -425,7 +431,8 @@ public final class Drive1541 {
 
     @discardableResult
     public func markExportedG64ImageSaved() -> Bool {
-        guard !previousGCRWriteGateActive else {
+        guard !previousGCRWriteGateActive,
+              disk.exportedG64Image != nil else {
             return false
         }
         disk.markLowLevelWritesSaved()
@@ -621,6 +628,8 @@ public final class Drive1541 {
         byteReadyCount = 0
         via2PortAReadCount = 0
         via2PortAReadBytes.removeAll(keepingCapacity: true)
+        presentedGCRByteStartBit = 0
+        presentedGCRByteEndBit = 0
         syncDetectionCount = 0
         weakBitReadCount = 0
         lastWeakBitHalfTrack = nil
@@ -655,6 +664,8 @@ public final class Drive1541 {
         byteReadyEdge = false
         byteReadyLevel = false
         soDelay = 0
+        presentedGCRByteStartBit = 0
+        presentedGCRByteEndBit = 0
         via2.ca1 = true
         gcrWriteBitOffset = 0
         gcrWriteFreshBitsRemaining = 0
@@ -668,6 +679,8 @@ public final class Drive1541 {
         byteReadyEdge = false
         byteReadyLevel = false
         soDelay = 0
+        presentedGCRByteStartBit = 0
+        presentedGCRByteEndBit = 0
         via2.portAInput = 0x00
         via2.ca1 = true
         updateVIA2Inputs()
@@ -677,16 +690,14 @@ public final class Drive1541 {
 
     var debugLogCount = 0
     public func tick() {
-        debugLogCount += 1
-        if debugLogCount % 200000 == 0 {
-            driveLog("[1541] PC=$\(String(cpu.pc, radix: 16, uppercase: true)) flags=$\(String(cpu.p, radix: 16)) A=$\(String(cpu.a, radix: 16)) X=$\(String(cpu.x, radix: 16)) Y=$\(String(cpu.y, radix: 16))")
-        }
         guard enabled else { return }
 
         debugCycleCount += 1
+        let driveTraceEnabled = C64Trace.isEnabled(.drive)
+        let iecTraceEnabled = driveTraceEnabled && iecTraceLog < 500
 
         // Log key serial bus events in the drive
-        if cpu.cycle == 0 {
+        if driveTraceEnabled && cpu.cycle == 0 {
             let pc = cpu.pc
             // Log all instruction executions in the ATN handler range ($E850-$E910)
             if pc >= 0xE850 && pc <= 0xE910 && drvPCLog < 500 {
@@ -708,16 +719,16 @@ public final class Drive1541 {
         }
 
         // --- IEC bus trace: capture state before updates ---
-        let prevCA1 = via1.ca1
-        let prevIRQ = cpu.irqLine
-        let prevVIA1PB = via1.portB
-        let prevVIA1DDRB = via1.ddrb
+        let prevCA1 = iecTraceEnabled ? via1.ca1 : false
+        let prevIRQ = iecTraceEnabled ? cpu.irqLine : false
+        let prevVIA1PB = iecTraceEnabled ? via1.portB : 0
+        let prevVIA1DDRB = iecTraceEnabled ? via1.ddrb : 0
 
         // Update IEC bus → VIA1 inputs
         updateVIA1FromBus()
 
         // Log CA1 state change (ATN edge at drive)
-        if via1.ca1 != prevCA1 && iecTraceLog < 500 {
+        if iecTraceEnabled && via1.ca1 != prevCA1 {
             iecTraceLog += 1
             driveLog("[IEC-TRACE] @\(debugCycleCount) CA1: \(prevCA1)→\(via1.ca1) (atnLine=\(iecBus?.atnLine ?? true)) VIA1: PCR=$\(String(format:"%02X",via1.pcr)) IER=$\(String(format:"%02X",via1.ier)) IFR=$\(String(format:"%02X",via1.ifr)) ca1_int_enabled=\(via1.ier & VIA6522.IRQ.ca1 != 0)")
         }
@@ -727,7 +738,7 @@ public final class Drive1541 {
         via2.tick()
 
         // Log if IRQ line changed after VIA tick
-        if cpu.irqLine != prevIRQ && iecTraceLog < 500 {
+        if iecTraceEnabled && cpu.irqLine != prevIRQ {
             iecTraceLog += 1
             driveLog("[IEC-TRACE] @\(debugCycleCount) IRQ: \(prevIRQ)→\(cpu.irqLine) PC=$\(String(format:"%04X",cpu.pc)) cycle=\(cpu.cycle) VIA1.IFR=$\(String(format:"%02X",via1.ifr)) VIA2.IFR=$\(String(format:"%02X",via2.ifr))")
         }
@@ -736,7 +747,7 @@ public final class Drive1541 {
         updateBusFromVIA1()
 
         // Log if drive changed its bus output
-        if (via1.portB != prevVIA1PB || via1.ddrb != prevVIA1DDRB) && iecTraceLog < 500 {
+        if iecTraceEnabled && (via1.portB != prevVIA1PB || via1.ddrb != prevVIA1DDRB) {
             let driven = via1.portB & via1.ddrb
             let prevDriven = prevVIA1PB & prevVIA1DDRB
             if driven != prevDriven {
@@ -794,11 +805,15 @@ public final class Drive1541 {
     /// Push VIA1 output state to the IEC bus.
     func updateBusFromVIA1() {
         guard let bus = iecBus else { return }
-        let previous = bus.snapshot
-        bus.updateFromDrive(portB: via1.portB, ddrb: via1.ddrb)
-        let current = bus.snapshot
-        if current != previous {
-            onIECBusOutputChange?(debugCycleCount, cpu.pc, via1.portB, via1.ddrb, current)
+        if let onIECBusOutputChange {
+            let previous = bus.snapshot
+            bus.updateFromDrive(portB: via1.portB, ddrb: via1.ddrb)
+            let current = bus.snapshot
+            if current != previous {
+                onIECBusOutputChange(debugCycleCount, cpu.pc, via1.portB, via1.ddrb, current)
+            }
+        } else {
+            bus.updateFromDrive(portB: via1.portB, ddrb: via1.ddrb)
         }
     }
 
@@ -839,14 +854,20 @@ public final class Drive1541 {
             let delta = (newPhase - stepperPhase + 4) % 4
             let oldTrack = track
             let oldHalfTrack = halfTrack
+            let oldResolvedTrack = resolvedReadTrack(forHalfTrack: oldHalfTrack)
+            let oldHeadBitPosition = headBitPosition
             if delta == 1 {
                 if halfTrack < GCRDisk.maxHalfTracks - 1 { halfTrack += 1 }
             } else if delta == 3 {
                 if halfTrack > 0 { halfTrack -= 1 }
             }
             if halfTrack != oldHalfTrack {
+                preserveHeadAngleAfterStep(from: oldResolvedTrack, to: resolvedReadTrack(forHalfTrack: halfTrack))
                 if previousGCRWriteGateActive {
-                    closeGCRWriteGateIfActive(forHalfTrack: oldHalfTrack)
+                    closeGCRWriteGateIfActive(
+                        forHalfTrack: oldHalfTrack,
+                        atBitPosition: oldHeadBitPosition
+                    )
                     updateGCRWriteGateSpliceState()
                 } else {
                     clearGCRReadPresentation()
@@ -860,6 +881,27 @@ public final class Drive1541 {
                 C64Trace.log(.gcr, "[GCR-STEP] @\(debugCycleCount) halfTrack=\(halfTrack) track=\(track) phase=\(stepperPhase)->\(newPhase)")
             }
             stepperPhase = newPhase
+        }
+    }
+
+    private func preserveHeadAngleAfterStep(
+        from oldTrack: (halfTrack: Int, bytes: [UInt8], info: DiskImage.Track?)?,
+        to newTrack: (halfTrack: Int, bytes: [UInt8], info: DiskImage.Track?)?
+    ) {
+        guard let oldTrack, let newTrack else { return }
+        let oldBits = oldTrack.info?.bitLength ?? oldTrack.bytes.count * 8
+        let newBits = newTrack.info?.bitLength ?? newTrack.bytes.count * 8
+        guard oldBits > 0, newBits > 0 else { return }
+
+        let oldPosition = ((headBitPosition % oldBits) + oldBits) % oldBits
+        if oldBits == newBits {
+            headBitPosition = oldPosition
+            return
+        }
+
+        headBitPosition = (oldPosition * newBits + oldBits / 2) / oldBits
+        if headBitPosition >= newBits {
+            headBitPosition = 0
         }
     }
 
@@ -984,6 +1026,8 @@ public final class Drive1541 {
                             bitCounter = 0
 
                             // Complete byte: present lower 8 bits to VIA2 PA
+                            presentedGCRByteStartBit = ((headBitPosition - 8) % totalBits + totalBits) % totalBits
+                            presentedGCRByteEndBit = ((headBitPosition - 1) % totalBits + totalBits) % totalBits
                             via2.portAInput = UInt8(shiftRegister & 0xFF)
 
                             // Schedule byte-ready with SO delay (aligned to 16-cycle boundary)
@@ -1016,18 +1060,27 @@ public final class Drive1541 {
         }
     }
 
-    private func closeGCRWriteGateIfActive(forHalfTrack halfTrack: Int? = nil) {
+    private func closeGCRWriteGateIfActive(forHalfTrack halfTrack: Int? = nil, atBitPosition bitPosition: Int? = nil) {
         guard previousGCRWriteGateActive else { return }
-        markGCRWriteSplice(startBitOffset: 0, forHalfTrack: halfTrack ?? self.halfTrack)
+        markGCRWriteSplice(
+            startBitOffset: 0,
+            forHalfTrack: halfTrack ?? self.halfTrack,
+            atBitPosition: bitPosition ?? headBitPosition
+        )
         previousGCRWriteGateActive = false
     }
 
-    private func markGCRWriteSplice(startBitOffset: Int, forHalfTrack halfTrack: Int? = nil) {
+    private func markGCRWriteSplice(
+        startBitOffset: Int,
+        forHalfTrack halfTrack: Int? = nil,
+        atBitPosition bitPosition: Int? = nil
+    ) {
         guard let target = resolvedWritableTrack(forHalfTrack: halfTrack ?? self.halfTrack) else { return }
         let totalBits = target.info?.bitLength ?? target.bytes.count * 8
         guard totalBits > 0 else { return }
 
-        let startBit = ((headBitPosition + startBitOffset) % totalBits + totalBits) % totalBits
+        let currentBitPosition = bitPosition ?? headBitPosition
+        let startBit = ((currentBitPosition + startBitOffset) % totalBits + totalBits) % totalBits
         guard disk.addWeakBitRange(
             startBit: startBit,
             bitCount: Self.writeSpliceBitCount,
@@ -1217,8 +1270,8 @@ public final class Drive1541 {
         cpu.irqLine = (via1.ifr & VIA6522.IRQ.any != 0) || (via2.ifr & VIA6522.IRQ.any != 0)
     }
 
-    func driveLog(_ msg: String) {
-        C64Trace.log(.drive, msg)
+    func driveLog(_ msg: @autoclosure () -> String) {
+        C64Trace.log(.drive, msg())
     }
 }
 

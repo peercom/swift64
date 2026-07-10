@@ -53,6 +53,12 @@ public final class Debugger {
     /// Whether CPU tracing is enabled.
     public var traceEnabled: Bool = false
 
+    /// True when the CPU boundary needs debugger work. This avoids calling into
+    /// trace/breakpoint handlers on every instruction during normal playback.
+    var hasBoundaryWork: Bool {
+        traceEnabled || singleStepping || !breakpoints.isEmpty
+    }
+
     /// Maximum number of trace lines to keep in the ring buffer (0 = file only).
     public var traceBufferSize: Int = 10_000
 

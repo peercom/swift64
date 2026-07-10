@@ -16,6 +16,14 @@ final class LocalDiskMatrixTests: XCTestCase {
         let pc: UInt16
         let address: UInt16
         let value: UInt8
+        let precedingRead: CPUReadObservation?
+    }
+
+    private struct CPUReadObservation {
+        let cycle: UInt64
+        let pc: UInt16
+        let address: UInt16
+        let value: UInt8
     }
 
     private struct CIA2PortAReadObservation {
@@ -48,6 +56,8 @@ final class LocalDiskMatrixTests: XCTestCase {
         let byteReadyCount: UInt64
         let halfTrack: Int
         let headBitPosition: Int
+        let presentedStartBit: Int
+        let presentedEndBit: Int
     }
 
     private let matrixEnv = "SWIFT64_LOCAL_DISK_MATRIX"
@@ -1653,11 +1663,18 @@ final class LocalDiskMatrixTests: XCTestCase {
         let c64 = C64(machineProfile: .palC64)
         try loadBundledROMs(into: c64)
         c64.trueDriveEmulationMode = gianaTrueDriveMode()
+        if let phaseText = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_DRIVE_CLOCK_PHASE"],
+           let phase = Double(phaseText) {
+            c64.driveClockAccumulator = max(0, min(0.999_999, phase))
+        }
         c64.drive1541.byteReadySODelayAdjustment =
             Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_BYTE_READY_SO_DELAY_ADJUSTMENT"] ?? "") ?? 0
         applyLocalSIDOverrides(to: c64)
         XCTAssertTrue(c64.mountDisk(giana), "Failed to mount \(giana.path)")
         c64.powerOn()
+        if let headBitOffset = parseOptionalIntEnvironment("SWIFT64_LOCAL_GIANA_HEAD_BIT_OFFSET") {
+            c64.drive1541.headBitPosition = max(0, headBitOffset)
+        }
 
         for _ in 0..<20 {
             XCTAssertTrue(c64.runFrame())
@@ -1698,11 +1715,21 @@ final class LocalDiskMatrixTests: XCTestCase {
             1,
             Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_FFFF_VECTOR_BOUNCE_INSTRUCTIONS"] ?? "") ?? 20_000
         )
+        let stopAtPC = parseOptionalUInt16Environment("SWIFT64_LOCAL_GIANA_STOP_AT_PC")
+        let stopAtPCMinCycle = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_STOP_AT_PC_MIN_CYCLES"] ?? "") ?? 0
+        let requireStopAtPC = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_STOP_AT_PC"] == "1"
         let requiredWAVRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WAV_RMS"] ?? "")
         let requiredWAVLowRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WAV_LOW_RMS"] ?? "")
         let requiredWAVMidRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WAV_MID_RMS"] ?? "")
         let requiredWAVHighRMS = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WAV_HIGH_RMS"] ?? "")
         let requiredWAVZeroCrossingRate = Double(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WAV_ZERO_CROSSING_RATE"] ?? "")
+        let requireWatchedRAMStop = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WATCH_RAM_STOP"] == "1"
+        let requiredWatchedRAMBytes = parseWatchedRAMByteExpectations(
+            ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_REQUIRE_WATCH_RAM_BYTES"]
+        )
+        let requiredStack0100Prefix = parseByteListEnvironment("SWIFT64_LOCAL_GIANA_REQUIRE_STACK0100_PREFIX")
+        let expectedFailureReasonContains = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_EXPECT_FAILURE_REASON_CONTAINS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldCaptureAudio = wavCaptureURL != nil ||
             requiredWAVRMS != nil ||
             requiredWAVLowRMS != nil ||
@@ -1765,9 +1792,29 @@ final class LocalDiskMatrixTests: XCTestCase {
             1,
             min(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_RAM_TRACE_LIMIT"] ?? "") ?? 4_096, 20_000)
         )
+        let watchedRAMWriteRanges = gianaWatchedRAMWriteRanges()
+        let watchedRAMWriteLimit = max(
+            1,
+            min(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_WATCH_RAM_TRACE_LIMIT"] ?? "") ?? 512, 4_096)
+        )
+        let cpuReadTraceRanges = gianaCPUReadTraceRanges()
+        let cpuReadTraceLimit = max(
+            1,
+            min(Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_READ_TRACE_LIMIT"] ?? "") ?? 2_048, 20_000)
+        )
+        let watchedRAMStopTarget = parseWatchedRAMStopTarget(
+            ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_STOP_AFTER_WATCH_RAM_WRITE"]
+        )
+        let watchedRAMStopMinCycle = Int(ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_STOP_AFTER_WATCH_RAM_WRITE_MIN_CYCLES"] ?? "") ?? 0
         var file1RAMWriteEvents: [RAMWriteObservation] = []
         var file1RAMWriteDroppedEvents = 0
+        var watchedRAMWriteEvents: [RAMWriteObservation] = []
+        var watchedRAMWriteDroppedEvents = 0
+        var cpuReadTraceEvents: [CPUReadObservation] = []
+        var cpuReadTraceDroppedEvents = 0
+        var lastTracedCPURead: CPUReadObservation?
         var stopRAMWriteObservation: RAMWriteObservation?
+        var stopWatchedRAMWriteObservation: RAMWriteObservation?
         var wavSamples: [Float] = []
         var wavCaptureStarted = false
         var wavCaptureComplete = false
@@ -1860,7 +1907,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             driveVIA1PortBWriteTraceEvents.append(event)
         }
         driveGCRReadTraceEvents.reserveCapacity(min(driveGCRReadTraceLimit, 1_000))
-        c64.drive1541.onVIA2PortARead = { driveCycle, drivePC, value, byteReadyCount, halfTrack, headBitPosition in
+        c64.drive1541.onVIA2PortARead = { driveCycle, drivePC, value, byteReadyCount, halfTrack, headBitPosition, presentedStartBit, presentedEndBit in
             guard traceFile1RAMWrites else { return }
             let event = DriveGCRReadObservation(
                 driveCycle: driveCycle,
@@ -1868,7 +1915,9 @@ final class LocalDiskMatrixTests: XCTestCase {
                 value: value,
                 byteReadyCount: byteReadyCount,
                 halfTrack: halfTrack,
-                headBitPosition: headBitPosition
+                headBitPosition: headBitPosition,
+                presentedStartBit: presentedStartBit,
+                presentedEndBit: presentedEndBit
             )
             guard driveGCRReadTraceEvents.count < driveGCRReadTraceLimit else {
                 driveGCRReadTraceEvents[driveGCRReadTraceDroppedEvents % driveGCRReadTraceLimit] = event
@@ -1878,16 +1927,52 @@ final class LocalDiskMatrixTests: XCTestCase {
             driveGCRReadTraceEvents.append(event)
         }
         file1RAMWriteEvents.reserveCapacity(min(ramTraceLimit, 4_096))
+        watchedRAMWriteEvents.reserveCapacity(min(watchedRAMWriteLimit, 512))
+        cpuReadTraceEvents.reserveCapacity(min(cpuReadTraceLimit, 2_048))
+        c64.memory.onCPURead = { address, value in
+            guard traceFile1RAMWrites,
+                  cpuReadTraceRanges.contains(where: { $0.contains(Int(address)) }) else {
+                return
+            }
+            let event = CPUReadObservation(
+                cycle: c64.cpu.totalCycles,
+                pc: c64.cpu.pc,
+                address: address,
+                value: value
+            )
+            lastTracedCPURead = event
+            guard cpuReadTraceEvents.count < cpuReadTraceLimit else {
+                cpuReadTraceEvents[cpuReadTraceDroppedEvents % cpuReadTraceLimit] = event
+                cpuReadTraceDroppedEvents += 1
+                return
+            }
+            cpuReadTraceEvents.append(event)
+        }
         c64.memory.onRAMWrite = { address, value in
             guard traceFile1RAMWrites else { return }
             let event = RAMWriteObservation(
                 cycle: c64.cpu.totalCycles,
                 pc: c64.cpu.pc,
                 address: address,
-                value: value
+                value: value,
+                precedingRead: lastTracedCPURead
             )
             if address == stopAfterRAMWriteAddress {
                 stopRAMWriteObservation = event
+            }
+            if let watchedRAMStopTarget,
+               Int(address) == watchedRAMStopTarget.address,
+               c64.cpu.totalCycles >= watchedRAMStopMinCycle,
+               watchedRAMStopTarget.value == nil || watchedRAMStopTarget.value == value {
+                stopWatchedRAMWriteObservation = event
+            }
+            if watchedRAMWriteRanges.contains(where: { $0.contains(Int(address)) }) {
+                if watchedRAMWriteEvents.count < watchedRAMWriteLimit {
+                    watchedRAMWriteEvents.append(event)
+                } else {
+                    watchedRAMWriteEvents[watchedRAMWriteDroppedEvents % watchedRAMWriteLimit] = event
+                    watchedRAMWriteDroppedEvents += 1
+                }
             }
             guard let file1RAMTraceRange,
                   file1RAMTraceRange.contains(Int(address)) else { return }
@@ -1916,6 +2001,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         var spacePressReason = "none"
         var basicReadyResetDetected = false
         var ffffVectorBounceDetected = false
+        var stopAtPCHit = false
         var pcHotspots: [UInt16: Int] = [:]
         var postSpacePCHotspots: [UInt16: Int] = [:]
         var pcTail: [UInt16] = []
@@ -1927,6 +2013,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             c64.drive1541.onVIA1PortBWrite = nil
             c64.drive1541.onVIA2PortARead = nil
             c64.memory.onCPUPortWrite = nil
+            c64.memory.onCPURead = nil
             c64.memory.onRAMWrite = nil
             if secondScreenSpacePressed {
                 CompatibilityKey.space.release(on: c64)
@@ -1984,7 +2071,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             }
 
             c64.tickOneCycle()
-            if stopRAMWriteObservation != nil {
+            if stopRAMWriteObservation != nil || stopWatchedRAMWriteObservation != nil {
                 break
             }
             recordInstructionPCSample(
@@ -1994,6 +2081,12 @@ final class LocalDiskMatrixTests: XCTestCase {
                 tail: &pcTail,
                 postSpace: secondScreenSpacePressed
             )
+            if let stopAtPC,
+               cycle >= stopAtPCMinCycle,
+               c64.cpu.pc == stopAtPC {
+                stopAtPCHit = true
+                break
+            }
             if isInstructionBoundaryFFFFVectorBounce(
                 postSpaceHotspots: postSpacePCHotspots,
                 threshold: ffffVectorBounceInstructionThreshold
@@ -2055,6 +2148,7 @@ final class LocalDiskMatrixTests: XCTestCase {
             let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
             if lowLoadSnapshot == nil && hasGianaFirstStageLoaded(c64, loadEndAddress: loadEndAddress) {
                 lowLoadSnapshot = firstStageLoadSnapshot(c64)
+                traceFile1RAMWrites = true
             }
             if !loaded && loadEndAddress > 0x0900 {
                 loaded = true
@@ -2086,6 +2180,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         let loadEndAddress = UInt16(c64.memory.ram[0xAE]) | (UInt16(c64.memory.ram[0xAF]) << 8)
         let loadEnd = String(format: "%04X", loadEndAddress)
         let pcBytes = cpuBytes(c64, at: c64.cpu.pc, count: 12)
+        let stackPageBytes = cpuBytes(c64, at: 0x0100, count: 64)
         let wavCaptureSummary: String
         if let wavCaptureURL {
             if !wavSamples.isEmpty {
@@ -2104,8 +2199,17 @@ final class LocalDiskMatrixTests: XCTestCase {
         } else {
             sidTraceSummary = "sidTrace=disabled"
         }
-        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) secondScreenSpacePressed=\(secondScreenSpacePressed) spaceReason=\(spacePressReason) basicReadyReset=\(basicReadyResetDetected) ffffVectorBounce=\(ffffVectorBounceDetected) cycles=\(c64.cpu.totalCycles) pc=$\(pc) cpu=\(cpuRegisterSummary(c64)) pcBytes=\(pcBytes) bank=\(bankingSummary(c64)) ports=\(cpuPortWriteSummary(portTraceEvents, dropped: portTraceDroppedEvents)) cia2Reads=\(cia2PortAReadSummary(cia2ReadTraceEvents, dropped: cia2ReadTraceDroppedEvents)) driveIEC=\(driveIECBusOutputSummary(driveIECTraceEvents, dropped: driveIECTraceDroppedEvents)) driveXfer=\(driveCustomTransferSummary(driveVIA1PortBWriteTraceEvents, dropped: driveVIA1PortBWriteTraceDroppedEvents, ramEvents: file1RAMWriteEvents)) driveGCR=\(driveGCRReadSummary(driveGCRReadTraceEvents, dropped: driveGCRReadTraceDroppedEvents)) driveBuf0300=\(driveGCRBufferSummary(c64.drive1541, at: 0x0300, count: 0x0100)) driveBuf01BA=\(driveGCRBufferSummary(c64.drive1541, at: 0x01BA, count: 0x0046)) driveCombinedGCR=\(driveCombinedGCRBufferSummary(c64.drive1541, events: file1RAMWriteEvents)) file1Writes=\(ramWriteSummary(file1RAMWriteEvents, dropped: file1RAMWriteDroppedEvents, expectedRange: file1RAMTraceRange)) file1WriteCompare=\(ramWriteDiskWindowComparison(c64, name: "1", events: file1RAMWriteEvents)) ramStop=\(ramWriteStopSummary(target: stopAfterRAMWriteAddress, observation: stopRAMWriteObservation, expected: stopAfterRAMWriteAddress.flatMap { diskFileExpectedByte(c64, name: "1", address: $0) })) pcs=\(pcHotspotSummary(hotspots: pcHotspots, postSpaceHotspots: postSpacePCHotspots, tail: pcTail)) disasm=\(disassemblySummary(c64, at: c64.cpu.pc)) vic=\(vicSummary(c64)) sid=\(sidRunSummary(c64)) \(wavCaptureSummary) \(sidTraceSummary) code0500=\(disassemblySummary(c64, at: 0x0500)) code05B0=\(disassemblySummary(c64, at: 0x05B0)) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) drive0400=\(driveDisassemblySummary(c64.drive1541, at: 0x0400, count: 24)) drive0450=\(driveDisassemblySummary(c64.drive1541, at: 0x0450, count: 24)) drive04A0=\(driveDisassemblySummary(c64.drive1541, at: 0x04A0, count: 32)) drive04DF=\(driveDisassemblySummary(c64.drive1541, at: 0x04DF, count: 24)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) bootCompare=\(diskFileMemoryComparison(c64, name: "*")) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) fCompare=\(diskFileMemoryComparison(c64, name: "F")) file1=\(diskFileSummary(c64, name: "1")) file1Compare=\(diskFileMemoryComparison(c64, name: "1")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) drivePC=$\(drivePC) loadEnd=$\(loadEnd) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) iec=\(iecTransferSummary(c64)) driveMemCmds=\(driveMemoryCommandSummary(c64.drive1541.decodedIECDataBytes)) reason=\(failureReason ?? c64.emulationStatus.lastFailureReason ?? "none")"
+        let summary = "Giana run smoke loaded=\(loaded) enteredProgramCode=\(enteredProgramCode) screenChangedAfterLoad=\(screenChangedAfterLoad) secondScreenSpacePressed=\(secondScreenSpacePressed) spaceReason=\(spacePressReason) basicReadyReset=\(basicReadyResetDetected) ffffVectorBounce=\(ffffVectorBounceDetected) stopAtPC=\(stopAtPC.map { "$" + String(format: "%04X", $0) } ?? "none") hit=\(stopAtPCHit) cycles=\(c64.cpu.totalCycles) pc=$\(pc) cpu=\(cpuRegisterSummary(c64)) pcBytes=\(pcBytes) stack0100=\(stackPageBytes) bank=\(bankingSummary(c64)) ports=\(cpuPortWriteSummary(portTraceEvents, dropped: portTraceDroppedEvents)) cpuReads=\(cpuReadTraceSummary(cpuReadTraceEvents, dropped: cpuReadTraceDroppedEvents, ranges: cpuReadTraceRanges)) cia2Reads=\(cia2PortAReadSummary(cia2ReadTraceEvents, dropped: cia2ReadTraceDroppedEvents)) c64Recv=\(c64ReceiveSampleSummary(cia2ReadTraceEvents, dropped: cia2ReadTraceDroppedEvents, ramEvents: watchedRAMWriteEvents, stop: stopWatchedRAMWriteObservation)) driveIEC=\(driveIECBusOutputSummary(driveIECTraceEvents, dropped: driveIECTraceDroppedEvents)) driveXfer=\(driveCustomTransferSummary(c64.drive1541, events: driveVIA1PortBWriteTraceEvents, dropped: driveVIA1PortBWriteTraceDroppedEvents, ramEvents: file1RAMWriteEvents)) watchedXfer=\(driveWatchedTransferComparison(events: driveVIA1PortBWriteTraceEvents, dropped: driveVIA1PortBWriteTraceDroppedEvents, ramEvents: watchedRAMWriteEvents, stop: stopWatchedRAMWriteObservation)) driveGCR=\(driveGCRReadSummary(c64.drive1541, events: driveGCRReadTraceEvents, dropped: driveGCRReadTraceDroppedEvents)) driveGCRNative=\(driveGCRNativeReferenceSummary(c64.drive1541, events: driveGCRReadTraceEvents, dropped: driveGCRReadTraceDroppedEvents)) driveBufSource=\(driveRawBufferSourceSummary(c64.drive1541, events: driveGCRReadTraceEvents, dropped: driveGCRReadTraceDroppedEvents, ramEvents: file1RAMWriteEvents)) file1GCRSource=\(diskFileSourceForGCRLandmarks(c64, name: "1", drive: c64.drive1541, events: driveGCRReadTraceEvents)) driveBuf0300=\(driveGCRBufferSummary(c64.drive1541, at: 0x0300, count: 0x0100)) driveBuf01BA=\(driveGCRBufferSummary(c64.drive1541, at: 0x01BA, count: 0x0046)) driveCombinedGCR=\(driveCombinedGCRBufferSummary(c64.drive1541, events: file1RAMWriteEvents)) file1Writes=\(ramWriteSummary(file1RAMWriteEvents, dropped: file1RAMWriteDroppedEvents, expectedRange: file1RAMTraceRange)) watchedRAM=\(watchedRAMWriteSummary(watchedRAMWriteEvents, dropped: watchedRAMWriteDroppedEvents, ranges: watchedRAMWriteRanges)) watchedState=\(watchedRAMStateSummary(c64, ranges: watchedRAMWriteRanges)) watchedStop=\(watchedRAMStopSummary(target: watchedRAMStopTarget, observation: stopWatchedRAMWriteObservation)) stackCopySource=\(gianaStackCopySourceSummary(c64, observation: stopWatchedRAMWriteObservation)) file1WriteCompare=\(ramWriteDiskWindowComparison(c64, name: "1", events: file1RAMWriteEvents)) ramStop=\(ramWriteStopSummary(target: stopAfterRAMWriteAddress, observation: stopRAMWriteObservation, expected: stopAfterRAMWriteAddress.flatMap { diskFileExpectedByte(c64, name: "1", address: $0) })) file1StopSource=\(stopAfterRAMWriteAddress.map { diskFileExpectedLocationSummary(c64, name: "1", address: $0) } ?? "none") pcs=\(pcHotspotSummary(hotspots: pcHotspots, postSpaceHotspots: postSpacePCHotspots, tail: pcTail)) disasm=\(disassemblySummary(c64, at: c64.cpu.pc)) codeCDB0=\(disassemblySummary(c64, at: 0xCDB0, count: 36)) vic=\(vicSummary(c64)) sid=\(sidRunSummary(c64)) \(wavCaptureSummary) \(sidTraceSummary) code0500=\(disassemblySummary(c64, at: 0x0500)) code05B0=\(disassemblySummary(c64, at: 0x05B0)) code0A80=\(cpuBytes(c64, at: 0x0A80, count: 72)) driveZP=\(driveZeroPageSummary(c64.drive1541)) drive0400=\(driveDisassemblySummary(c64.drive1541, at: 0x0400, count: 24)) drive0450=\(driveDisassemblySummary(c64.drive1541, at: 0x0450, count: 24)) drive04A0=\(driveDisassemblySummary(c64.drive1541, at: 0x04A0, count: 32)) drive04DF=\(driveDisassemblySummary(c64.drive1541, at: 0x04DF, count: 24)) kernalHits=\(kernalHitSummary(kernalPCRangeHits)) sameKernalPC=\(sameKernalPCCycles) \(bootFileSummary(c64)) bootCompare=\(diskFileMemoryComparison(c64, name: "*")) trap=\(loadTrapSummary(c64)) firstLoad=[\(lowLoadSnapshot ?? "none")] fFile=\(diskFileSummary(c64, name: "F")) fCompare=\(diskFileMemoryComparison(c64, name: "F")) file1=\(diskFileSummary(c64, name: "1")) file1Compare=\(diskFileMemoryComparison(c64, name: "1")) cc00=\(cpuBytes(c64, at: 0xCC00, count: 16)) nameByte=$\(String(format: "%02X", c64.memory.ram[0x02E2])) drivePC=$\(drivePC) loadEnd=$\(loadEnd) headBit=\(drive.headBitPosition) byteReady=\(drive.byteReadyCount - baseline.byteReadyCount) paReads=\(drive.via2PortAReadCount - baseline.via2PortAReadCount) iec=\(iecTransferSummary(c64)) driveMemCmds=\(driveMemoryCommandSummary(c64.drive1541.decodedIECDataBytes)) reason=\(failureReason ?? c64.emulationStatus.lastFailureReason ?? "none")"
         print(summary)
+
+        if let expectedFailureReasonContains, !expectedFailureReasonContains.isEmpty {
+            let actualReason = failureReason ?? c64.emulationStatus.lastFailureReason ?? ""
+            XCTAssertTrue(
+                actualReason.contains(expectedFailureReasonContains),
+                summary + " expectedFailureReasonContains=\(expectedFailureReasonContains) actualReason=\(actualReason)"
+            )
+            return
+        }
 
         XCTAssertNil(failureReason, summary)
         XCTAssertTrue(loaded || enteredProgramCode, summary)
@@ -2132,6 +2236,25 @@ final class LocalDiskMatrixTests: XCTestCase {
             let audioSummary = capturedAudioSummaryValue(wavSamples)
             XCTAssertGreaterThanOrEqual(audioSummary.zeroCrossingRate, requiredWAVZeroCrossingRate, summary)
         }
+        if requireWatchedRAMStop {
+            XCTAssertNotNil(stopWatchedRAMWriteObservation, summary)
+        }
+        if requireStopAtPC {
+            XCTAssertTrue(stopAtPCHit, summary)
+        }
+        let watchedRAMByteMismatches = watchedRAMByteExpectationMismatches(c64, expectations: requiredWatchedRAMBytes)
+        XCTAssertTrue(
+            watchedRAMByteMismatches.isEmpty,
+            summary + " watchedRAMByteMismatches=\(watchedRAMByteMismatches.joined(separator: ";"))"
+        )
+        let stack0100PrefixMismatches = stack0100PrefixExpectationMismatches(
+            c64,
+            expectedPrefix: requiredStack0100Prefix
+        )
+        XCTAssertTrue(
+            stack0100PrefixMismatches.isEmpty,
+            summary + " stack0100PrefixMismatches=\(stack0100PrefixMismatches.joined(separator: ";"))"
+        )
     }
 
     func testLocalGreatGianaSistersFastRunSmokeWhenEnabled() throws {
@@ -2461,6 +2584,211 @@ final class LocalDiskMatrixTests: XCTestCase {
         return UInt16(parsed)
     }
 
+    private func parseOptionalIntEnvironment(_ name: String) -> Int? {
+        guard let rawValue = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        if rawValue.lowercased().hasPrefix("0x") {
+            return Int(rawValue.dropFirst(2), radix: 16)
+        }
+        if rawValue.hasPrefix("$") {
+            return Int(rawValue.dropFirst(), radix: 16)
+        }
+        return Int(rawValue)
+    }
+
+    private func gianaWatchedRAMWriteRanges() -> [Range<Int>] {
+        let rawValue = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_WATCH_RAM_RANGES"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = rawValue?.isEmpty == false ? rawValue! : "0002-000B,00AE-00B9,0314-0333"
+        return text
+            .split(separator: ",")
+            .compactMap { parseRAMRange(String($0)) }
+    }
+
+    private func gianaCPUReadTraceRanges() -> [Range<Int>] {
+        let rawValue = ProcessInfo.processInfo.environment["SWIFT64_LOCAL_GIANA_READ_TRACE_RANGES"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = rawValue?.isEmpty == false ? rawValue! : "0000-01FF,02A2-0850,0A00-0BFF,CC00-CFFF"
+        return text
+            .split(separator: ",")
+            .compactMap { parseRAMRange(String($0)) }
+    }
+
+    private func parseRAMRange(_ text: String) -> Range<Int>? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let parts = trimmed.split(separator: "-", maxSplits: 1).map(String.init)
+        guard let start = parseHexOrDecimal(parts[0]) else { return nil }
+        let endInclusive = parts.count == 2 ? parseHexOrDecimal(parts[1]) : start
+        guard let endInclusive,
+              (0...0xFFFF).contains(start),
+              (0...0xFFFF).contains(endInclusive),
+              start <= endInclusive else {
+            return nil
+        }
+        return start..<(endInclusive + 1)
+    }
+
+    private func parseHexOrDecimal(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("0x") {
+            return Int(trimmed.dropFirst(2), radix: 16)
+        }
+        if trimmed.hasPrefix("$") {
+            return Int(trimmed.dropFirst(), radix: 16)
+        }
+        if trimmed.range(of: #"^[0-9A-Fa-f]{4}$"#, options: .regularExpression) != nil {
+            return Int(trimmed, radix: 16)
+        }
+        return Int(trimmed)
+    }
+
+    private struct WatchedRAMStopTarget {
+        let address: Int
+        let value: UInt8?
+    }
+
+    private func parseWatchedRAMStopTarget(_ rawValue: String?) -> WatchedRAMStopTarget? {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return nil
+        }
+        let parts = rawValue.split(separator: "=", maxSplits: 1).flatMap {
+            $0.split(separator: ":", maxSplits: 1)
+        }.map(String.init)
+        guard let address = parseHexOrDecimal(parts[0]),
+              (0...0xFFFF).contains(address) else {
+            return nil
+        }
+        let value: UInt8?
+        if parts.count > 1, let parsedValue = parseHexOrDecimal(parts[1]), (0...0xFF).contains(parsedValue) {
+            value = UInt8(parsedValue)
+        } else if parts.count > 1 {
+            return nil
+        } else {
+            value = nil
+        }
+        return WatchedRAMStopTarget(address: address, value: value)
+    }
+
+    private struct WatchedRAMByteExpectation {
+        let address: Int
+        let value: UInt8
+    }
+
+    private func parseWatchedRAMByteExpectations(_ rawValue: String?) -> [WatchedRAMByteExpectation] {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return []
+        }
+        return rawValue
+            .split(separator: ",")
+            .compactMap { parseWatchedRAMByteExpectation(String($0)) }
+    }
+
+    private func parseWatchedRAMByteExpectation(_ text: String) -> WatchedRAMByteExpectation? {
+        let parts = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "=", maxSplits: 1)
+            .flatMap { $0.split(separator: ":", maxSplits: 1) }
+            .map(String.init)
+        guard parts.count == 2,
+              let address = parseHexOrDecimal(parts[0]),
+              let value = parseHexOrDecimal(parts[1]),
+              (0...0xFFFF).contains(address),
+              (0...0xFF).contains(value) else {
+            return nil
+        }
+        return WatchedRAMByteExpectation(address: address, value: UInt8(value))
+    }
+
+    private func parseByteListEnvironment(_ name: String) -> [UInt8] {
+        guard let rawValue = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return []
+        }
+        return rawValue
+            .split { character in
+                character == " " || character == "," || character == "\t" || character == "\n" || character == "\r"
+            }
+            .compactMap { token in
+                let text = String(token)
+                guard let value = parseByteToken(text) else {
+                    return nil
+                }
+                return UInt8(value)
+            }
+    }
+
+    private func parseByteToken(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("0x") {
+            guard let value = Int(trimmed.dropFirst(2), radix: 16), (0...0xFF).contains(value) else {
+                return nil
+            }
+            return value
+        }
+        if trimmed.hasPrefix("$") {
+            guard let value = Int(trimmed.dropFirst(), radix: 16), (0...0xFF).contains(value) else {
+                return nil
+            }
+            return value
+        }
+        if trimmed.range(of: #"^[0-9A-Fa-f]{1,2}$"#, options: .regularExpression) != nil {
+            guard let value = Int(trimmed, radix: 16), (0...0xFF).contains(value) else {
+                return nil
+            }
+            return value
+        }
+        guard let value = Int(trimmed), (0...0xFF).contains(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private func watchedRAMByteExpectationMismatches(
+        _ c64: C64,
+        expectations: [WatchedRAMByteExpectation]
+    ) -> [String] {
+        expectations.compactMap { expectation in
+            let actual = c64.memory.ram[expectation.address]
+            guard actual != expectation.value else { return nil }
+            return String(
+                format: "$%04X expected $%02X got $%02X",
+                expectation.address,
+                expectation.value,
+                actual
+            )
+        }
+    }
+
+    private func stack0100PrefixExpectationMismatches(
+        _ c64: C64,
+        expectedPrefix: [UInt8]
+    ) -> [String] {
+        guard !expectedPrefix.isEmpty else { return [] }
+        guard expectedPrefix.count <= 0x100 else {
+            return ["prefix too long \(expectedPrefix.count)"]
+        }
+        for (offset, expected) in expectedPrefix.enumerated() {
+            let actual = c64.memory.ram[0x0100 + offset]
+            if actual != expected {
+                return [
+                    String(
+                        format: "+$%02X@$%04X expected $%02X got $%02X",
+                        offset,
+                        0x0100 + offset,
+                        expected,
+                        actual
+                    )
+                ]
+            }
+        }
+        return []
+    }
+
     private func applyLocalSIDOverrides(to c64: C64) {
         let environment = ProcessInfo.processInfo.environment
         if let modelValue = environment["SWIFT64_LOCAL_GIANA_SID_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2784,13 +3112,115 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private func ramWriteEventSummary(_ event: RAMWriteObservation) -> String {
-        String(
+        let write = String(
             format: "@%llu:PC=$%04X:$%04X=$%02X",
             event.cycle,
             event.pc,
             event.address,
             event.value
         )
+        guard let precedingRead = event.precedingRead else { return write }
+        return write + String(
+            format: "<-%04X:$%02X@PC=$%04X",
+            precedingRead.address,
+            precedingRead.value,
+            precedingRead.pc
+        )
+    }
+
+    private func watchedRAMWriteSummary(
+        _ events: [RAMWriteObservation],
+        dropped: Int,
+        ranges: [Range<Int>]
+    ) -> String {
+        let rangeText = ranges.map {
+            String(format: "$%04X-$%04X", $0.lowerBound, max($0.lowerBound, $0.upperBound - 1))
+        }.joined(separator: "|")
+        guard !events.isEmpty else {
+            return "count=0,dropped=\(dropped),ranges=\(rangeText.isEmpty ? "none" : rangeText)"
+        }
+        let orderedEvents = orderedRAMWriteEvents(events, dropped: dropped)
+        let histogram = Dictionary(grouping: orderedEvents, by: { $0.address })
+            .map { address, grouped in (address, grouped.count) }
+            .sorted { lhs, rhs in
+                if lhs.1 == rhs.1 { return lhs.0 < rhs.0 }
+                return lhs.1 > rhs.1
+            }
+            .prefix(12)
+            .map { address, count in "$\(String(format: "%04X", address)):\(count)" }
+            .joined(separator: "|")
+        let first = orderedEvents.prefix(6).map(ramWriteEventSummary).joined(separator: "|")
+        let last = orderedEvents.suffix(12).map(ramWriteEventSummary).joined(separator: "|")
+        return "count=\(orderedEvents.count),dropped=\(dropped),ranges=\(rangeText.isEmpty ? "none" : rangeText),hist=\(histogram),first=\(first),last=\(last)"
+    }
+
+    private func watchedRAMStateSummary(_ c64: C64, ranges: [Range<Int>]) -> String {
+        guard !ranges.isEmpty else { return "none" }
+        return ranges.prefix(6).map { range in
+            let count = min(range.count, 16)
+            let bytes = (0..<count).map { offset in
+                String(format: "%02X", c64.memory.ram[range.lowerBound + offset])
+            }.joined(separator: " ")
+            let suffix = range.count > count ? "..." : ""
+            return String(
+                format: "$%04X-$%04X=%@%@",
+                range.lowerBound,
+                max(range.lowerBound, range.upperBound - 1),
+                bytes,
+                suffix
+            )
+        }.joined(separator: "|")
+    }
+
+    private func watchedRAMStopSummary(
+        target: WatchedRAMStopTarget?,
+        observation: RAMWriteObservation?
+    ) -> String {
+        guard let target else { return "disabled" }
+        let targetText = String(
+            format: "$%04X%@",
+            target.address,
+            target.value.map { String(format: "=$%02X", $0) } ?? ""
+        )
+        guard let observation else {
+            return "target=\(targetText),hit=false"
+        }
+        return "target=\(targetText),hit=true,\(ramWriteEventSummary(observation))"
+    }
+
+    private func gianaStackCopySourceSummary(_ c64: C64, observation: RAMWriteObservation?) -> String {
+        guard let observation else { return "disabled" }
+        guard (0x0100...0x01FF).contains(observation.address) else {
+            return String(format: "not-stack-write@$%04X", observation.address)
+        }
+        let copyLoop = Array(c64.memory.ram[0x0836...0x083E])
+        guard copyLoop == [0xB9, 0x48, 0x08, 0x99, 0x00, 0x01, 0xC8, 0xD0, 0xF7] else {
+            return "unknown-copy-loop=\(cpuBytes(c64, at: 0x0836, count: 9))"
+        }
+        let offset = Int(observation.address - 0x0100)
+        let sourceAddress = 0x0848 + offset
+        guard (0...0xFFFF).contains(sourceAddress) else {
+            return String(format: "source-out-of-range offset=$%02X", offset)
+        }
+        let sourceValue = c64.memory.ram[sourceAddress]
+        return String(
+            format: "loop=$0836:LDA $0848,Y/STA $0100,Y,offset=$%02X,source=$%04X:$%02X,dest=$%04X:$%02X,match=%@",
+            offset,
+            sourceAddress,
+            sourceValue,
+            observation.address,
+            observation.value,
+            sourceValue == observation.value ? "yes" : "no"
+        )
+    }
+
+    private func orderedRAMWriteEvents(
+        _ events: [RAMWriteObservation],
+        dropped: Int
+    ) -> [RAMWriteObservation] {
+        guard dropped > 0, !events.isEmpty else { return events }
+        let start = dropped % events.count
+        return Array(events[start...]) + events[..<start]
     }
 
     private func ramWriteStopSummary(target: UInt16?, observation: RAMWriteObservation?, expected: UInt8?) -> String {
@@ -2800,6 +3230,51 @@ final class LocalDiskMatrixTests: XCTestCase {
             return String(format: "target=$%04X,expected=%@,hit=false", target, expectedText)
         }
         return "target=\(String(format: "$%04X", target)),expected=\(expectedText),hit=true,\(ramWriteEventSummary(observation))"
+    }
+
+    private func cpuReadTraceSummary(
+        _ events: [CPUReadObservation],
+        dropped: Int,
+        ranges: [Range<Int>]
+    ) -> String {
+        let rangeText = ranges.map {
+            String(format: "$%04X-$%04X", $0.lowerBound, max($0.lowerBound, $0.upperBound - 1))
+        }.joined(separator: "|")
+        guard !events.isEmpty else {
+            return "count=0,dropped=\(dropped),ranges=\(rangeText.isEmpty ? "none" : rangeText)"
+        }
+        let orderedEvents = orderedCPUReadEvents(events, dropped: dropped)
+        let histogram = Dictionary(grouping: orderedEvents, by: { $0.address })
+            .map { address, grouped in (address, grouped.count) }
+            .sorted { lhs, rhs in
+                if lhs.1 == rhs.1 { return lhs.0 < rhs.0 }
+                return lhs.1 > rhs.1
+            }
+            .prefix(12)
+            .map { address, count in "$\(String(format: "%04X", address)):\(count)" }
+            .joined(separator: "|")
+        let first = orderedEvents.prefix(6).map(cpuReadEventSummary).joined(separator: "|")
+        let last = orderedEvents.suffix(12).map(cpuReadEventSummary).joined(separator: "|")
+        return "count=\(orderedEvents.count),dropped=\(dropped),ranges=\(rangeText.isEmpty ? "none" : rangeText),hist=\(histogram),first=\(first),last=\(last)"
+    }
+
+    private func cpuReadEventSummary(_ event: CPUReadObservation) -> String {
+        String(
+            format: "@%llu:PC=$%04X:$%04X->$%02X",
+            event.cycle,
+            event.pc,
+            event.address,
+            event.value
+        )
+    }
+
+    private func orderedCPUReadEvents(
+        _ events: [CPUReadObservation],
+        dropped: Int
+    ) -> [CPUReadObservation] {
+        guard dropped > 0, !events.isEmpty else { return events }
+        let start = dropped % events.count
+        return Array(events[start...]) + events[..<start]
     }
 
     private func ramWriteDiskWindowComparison(
@@ -2887,6 +3362,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         return nil
     }
 
+    private func bytePreview(_ bytes: [UInt8], limit: Int) -> String {
+        let preview = bytes.prefix(limit).map { String(format: "%02X", $0) }.joined(separator: " ")
+        return bytes.count > limit ? preview + "..." : preview
+    }
+
     private func cia2PortAReadSummary(_ events: [CIA2PortAReadObservation], dropped: Int) -> String {
         guard !events.isEmpty else {
             return "count=0,dropped=\(dropped)"
@@ -2941,6 +3421,58 @@ final class LocalDiskMatrixTests: XCTestCase {
             event.snapshot.driveData ? 1 : 0,
             event.snapshot.driveAtn ? 1 : 0
         )
+    }
+
+    private func c64ReceiveSampleSummary(
+        _ cia2Events: [CIA2PortAReadObservation],
+        dropped: Int,
+        ramEvents: [RAMWriteObservation],
+        stop: RAMWriteObservation?
+    ) -> String {
+        guard let stop else { return "disabled" }
+        let window = watchedRAMWindow(around: stop, events: ramEvents, maxBefore: 8, maxAfter: 0)
+        guard window.count >= 2 else { return "no-ram-window" }
+        let reads = orderedCIA2PortAReadEvents(cia2Events, dropped: dropped)
+        guard !reads.isEmpty else { return "no-cia2-reads" }
+
+        let chronologicalWrites = window.sorted { lhs, rhs in
+            if lhs.cycle == rhs.cycle { return lhs.address < rhs.address }
+            return lhs.cycle < rhs.cycle
+        }
+        var previousCycle = chronologicalWrites.first?.cycle ?? stop.cycle
+        var parts: [String] = []
+        for write in chronologicalWrites {
+            let byteReads = reads.filter { $0.cycle >= previousCycle && $0.cycle <= write.cycle }
+            let interesting = byteReads.filter {
+                (0xCDB0...0xCDF0).contains($0.pc)
+            }
+            let selected = (interesting.isEmpty ? byteReads : interesting).suffix(12)
+            let sampleText = selected.map {
+                String(format: "$%04X:%02X", $0.pc, $0.value)
+            }.joined(separator: "/")
+            let hist = Dictionary(grouping: interesting, by: { $0.value })
+                .map { value, grouped in (value, grouped.count) }
+                .sorted { lhs, rhs in
+                    if lhs.1 == rhs.1 { return lhs.0 < rhs.0 }
+                    return lhs.1 > rhs.1
+                }
+                .prefix(4)
+                .map { value, count in String(format: "$%02X:%d", value, count) }
+                .joined(separator: ",")
+            parts.append(String(
+                format: "$%04X=$%02X[%llu-%llu]reads=%d,iec=%d,hist=%@,tail=%@",
+                write.address,
+                write.value,
+                previousCycle,
+                write.cycle,
+                byteReads.count,
+                interesting.count,
+                hist.isEmpty ? "none" : hist,
+                sampleText.isEmpty ? "none" : sampleText
+            ))
+            previousCycle = write.cycle
+        }
+        return parts.suffix(6).joined(separator: "|")
     }
 
     private func driveIECBusOutputSummary(_ events: [DriveIECBusOutputObservation], dropped: Int) -> String {
@@ -2998,7 +3530,8 @@ final class LocalDiskMatrixTests: XCTestCase {
     }
 
     private func driveCustomTransferSummary(
-        _ events: [DriveVIA1PortBWriteObservation],
+        _ drive: Drive1541,
+        events: [DriveVIA1PortBWriteObservation],
         dropped: Int,
         ramEvents: [RAMWriteObservation]
     ) -> String {
@@ -3042,7 +3575,131 @@ final class LocalDiskMatrixTests: XCTestCase {
         let decodedPreview = decoded.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
         let decodedTail = decoded.suffix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
         let ramOffset = firstIndex(of: ram, in: decoded).map { "+$\(String(format: "%04X", $0))" } ?? "not-found"
-        return "events=\(transmitEvents.count),frames=\(frames.count),decoded=\(decodedPreview),decodedTail=\(decodedTail),ramInDecoded=\(ramOffset),tail=\(frameSummaries),ram=\(ramPreview)"
+        let raw = driveBytes(drive, at: 0x0300, count: 0x0100) + driveBytes(drive, at: 0x01BA, count: 0x0046)
+        let rawOffset = firstIndex(of: decoded, in: raw).map { "+$\(String(format: "%04X", $0))" } ?? "not-found"
+        let ramRawOffset = firstIndex(of: ram, in: raw).map { "+$\(String(format: "%04X", $0))" } ?? "not-found"
+        return "events=\(transmitEvents.count),frames=\(frames.count),decoded=\(decodedPreview),decodedTail=\(decodedTail),xferInRaw=\(rawOffset),ramInDecoded=\(ramOffset),ramInRaw=\(ramRawOffset),tail=\(frameSummaries),ram=\(ramPreview)"
+    }
+
+    private func driveWatchedTransferComparison(
+        events: [DriveVIA1PortBWriteObservation],
+        dropped: Int,
+        ramEvents: [RAMWriteObservation],
+        stop: RAMWriteObservation?
+    ) -> String {
+        guard let stop else { return "disabled" }
+        let window = watchedRAMWindow(around: stop, events: ramEvents, maxBefore: 12, maxAfter: 4)
+        guard !window.isEmpty else { return "no-ram-window" }
+        let actual = window.map(\.value)
+        let decoded = decodedDriveCustomTransferBytes(events: events, dropped: dropped)
+        guard !decoded.isEmpty else {
+            return "no-decoded,ram=\(bytePreview(actual, limit: 24))"
+        }
+
+        let exactOffset = firstIndex(of: actual, in: decoded)
+        let best = bestByteWindowMatch(needle: actual, haystack: decoded)
+        let start = window.first?.address ?? stop.address
+        let end = window.last?.address ?? stop.address
+        let stopIndex = window.firstIndex { $0.cycle == stop.cycle && $0.address == stop.address }
+            ?? Int(stop.address &- start)
+        let exactText = exactOffset.map { "+$\(String(format: "%04X", $0))" } ?? "not-found"
+        let bestText: String
+        if let best {
+            let expected = Array(decoded[best.offset..<(best.offset + actual.count)])
+            let mismatchText = best.firstMismatch.map {
+                String(format: "+$%04X exp=$%02X got=$%02X", $0, expected[$0], actual[$0])
+            } ?? "none"
+            bestText = String(
+                format: "+$%04X,mismatches=%d,first=%@,decoded=%@",
+                best.offset,
+                best.mismatches,
+                mismatchText,
+                bytePreview(expected, limit: 24)
+            )
+        } else {
+            bestText = "none"
+        }
+        return String(
+            format: "ram=$%04X-$%04X,stopIndex=%d,actual=%@,exact=%@,best=%@,decodedTail=%@",
+            start,
+            end,
+            stopIndex,
+            bytePreview(actual, limit: 24),
+            exactText,
+            bestText,
+            bytePreview(Array(decoded.suffix(24)), limit: 24)
+        )
+    }
+
+    private func decodedDriveCustomTransferBytes(
+        events: [DriveVIA1PortBWriteObservation],
+        dropped: Int
+    ) -> [UInt8] {
+        let ordered = orderedDriveVIA1PortBWriteEvents(events, dropped: dropped)
+        let transmitPCs: Set<UInt16> = [0x04F7, 0x04FD, 0x0503, 0x0509]
+        let transmitEvents = ordered.filter { transmitPCs.contains($0.drivePC) }
+        var frames: [[DriveVIA1PortBWriteObservation]] = []
+        var current: [DriveVIA1PortBWriteObservation] = []
+        for event in transmitEvents {
+            if event.drivePC == 0x04F7 && !current.isEmpty {
+                frames.append(current)
+                current = []
+            }
+            current.append(event)
+        }
+        if !current.isEmpty {
+            frames.append(current)
+        }
+        return frames.compactMap(driveCustomTransferByte)
+    }
+
+    private func watchedRAMWindow(
+        around stop: RAMWriteObservation,
+        events: [RAMWriteObservation],
+        maxBefore: UInt16,
+        maxAfter: UInt16
+    ) -> [RAMWriteObservation] {
+        var latestByAddress: [UInt16: RAMWriteObservation] = [:]
+        for event in events where event.cycle <= stop.cycle {
+            let current = latestByAddress[event.address]
+            if current == nil || event.cycle >= current!.cycle {
+                latestByAddress[event.address] = event
+            }
+        }
+        guard latestByAddress[stop.address] != nil else { return [] }
+
+        var start = stop.address
+        while start > stop.address &- maxBefore,
+              latestByAddress[start &- 1] != nil {
+            start &-= 1
+        }
+        var end = stop.address
+        while end < stop.address &+ maxAfter,
+              latestByAddress[end &+ 1] != nil {
+            end &+= 1
+        }
+        return (start...end).compactMap { latestByAddress[$0] }
+    }
+
+    private func bestByteWindowMatch(
+        needle: [UInt8],
+        haystack: [UInt8]
+    ) -> (offset: Int, mismatches: Int, firstMismatch: Int?)? {
+        guard !needle.isEmpty, needle.count <= haystack.count else { return nil }
+        var best: (offset: Int, mismatches: Int, firstMismatch: Int?)?
+        for offset in 0...(haystack.count - needle.count) {
+            var mismatches = 0
+            var firstMismatch: Int?
+            for index in needle.indices where needle[index] != haystack[offset + index] {
+                if firstMismatch == nil { firstMismatch = index }
+                mismatches += 1
+            }
+            if best == nil || mismatches < best!.mismatches {
+                best = (offset, mismatches, firstMismatch)
+                if mismatches == 0 { break }
+            }
+        }
+        return best
     }
 
     private func driveCustomTransferByte(from frame: [DriveVIA1PortBWriteObservation]) -> UInt8? {
@@ -3062,7 +3719,11 @@ final class LocalDiskMatrixTests: XCTestCase {
         return Array(events[start...]) + events[..<start]
     }
 
-    private func driveGCRReadSummary(_ events: [DriveGCRReadObservation], dropped: Int) -> String {
+    private func driveGCRReadSummary(
+        _ drive: Drive1541,
+        events: [DriveGCRReadObservation],
+        dropped: Int
+    ) -> String {
         guard !events.isEmpty else {
             return "count=0,dropped=\(dropped)"
         }
@@ -3085,9 +3746,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             .prefix(8)
             .map { pc, count in "$\(String(format: "%04X", pc)):\(count)" }
             .joined(separator: "|")
+        let sourceRanges = driveGCRSourceRangeSummary(orderedEvents, drive: drive)
         let first = orderedEvents.prefix(4).map(driveGCRReadEventSummary).joined(separator: "|")
         let last = orderedEvents.suffix(12).map(driveGCRReadEventSummary).joined(separator: "|")
-        return "count=\(orderedEvents.count),dropped=\(dropped),values=\(valueHistogram),pcs=\(pcHistogram),first=\(first),last=\(last)"
+        return "count=\(orderedEvents.count),dropped=\(dropped),values=\(valueHistogram),pcs=\(pcHistogram),sources=\(sourceRanges),first=\(first),last=\(last)"
     }
 
     private func orderedDriveGCRReadEvents(
@@ -3101,14 +3763,362 @@ final class LocalDiskMatrixTests: XCTestCase {
 
     private func driveGCRReadEventSummary(_ event: DriveGCRReadObservation) -> String {
         String(
-            format: "@%llu:DPC=$%04X:PA=$%02X:BR=%llu:half=%d:bit=%d",
+            format: "@%llu:DPC=$%04X:PA=$%02X:BR=%llu:half=%d:bit=%d:src=%d-%d",
             event.driveCycle,
             event.drivePC,
             event.value,
             event.byteReadyCount,
             event.halfTrack,
-            event.headBitPosition
+            event.headBitPosition,
+            event.presentedStartBit,
+            event.presentedEndBit
         )
+    }
+
+    private func driveGCRNativeReferenceSummary(
+        _ drive: Drive1541,
+        events: [DriveGCRReadObservation],
+        dropped: Int
+    ) -> String {
+        guard !events.isEmpty else { return "count=0" }
+        let orderedEvents = orderedDriveGCRReadEvents(events, dropped: dropped)
+        var compared = 0
+        var mismatches: [String] = []
+        var missingTrackCount = 0
+        for event in orderedEvents {
+            guard let expected = nativeGCRByte(drive: drive, event: event) else {
+                missingTrackCount += 1
+                continue
+            }
+            compared += 1
+            if expected != event.value, mismatches.count < 8 {
+                mismatches.append(String(
+                    format: "h%d:%d-%d exp=$%02X got=$%02X",
+                    event.halfTrack,
+                    event.presentedStartBit,
+                    event.presentedEndBit,
+                    expected,
+                    event.value
+                ))
+            } else if expected != event.value {
+                mismatches.append("...")
+            }
+        }
+        let mismatchCount = orderedEvents.reduce(0) { count, event in
+            guard let expected = nativeGCRByte(drive: drive, event: event) else { return count }
+            return count + (expected == event.value ? 0 : 1)
+        }
+        let detail = mismatches.isEmpty ? "none" : mismatches.prefix(8).joined(separator: "|")
+        return "compared=\(compared),missingTrack=\(missingTrackCount),mismatches=\(mismatchCount),detail=\(detail)"
+    }
+
+    private struct DriveRawBufferSource {
+        let rawOffset: Int
+        let event: DriveGCRReadObservation
+    }
+
+    private func driveRawBufferSourceSummary(
+        _ drive: Drive1541,
+        events: [DriveGCRReadObservation],
+        dropped: Int,
+        ramEvents: [RAMWriteObservation]
+    ) -> String {
+        let orderedEvents = orderedDriveGCRReadEvents(events, dropped: dropped)
+        guard !orderedEvents.isEmpty else { return "no-gcr" }
+
+        let mappedSources = driveRawBufferSources(from: orderedEvents)
+        guard !mappedSources.isEmpty else {
+            return "mapped=0"
+        }
+
+        let raw = driveBytes(drive, at: 0x0300, count: 0x0100)
+            + driveBytes(drive, at: 0x01BA, count: 0x0046)
+        let ram = contiguousRAMWriteWindow(from: ramEvents.sorted { lhs, rhs in
+            if lhs.address == rhs.address { return lhs.cycle < rhs.cycle }
+            return lhs.address < rhs.address
+        }).map(\.value)
+        let ramOffset = firstIndex(of: ram, in: raw)
+        let ramSourceText = rawBufferSourceRangeSummary(
+            mappedSources,
+            rawOffset: ramOffset,
+            count: ram.count,
+            label: "ram"
+        )
+        let mappedText = rawBufferSourceRangeSummary(
+            mappedSources,
+            rawOffset: mappedSources.first?.rawOffset,
+            count: max(0, (mappedSources.last?.rawOffset ?? 0) - (mappedSources.first?.rawOffset ?? 0) + 1),
+            label: "mapped"
+        )
+        let landmarkText = ramOffset.flatMap {
+            rawBufferLandmarkSummary(
+                drive,
+                mappedSources: mappedSources,
+                rawOffset: $0,
+                count: ram.count
+            )
+        } ?? "ram:no-source"
+
+        return "mapped=\(mappedSources.count),\(mappedText),\(ramSourceText),marks=\(landmarkText)"
+    }
+
+    private func driveRawBufferSources(from events: [DriveGCRReadObservation]) -> [DriveRawBufferSource] {
+        var sources: [DriveRawBufferSource] = []
+
+        let page0300Events = events.filter { $0.drivePC == 0x0409 }
+        if !page0300Events.isEmpty {
+            let startOffset = max(0, 0x0100 - page0300Events.count)
+            for (index, event) in page0300Events.enumerated() {
+                let rawOffset = startOffset + index
+                guard rawOffset < 0x0100 else { break }
+                sources.append(DriveRawBufferSource(rawOffset: rawOffset, event: event))
+            }
+        }
+
+        let page0100Events = events.filter { $0.drivePC == 0x0417 }
+        if !page0100Events.isEmpty {
+            let startOffset = 0x0100
+            for (index, event) in page0100Events.enumerated() {
+                let rawOffset = startOffset + index
+                guard rawOffset < 0x0146 else { break }
+                sources.append(DriveRawBufferSource(rawOffset: rawOffset, event: event))
+            }
+        }
+
+        return sources.sorted { lhs, rhs in
+            if lhs.rawOffset == rhs.rawOffset { return lhs.event.driveCycle < rhs.event.driveCycle }
+            return lhs.rawOffset < rhs.rawOffset
+        }
+    }
+
+    private func rawBufferSourceRangeSummary(
+        _ sources: [DriveRawBufferSource],
+        rawOffset: Int?,
+        count: Int,
+        label: String
+    ) -> String {
+        guard let rawOffset, count > 0 else {
+            return "\(label)=not-found"
+        }
+        let endOffset = rawOffset + count - 1
+        let covered = sources.filter { $0.rawOffset >= rawOffset && $0.rawOffset <= endOffset }
+        guard !covered.isEmpty else {
+            return "\(label)=+$\(String(format: "%04X", rawOffset)):+\(count):unmapped"
+        }
+        let first = covered[0]
+        let last = covered[covered.count - 1]
+        return String(
+            format: "%@=+$%04X:+%d:covered=%d:h%d:%d-%d..h%d:%d-%d",
+            label,
+            rawOffset,
+            count,
+            covered.count,
+            first.event.halfTrack,
+            first.event.presentedStartBit,
+            first.event.presentedEndBit,
+            last.event.halfTrack,
+            last.event.presentedStartBit,
+            last.event.presentedEndBit
+        )
+    }
+
+    private func rawBufferLandmarkSummary(
+        _ drive: Drive1541,
+        mappedSources: [DriveRawBufferSource],
+        rawOffset: Int,
+        count: Int
+    ) -> String {
+        guard count > 0 else { return "ram:empty" }
+        let endOffset = rawOffset + count - 1
+        let coveredEvents = mappedSources
+            .filter { $0.rawOffset >= rawOffset && $0.rawOffset <= endOffset }
+            .map(\.event)
+        guard !coveredEvents.isEmpty else { return "ram:unmapped" }
+        let references = driveGCRLandmarkReferences(drive: drive, events: coveredEvents)
+        guard !references.isEmpty else { return "ram:no-landmarks" }
+        return references.prefix(6).map {
+            "\(gcrLandmarkKindLabel($0.kind))t\($0.track)/s\($0.sector)@\($0.syncEndBit)"
+        }.joined(separator: "|")
+    }
+
+    private func nativeGCRByte(drive: Drive1541, event: DriveGCRReadObservation) -> UInt8? {
+        guard let track = drive.disk.trackInfo(halfTrack: event.halfTrack),
+              track.bitLength > 0 else {
+            return nil
+        }
+        var value: UInt8 = 0
+        for bitOffset in 0..<8 {
+            let bitPosition = (event.presentedStartBit + bitOffset) % track.bitLength
+            let byteIndex = bitPosition / 8
+            guard byteIndex >= 0 && byteIndex < track.bytes.count else {
+                return nil
+            }
+            let bitIndex = 7 - (bitPosition % 8)
+            value = (value << 1) | ((track.bytes[byteIndex] >> UInt8(bitIndex)) & 0x01)
+        }
+        return value
+    }
+
+    private func driveGCRSourceRangeSummary(_ events: [DriveGCRReadObservation], drive: Drive1541) -> String {
+        let summaries = Dictionary(grouping: events, by: { $0.halfTrack })
+            .map { halfTrack, grouped -> (Int, String) in
+                let starts = grouped.map(\.presentedStartBit)
+                let ends = grouped.map(\.presentedEndBit)
+                let minStart = starts.min() ?? 0
+                let maxEnd = ends.max() ?? 0
+                let landmarks = driveGCRSourceLandmarkSummary(
+                    drive: drive,
+                    halfTrack: halfTrack,
+                    rangeStartBit: minStart,
+                    rangeEndBit: maxEnd
+                )
+                return (halfTrack, "h\(halfTrack):\(minStart)-\(maxEnd):\(grouped.count):zones=\(driveGCRSourceZoneSummary(grouped, drive: drive)):marks=\(landmarks)")
+            }
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
+        return summaries.isEmpty ? "none" : summaries.joined(separator: "|")
+    }
+
+    private func driveGCRSourceZoneSummary(_ events: [DriveGCRReadObservation], drive: Drive1541) -> String {
+        var counts = [Int: Int]()
+        var sawMap = false
+        for event in events {
+            guard let track = drive.disk.trackInfo(halfTrack: event.halfTrack) else { continue }
+            let byteIndex = max(0, event.presentedStartBit / 8)
+            let zone: Int
+            if let speedZoneMap = track.speedZoneMap, byteIndex < speedZoneMap.count {
+                sawMap = true
+                zone = Int(speedZoneMap[byteIndex])
+            } else {
+                zone = track.speedZone
+            }
+            counts[zone, default: 0] += 1
+        }
+        let text = counts
+            .sorted { lhs, rhs in lhs.key < rhs.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
+        return "\(sawMap ? "map" : "fixed"){\(text.isEmpty ? "none" : text)}"
+    }
+
+    private func driveGCRSourceLandmarkSummary(
+        drive: Drive1541,
+        halfTrack: Int,
+        rangeStartBit: Int,
+        rangeEndBit: Int
+    ) -> String {
+        guard let track = drive.disk.trackInfo(halfTrack: halfTrack) else {
+            return "no-track"
+        }
+        let bitLength = track.bitLength
+        guard bitLength > 0 else {
+            return "empty"
+        }
+        let trackNumber = halfTrack / 2 + 1
+        let landmarks = G64Parser.syncLandmarks(from: track.bytes, track: trackNumber)
+        guard !landmarks.isEmpty else {
+            return "none"
+        }
+
+        let nearby = landmarks
+            .filter { circularDistance($0.syncEndBit, toRangeStart: rangeStartBit, end: rangeEndBit, modulo: bitLength) <= 512 }
+            .prefix(6)
+            .map { landmarkSummary($0) }
+        if !nearby.isEmpty {
+            return nearby.joined(separator: ",")
+        }
+
+        guard let nearest = landmarks.min(by: {
+            circularDistance($0.syncEndBit, toRangeStart: rangeStartBit, end: rangeEndBit, modulo: bitLength)
+                < circularDistance($1.syncEndBit, toRangeStart: rangeStartBit, end: rangeEndBit, modulo: bitLength)
+        }) else {
+            return "none"
+        }
+        let distance = circularDistance(nearest.syncEndBit, toRangeStart: rangeStartBit, end: rangeEndBit, modulo: bitLength)
+        return "nearest:\(landmarkSummary(nearest)):d=\(distance)"
+    }
+
+    private struct GCRLandmarkReference {
+        let kind: G64Parser.SyncLandmark.Kind
+        let track: Int
+        let sector: Int
+        let syncEndBit: Int
+    }
+
+    private func driveGCRLandmarkReferences(
+        drive: Drive1541,
+        events: [DriveGCRReadObservation]
+    ) -> [GCRLandmarkReference] {
+        Dictionary(grouping: events, by: { $0.halfTrack })
+            .flatMap { halfTrack, grouped -> [GCRLandmarkReference] in
+                guard let track = drive.disk.trackInfo(halfTrack: halfTrack) else { return [] }
+                let bitLength = track.bitLength
+                guard bitLength > 0 else { return [] }
+                let starts = grouped.map(\.presentedStartBit)
+                let ends = grouped.map(\.presentedEndBit)
+                let minStart = starts.min() ?? 0
+                let maxEnd = ends.max() ?? 0
+                let trackNumber = halfTrack / 2 + 1
+                return G64Parser.syncLandmarks(from: track.bytes, track: trackNumber)
+                    .filter {
+                        circularDistance($0.syncEndBit, toRangeStart: minStart, end: maxEnd, modulo: bitLength) <= 512
+                    }
+                    .compactMap { landmark in
+                        guard let track = landmark.track, let sector = landmark.sector else { return nil }
+                        return GCRLandmarkReference(
+                            kind: landmark.kind,
+                            track: track,
+                            sector: sector,
+                            syncEndBit: landmark.syncEndBit
+                        )
+                    }
+            }
+            .reduce(into: []) { result, reference in
+                if !result.contains(where: {
+                    $0.kind == reference.kind
+                        && $0.track == reference.track
+                        && $0.sector == reference.sector
+                        && $0.syncEndBit == reference.syncEndBit
+                }) {
+                    result.append(reference)
+                }
+            }
+    }
+
+    private func landmarkSummary(_ landmark: G64Parser.SyncLandmark) -> String {
+        let prefix: String
+        switch landmark.kind {
+        case .header:
+            prefix = "H"
+        case .data:
+            prefix = "D"
+        case .unknown:
+            prefix = "U"
+        }
+        let sector = landmark.sector.map { "s\($0)" } ?? "s?"
+        let track = landmark.track.map { "t\($0)" } ?? "t?"
+        return "\(prefix)\(track)/\(sector)@\(landmark.syncEndBit)"
+    }
+
+    private func circularDistance(_ bit: Int, toRangeStart start: Int, end: Int, modulo: Int) -> Int {
+        let normalizedBit = ((bit % modulo) + modulo) % modulo
+        let normalizedStart = ((start % modulo) + modulo) % modulo
+        let normalizedEnd = ((end % modulo) + modulo) % modulo
+        if normalizedStart <= normalizedEnd, normalizedBit >= normalizedStart, normalizedBit <= normalizedEnd {
+            return 0
+        }
+        if normalizedStart > normalizedEnd, (normalizedBit >= normalizedStart || normalizedBit <= normalizedEnd) {
+            return 0
+        }
+        let toStart = min(
+            abs(normalizedBit - normalizedStart),
+            modulo - abs(normalizedBit - normalizedStart)
+        )
+        let toEnd = min(
+            abs(normalizedBit - normalizedEnd),
+            modulo - abs(normalizedBit - normalizedEnd)
+        )
+        return min(toStart, toEnd)
     }
 
     private func narrowedRange(
@@ -3173,8 +4183,8 @@ final class LocalDiskMatrixTests: XCTestCase {
             && postSpaceHotspots[0x0002, default: 0] >= threshold
     }
 
-    private func disassemblySummary(_ c64: C64, at pc: UInt16) -> String {
-        Disassembler.disassemble(memory: c64.memory, from: pc, count: 8)
+    private func disassemblySummary(_ c64: C64, at pc: UInt16, count: Int = 8) -> String {
+        Disassembler.disassemble(memory: c64.memory, from: pc, count: count)
             .split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .joined(separator: ";")
@@ -3259,6 +4269,26 @@ final class LocalDiskMatrixTests: XCTestCase {
         let actualOffsetText = best.actualOffset.map { "+$\(String(format: "%04X", $0))" } ?? "not-found"
         let scores = phases.map { "\($0.phase):\($0.valid)" }.joined(separator: "|")
         return "raw=326,bestPhase=\(best.phase),valid=\(best.valid)/\(decodedByteCount),scores=\(scores),actualInDecoded=\(actualOffsetText),actual=\(actualPreview),decoded=\(decodedPreview)"
+    }
+
+    private func driveZeroPageSummary(_ drive: Drive1541) -> String {
+        let watched: [(String, UInt16)] = [
+            ("08", 0x0008), ("09", 0x0009), ("0A", 0x000A), ("0B", 0x000B),
+            ("0C", 0x000C), ("0D", 0x000D), ("10", 0x0010), ("11", 0x0011),
+            ("18", 0x0018), ("19", 0x0019), ("31", 0x0031), ("5E", 0x005E),
+            ("5F", 0x005F), ("64", 0x0064), ("7E", 0x007E),
+        ]
+        let values = watched
+            .map { name, address in "\(name)=\(String(format: "%02X", drive.memory.ram[Int(address)]))" }
+            .joined(separator: ",")
+        let via = String(
+            format: "via2PA=%02X,PB=%02X,DDRA=%02X,DDRB=%02X",
+            drive.via2.portAInput,
+            drive.via2.portB,
+            drive.via2.ddra,
+            drive.via2.ddrb
+        )
+        return "\(values),\(via)"
     }
 
     private func driveBytes(_ drive: Drive1541, at address: UInt16, count: Int) -> [UInt8] {
@@ -3441,6 +4471,131 @@ final class LocalDiskMatrixTests: XCTestCase {
         let offset = Int(address) - loadAddress
         guard offset >= 0, offset + 2 < data.count else { return nil }
         return data[offset + 2]
+    }
+
+    private func diskFileExpectedLocationSummary(_ c64: C64, name: String, address: UInt16) -> String {
+        guard let entry = c64.diskDrive.findFile(name) else { return "missing" }
+        let data = c64.diskDrive.readFileData(entry)
+        guard data.count >= 2 else { return "empty" }
+
+        let loadAddress = Int(UInt16(data[0]) | (UInt16(data[1]) << 8))
+        let payloadOffset = Int(address) - loadAddress
+        guard payloadOffset >= 0 else {
+            return String(format: "before-load load=$%04X addr=$%04X", loadAddress, Int(address))
+        }
+
+        var remaining = payloadOffset + 2
+        var track = Int(entry.firstTrack)
+        var sector = Int(entry.firstSector)
+        var chainIndex = 0
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = track * 256 + sector
+            guard !visitedSectors.contains(key) else {
+                return "loop@\(track)/\(sector)"
+            }
+            visitedSectors.insert(key)
+
+            guard let sectorData = c64.diskDrive.readSector(track: track, sector: sector) else {
+                return "missing-sector@\(track)/\(sector)"
+            }
+            let nextTrack = Int(sectorData[0])
+            let nextSector = Int(sectorData[1])
+            let bytesInSector = nextTrack == 0 ? max(0, nextSector - 2) : 254
+
+            if remaining < bytesInSector {
+                let sectorByteOffset = remaining + 2
+                let value = sectorData[sectorByteOffset]
+                return String(
+                    format: "addr=$%04X,payload=+$%04X,chain=%d,ts=%d/%d,sectorByte=$%02X,value=$%02X,next=%d/%d",
+                    Int(address),
+                    payloadOffset,
+                    chainIndex,
+                    track,
+                    sector,
+                    sectorByteOffset,
+                    value,
+                    nextTrack,
+                    nextSector
+                )
+            }
+
+            remaining -= bytesInSector
+            track = nextTrack
+            sector = nextSector
+            chainIndex += 1
+        }
+
+        return String(format: "past-eof addr=$%04X,payload=+$%04X", Int(address), payloadOffset)
+    }
+
+    private func diskFileSourceForGCRLandmarks(
+        _ c64: C64,
+        name: String,
+        drive: Drive1541,
+        events: [DriveGCRReadObservation]
+    ) -> String {
+        guard !events.isEmpty else { return "no-gcr" }
+        guard c64.diskDrive.findFile(name) != nil else { return "missing" }
+
+        let chain = diskFileSectorChainMap(c64, name: name)
+        guard !chain.isEmpty else { return "empty-chain" }
+        let orderedEvents = orderedDriveGCRReadEvents(events, dropped: 0)
+        let references = driveGCRLandmarkReferences(drive: drive, events: orderedEvents)
+        guard !references.isEmpty else { return "no-landmarks" }
+
+        let summaries = references.prefix(8).map { reference -> String in
+            let key = reference.track * 256 + reference.sector
+            let location = chain[key] ?? "not-in-chain"
+            return "\(gcrLandmarkKindLabel(reference.kind))t\(reference.track)/s\(reference.sector)@\(reference.syncEndBit):\(location)"
+        }
+        let suffix = references.count > 8 ? "|...+\(references.count - 8)" : ""
+        return summaries.joined(separator: "|") + suffix
+    }
+
+    private func gcrLandmarkKindLabel(_ kind: G64Parser.SyncLandmark.Kind) -> String {
+        switch kind {
+        case .header: return "H"
+        case .data: return "D"
+        case .unknown: return "U"
+        }
+    }
+
+    private func diskFileSectorChainMap(_ c64: C64, name: String) -> [Int: String] {
+        guard let entry = c64.diskDrive.findFile(name) else { return [:] }
+
+        var result: [Int: String] = [:]
+        var track = Int(entry.firstTrack)
+        var sector = Int(entry.firstSector)
+        var chainIndex = 0
+        var payloadOffset = 0
+        var visitedSectors = Set<Int>()
+
+        while track != 0 {
+            let key = track * 256 + sector
+            guard !visitedSectors.contains(key) else { break }
+            visitedSectors.insert(key)
+
+            guard let sectorData = c64.diskDrive.readSector(track: track, sector: sector) else { break }
+            let nextTrack = Int(sectorData[0])
+            let nextSector = Int(sectorData[1])
+            let payloadCount = nextTrack == 0 ? max(0, nextSector - 2) : 254
+            result[key] = String(
+                format: "chain=%d,payload=+$%04X..+$%04X,next=%d/%d",
+                chainIndex,
+                payloadOffset,
+                max(payloadOffset, payloadOffset + payloadCount - 1),
+                nextTrack,
+                nextSector
+            )
+            payloadOffset += payloadCount
+            chainIndex += 1
+            track = nextTrack
+            sector = nextSector
+        }
+
+        return result
     }
 
     private func diskFileMemoryComparison(_ c64: C64, name: String) -> String {
@@ -4095,6 +5250,84 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertNil(skippedRecord.expectedFailureMatched)
         XCTAssertEqual(skippedRecord.key, milestone.resultKey)
         XCTAssertFalse(try passedMilestoneKeys(from: skippedLogURL).contains(milestone.resultKey))
+    }
+
+    func testByteListEnvironmentParsesPlainHexBytes() {
+        let name = "SWIFT64_TEST_BYTE_LIST_ENV"
+        setenv(name, "B1 2F $2A 0x07,10", 1)
+        defer { unsetenv(name) }
+
+        XCTAssertEqual(parseByteListEnvironment(name), [0xB1, 0x2F, 0x2A, 0x07, 0x10])
+    }
+
+    func testCPUReadTraceSummaryReportsRingBufferedSourceReads() {
+        let events = [
+            CPUReadObservation(cycle: 1, pc: 0x0836, address: 0x002F, value: 0x00),
+            CPUReadObservation(cycle: 2, pc: 0x0838, address: 0x0103, value: 0x25),
+            CPUReadObservation(cycle: 3, pc: 0x083A, address: 0xCC10, value: 0xB1),
+        ]
+
+        let summary = cpuReadTraceSummary(
+            events,
+            dropped: 0,
+            ranges: [0x0000..<0x0200, 0xCC00..<0xD000]
+        )
+
+        XCTAssertTrue(summary.contains("count=3"))
+        XCTAssertTrue(summary.contains(#"ranges=$0000-$01FF|$CC00-$CFFF"#))
+        XCTAssertTrue(summary.contains(#"$0103:1"#))
+        XCTAssertTrue(summary.contains(#"PC=$0838:$0103->$25"#))
+    }
+
+    func testWatchedTransferComparisonReportsClosestDriveByteMismatch() {
+        let driveBytes: [UInt8] = [0xB1, 0x2F, 0x2A, 0x2A]
+        let driveEvents = driveBytes.enumerated().flatMap { index, byte in
+            [
+                DriveVIA1PortBWriteObservation(
+                    driveCycle: UInt64(index * 4),
+                    drivePC: 0x04F7,
+                    portB: byte >> 4,
+                    ddrB: 0xFF,
+                    snapshot: nil
+                ),
+                DriveVIA1PortBWriteObservation(
+                    driveCycle: UInt64(index * 4 + 1),
+                    drivePC: 0x04FD,
+                    portB: 0,
+                    ddrB: 0xFF,
+                    snapshot: nil
+                ),
+                DriveVIA1PortBWriteObservation(
+                    driveCycle: UInt64(index * 4 + 2),
+                    drivePC: 0x0503,
+                    portB: byte & 0x0F,
+                    ddrB: 0xFF,
+                    snapshot: nil
+                ),
+            ]
+        }
+        let ramValues: [UInt8] = [0xB1, 0x2F, 0x2A, 0x25]
+        let ramEvents = ramValues.enumerated().map { index, byte in
+            RAMWriteObservation(
+                cycle: UInt64(100 + index),
+                pc: 0xCD08,
+                address: UInt16(0x0848 + index),
+                value: byte,
+                precedingRead: nil
+            )
+        }
+
+        let summary = driveWatchedTransferComparison(
+            events: driveEvents,
+            dropped: 0,
+            ramEvents: ramEvents,
+            stop: ramEvents.last
+        )
+
+        XCTAssertTrue(summary.contains("actual=B1 2F 2A 25"))
+        XCTAssertTrue(summary.contains("exact=not-found"))
+        XCTAssertTrue(summary.contains("mismatches=1"))
+        XCTAssertTrue(summary.contains("exp=$2A got=$25"))
     }
 
     func testMilestoneRunSummaryWritesAggregateJSON() throws {

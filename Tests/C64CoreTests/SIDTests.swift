@@ -149,6 +149,33 @@ final class SIDTests: XCTestCase {
         XCTAssertNil(sid.readAudioSampleForPlayback())
     }
 
+    func testPlaybackAudioRingBufferReadsBatchedSamplesAcrossWrap() {
+        let sid = SID()
+        let capacity = sid.sampleBuffer.count
+
+        for index in 0..<capacity {
+            sid.writeSample(Int32(index))
+        }
+        for _ in 0..<capacity - 3 {
+            _ = sid.readAudioSampleForPlayback()
+        }
+        sid.writeSample(10_000)
+        sid.writeSample(12_000)
+
+        var samples = [Float](repeating: 0, count: 5)
+        let readCount = samples.withUnsafeMutableBufferPointer {
+            sid.readAudioSamplesForPlayback(into: $0)
+        }
+
+        XCTAssertEqual(readCount, 5)
+        XCTAssertEqual(samples[0], Float(capacity - 3) / 32768.0, accuracy: 0.000_001)
+        XCTAssertEqual(samples[1], Float(capacity - 2) / 32768.0, accuracy: 0.000_001)
+        XCTAssertEqual(samples[2], Float(capacity - 1) / 32768.0, accuracy: 0.000_001)
+        XCTAssertEqual(samples[3], Float(10_000) / 32768.0, accuracy: 0.000_001)
+        XCTAssertEqual(samples[4], Float(12_000) / 32768.0, accuracy: 0.000_001)
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 0)
+    }
+
     func testPlaybackAudioRingBufferKeepsFullStateDistinctFromEmpty() {
         let sid = SID()
 

@@ -75,6 +75,9 @@ public final class MemoryMap: Bus {
     /// Called after a normal CPU RAM write has been committed.
     public var onRAMWrite: ((UInt16, UInt8) -> Void)?
 
+    /// Called after a CPU memory read has produced its visible value.
+    public var onCPURead: ((UInt16, UInt8) -> Void)?
+
     /// Called after a CPU-visible SID register write, with the normalized 5-bit register.
     public var onSIDRegisterWrite: ((UInt16, UInt8) -> Void)?
 
@@ -280,6 +283,7 @@ public final class MemoryMap: Bus {
         if let dbg = debugger, !dbg.watchpoints.isEmpty {
             dbg.notifyRead(address, value: value)
         }
+        onCPURead?(address, value)
         return value
     }
 

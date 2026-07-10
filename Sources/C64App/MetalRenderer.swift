@@ -20,8 +20,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     weak var c64: C64?
 
-    /// Emulation runs on a dedicated thread; this holds the latest completed framebuffer.
-    var displayBuffer: [UInt32]
+    /// Emulation runs on a dedicated thread; these hold the latest completed framebuffer.
+    private var frameBuffers: [[UInt32]]
+    private var frontBufferIndex = 0
     let lock = NSLock()
     var emulationThread: Thread?
     var running = true
@@ -100,7 +101,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         self.commandQueue = queue
         self.c64 = c64
 
-        displayBuffer = [UInt32](repeating: 0, count: VIC.screenWidth * VIC.screenHeight)
+        let pixelCount = VIC.screenWidth * VIC.screenHeight
+        frameBuffers = [
+            [UInt32](repeating: 0, count: pixelCount),
+            [UInt32](repeating: 0, count: pixelCount),
+        ]
 
         // Create texture
         let texDesc = MTLTextureDescriptor.texture2DDescriptor(
@@ -179,9 +184,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // Run one C64 frame
             let completed = c64.runFrame()
 
-            // Copy framebuffer for display
+            // Copy into the back buffer, then publish it with an index swap.
             lock.lock()
-            displayBuffer = c64.vic.framebuffer
+            let backBufferIndex = 1 - frontBufferIndex
+            lock.unlock()
+            frameBuffers[backBufferIndex].withUnsafeMutableBufferPointer { dst in
+                c64.vic.framebuffer.withUnsafeBufferPointer { src in
+                    if let dstBase = dst.baseAddress, let srcBase = src.baseAddress {
+                        dstBase.update(from: srcBase, count: min(dst.count, src.count))
+                    }
+                }
+            }
+            lock.lock()
+            frontBufferIndex = backBufferIndex
             lock.unlock()
 
             // Produce debug snapshot every 5 frames (~10 Hz) while running,
@@ -207,12 +222,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        // Upload the latest completed framebuffer to texture
+        // Upload the latest completed framebuffer to texture. Keep the lock while
+        // Metal copies from the Swift buffer so the emulation thread cannot reuse it.
         lock.lock()
-        let fb = displayBuffer
-        lock.unlock()
-
-        fb.withUnsafeBufferPointer { ptr in
+        frameBuffers[frontBufferIndex].withUnsafeBufferPointer { ptr in
             texture.replace(
                 region: MTLRegionMake2D(0, 0, VIC.screenWidth, VIC.screenHeight),
                 mipmapLevel: 0,
@@ -220,6 +233,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 bytesPerRow: VIC.screenWidth * 4
             )
         }
+        lock.unlock()
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let descriptor = view.currentRenderPassDescriptor,

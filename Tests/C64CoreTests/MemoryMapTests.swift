@@ -2,6 +2,22 @@ import XCTest
 @testable import C64Core
 
 final class MemoryMapTests: XCTestCase {
+    func testCPUReadHookReportsVisibleReadValues() {
+        let memory = MemoryMap()
+        memory.ram[0x2000] = 0xA5
+        memory.kernalROM[0] = 0x4C
+        var reads: [(UInt16, UInt8)] = []
+        memory.onCPURead = { address, value in
+            reads.append((address, value))
+        }
+
+        XCTAssertEqual(memory.read(0x2000), 0xA5)
+        XCTAssertEqual(memory.read(0xE000), 0x4C)
+
+        XCTAssertEqual(reads.map(\.0), [0x2000, 0xE000])
+        XCTAssertEqual(reads.map(\.1), [0xA5, 0x4C])
+    }
+
     func testResetCPUPortRestoresDefaultROMBankingAndCassetteOutputs() {
         let memory = MemoryMap()
         memory.write(0x0000, value: 0x00)

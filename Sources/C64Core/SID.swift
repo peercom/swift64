@@ -1128,6 +1128,34 @@ public final class SID {
         return sample
     }
 
+    @discardableResult
+    public func readAudioSamplesForPlayback(into output: UnsafeMutableBufferPointer<Float>) -> Int {
+        sampleBufferLock.lock()
+        defer { sampleBufferLock.unlock() }
+
+        guard sampleBufferedCount > 0, output.count > 0 else { return 0 }
+
+        let readCount = min(output.count, sampleBufferedCount)
+        var remaining = readCount
+        var outputOffset = 0
+        while remaining > 0 {
+            let contiguousCount = min(remaining, sampleBuffer.count - sampleReadPos)
+            if let outputBase = output.baseAddress {
+                sampleBuffer.withUnsafeBufferPointer { buffer in
+                    outputBase.advanced(by: outputOffset).update(
+                        from: buffer.baseAddress!.advanced(by: sampleReadPos),
+                        count: contiguousCount
+                    )
+                }
+            }
+            sampleReadPos = (sampleReadPos + contiguousCount) % sampleBuffer.count
+            sampleBufferedCount -= contiguousCount
+            outputOffset += contiguousCount
+            remaining -= contiguousCount
+        }
+        return readCount
+    }
+
     func sampleOutput(_ input: Int32) -> Int32 {
         guard accuracyMode == .compatibility else { return input }
 

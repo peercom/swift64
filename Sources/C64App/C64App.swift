@@ -145,6 +145,26 @@ struct C64App: App {
                     }
                 ))
             }
+
+            CommandGroup(after: .toolbar) {
+                Toggle("Show Inspector", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: PreferenceKey.showInspector) },
+                    set: { UserDefaults.standard.set($0, forKey: PreferenceKey.showInspector) }
+                ))
+                .keyboardShortcut("i", modifiers: [.command, .option])
+
+                Toggle("Show Status Bar", isOn: Binding(
+                    get: {
+                        UserDefaults.standard.object(forKey: PreferenceKey.showStatusBar) as? Bool ?? true
+                    },
+                    set: { UserDefaults.standard.set($0, forKey: PreferenceKey.showStatusBar) }
+                ))
+
+                Button("ROM Setup Assistant...") {
+                    UserDefaults.standard.set(false, forKey: PreferenceKey.romAssistantDismissed)
+                }
+                .keyboardShortcut(",", modifiers: [.command, .option])
+            }
         }
 
         Settings {

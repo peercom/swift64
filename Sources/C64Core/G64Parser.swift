@@ -16,6 +16,19 @@ public enum G64Parser {
         let duplicateSectorHeaderCount: Int
     }
 
+    struct SyncLandmark: Equatable {
+        enum Kind: String {
+            case header
+            case data
+            case unknown
+        }
+
+        let syncEndBit: Int
+        let kind: Kind
+        let sector: Int?
+        let track: Int?
+    }
+
     // MARK: - G64 header constants
 
     static let signature = "GCR-1541"
@@ -321,6 +334,61 @@ public enum G64Parser {
             validHeaderCount: sectorHeaderCounts.values.reduce(0, +),
             duplicateSectorHeaderCount: duplicateCount
         )
+    }
+
+    static func syncLandmarks(
+        from gcrData: [UInt8],
+        track expectedTrack: Int,
+        maxCount: Int = Int.max
+    ) -> [SyncLandmark] {
+        let len = gcrData.count
+        guard len > 20, maxCount > 0 else { return [] }
+
+        let bits = toBits(gcrData + gcrData)
+        let maxBit = len * 8
+        var bitPos = 0
+        var landmarks: [SyncLandmark] = []
+        var lastHeaderSector: Int?
+        var lastHeaderTrack: Int?
+
+        while bitPos < maxBit && landmarks.count < maxCount {
+            let afterSync = findSyncBit(in: bits, from: bitPos)
+            guard afterSync >= 0 && afterSync < maxBit else { break }
+
+            let headerDecode = decodeGCRFromBitsWithValidity(bits, from: afterSync, count: 8)
+            if headerDecode.isValid &&
+                headerDecode.bytes.count >= 6 &&
+                headerDecode.bytes[0] == 0x08 &&
+                headerChecksumIsValid(headerDecode.bytes) {
+                let sector = Int(headerDecode.bytes[2])
+                let track = Int(headerDecode.bytes[3])
+                landmarks.append(SyncLandmark(syncEndBit: afterSync, kind: .header, sector: sector, track: track))
+                lastHeaderSector = sector
+                lastHeaderTrack = track
+                bitPos = afterSync + 80
+                continue
+            }
+
+            let dataDecode = decodeGCRFromBitsWithValidity(bits, from: afterSync, count: 260)
+            if dataDecode.isValid &&
+                dataDecode.bytes.count >= 258 &&
+                dataDecode.bytes[0] == 0x07 &&
+                dataChecksumIsValid(dataDecode.bytes) {
+                landmarks.append(SyncLandmark(
+                    syncEndBit: afterSync,
+                    kind: .data,
+                    sector: lastHeaderTrack == expectedTrack ? lastHeaderSector : nil,
+                    track: lastHeaderTrack
+                ))
+                bitPos = afterSync + 2600
+                continue
+            }
+
+            landmarks.append(SyncLandmark(syncEndBit: afterSync, kind: .unknown, sector: nil, track: nil))
+            bitPos = afterSync + 10
+        }
+
+        return landmarks
     }
 
     private static func decodeDataBlockAfterHeader(

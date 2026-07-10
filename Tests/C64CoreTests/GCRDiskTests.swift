@@ -1882,6 +1882,29 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertEqual(reloaded.trackInfo(halfTrack: 0)?.speedZone, 3)
     }
 
+    func testImportedNBZLowLevelWritesExportAsG64() throws {
+        var firstTrack = [UInt8](repeating: 0xAA, count: 0x2000)
+        firstTrack[2] = 0x55
+        let nib = makeNIB(entries: [
+            (nibHalfTrack: 2, density: 0x13, bytes: firstTrack),
+        ])
+        let nbz = makeLiteralNBZ(from: nib, marker: 0xFE)
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(Data(nbz), fileName: "native.nbz"))
+        c64.setMountedDiskWriteProtected(false)
+
+        XCTAssertTrue(c64.drive1541.disk.writeByte(0x7C, halfTrack: 0, byteIndex: 2))
+
+        XCTAssertTrue(c64.emulationStatus.diskHasUnsavedChanges)
+        XCTAssertTrue(c64.emulationStatus.canExportModifiedG64)
+        let exported = try XCTUnwrap(c64.exportedG64Image)
+        let reloaded = GCRDisk()
+        XCTAssertTrue(reloaded.loadG64(exported))
+        XCTAssertEqual(reloaded.image?.format, .g64)
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 0)?.bytes[2], 0x7C)
+        XCTAssertEqual(reloaded.trackInfo(halfTrack: 0)?.speedZone, 3)
+    }
+
     func testImportedP64LowLevelWritesExportAsG64() throws {
         let p64 = makeP64(halfTrack: 0, gcrPrefix: [0x00, 0xA5])
         let c64 = C64()

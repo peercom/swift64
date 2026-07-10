@@ -12,7 +12,10 @@ struct ContentView: View {
     @State private var showingDriveStatus = false
     @State private var isDropTargeted = false
     @State private var isFullScreen = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var showingROMAssistant = false
+    @AppStorage(PreferenceKey.showInspector) private var showInspector = false
+    @AppStorage(PreferenceKey.showStatusBar) private var showStatusBar = true
+    @AppStorage(PreferenceKey.romAssistantDismissed) private var romAssistantDismissed = false
 
     private let statusTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -21,27 +24,20 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            C64SidebarView(
-                status: status,
-                romStatusMessage: emulator.romStatusMessage,
-                openDisk: openDisk,
-                openTape: openTape,
-                loadPRG: loadPRG,
-                openCartridge: openCartridge,
-                openDebugger: { openWindow(id: "debugger") },
-                reset: reset
-            )
-            .navigationTitle("C64")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-        } detail: {
+        NavigationStack {
             C64DisplayWorkspace(
                 emulator: emulator,
                 status: status,
                 isDropTargeted: isDropTargeted,
-                showsStatusBar: !isFullScreen,
+                showsStatusBar: showStatusBar && !isFullScreen,
+                romSetupState: emulator.romSetupState,
+                showROMAssistant: showROMAssistantBadge,
                 openDisk: openDisk,
-                loadPRG: loadPRG
+                loadPRG: loadPRG,
+                openROMAssistant: {
+                    romAssistantDismissed = false
+                    showingROMAssistant = true
+                }
             )
             .ignoresSafeArea(isFullScreen ? .all : [], edges: .all)
             .navigationTitle(status.mountedDiskName ?? "Commodore 64")
@@ -111,6 +107,11 @@ struct ContentView: View {
 
                     Divider()
 
+                    Button(action: { showInspector.toggle() }) {
+                        Label("Inspector", systemImage: "sidebar.right")
+                    }
+                    .help(showInspector ? "Hide Inspector" : "Show Inspector")
+
                     Button(action: { openWindow(id: "debugger") }) {
                         Label("Debugger", systemImage: "ladybug")
                     }
@@ -129,13 +130,72 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1040, minHeight: 680)
+        .inspector(isPresented: inspectorBinding) {
+            C64InspectorView(
+                emulator: emulator,
+                status: status,
+                openDisk: openDisk,
+                openTape: openTape,
+                loadPRG: loadPRG,
+                openCartridge: openCartridge,
+                exportModifiedD64: exportModifiedD64,
+                exportModifiedG64: exportModifiedG64,
+                exportCapturedTAP: exportCapturedTAP,
+                exportSavedT64: exportSavedT64,
+                openDebugger: { openWindow(id: "debugger") },
+                reset: reset,
+                openROMAssistant: {
+                    romAssistantDismissed = false
+                    showingROMAssistant = true
+                }
+            )
+            .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
+        }
         .toolbar(isFullScreen ? .hidden : .visible, for: .windowToolbar)
         .background(WindowFullScreenObserver(isFullScreen: $isFullScreen).frame(width: 0, height: 0))
         .onChange(of: isFullScreen) { _, fullScreen in
-            columnVisibility = fullScreen ? .detailOnly : .all
+            if fullScreen {
+                showInspector = false
+            }
         }
         .onReceive(statusTimer) { _ in
             emulator.refreshStatus()
+            presentROMAssistantIfNeeded()
+        }
+        .sheet(isPresented: $showingROMAssistant) {
+            ROMSetupAssistantView(emulator: emulator) {
+                romAssistantDismissed = true
+                showingROMAssistant = false
+            }
+        }
+        .onAppear {
+            presentROMAssistantIfNeeded()
+        }
+        .onChange(of: romAssistantDismissed) { _, dismissed in
+            if !dismissed {
+                presentROMAssistantIfNeeded(force: true)
+            }
+        }
+    }
+
+    private var inspectorBinding: Binding<Bool> {
+        Binding(
+            get: { showInspector && !isFullScreen },
+            set: { showInspector = $0 }
+        )
+    }
+
+    private var showROMAssistantBadge: Bool {
+        !emulator.romSetupState.isComplete
+    }
+
+    private func presentROMAssistantIfNeeded(force: Bool = false) {
+        guard !emulator.romSetupState.isComplete else {
+            showingROMAssistant = false
+            return
+        }
+        if force || !romAssistantDismissed {
+            showingROMAssistant = true
         }
     }
 
@@ -410,8 +470,11 @@ private struct C64DisplayWorkspace: View {
     let status: C64.EmulationStatus
     let isDropTargeted: Bool
     let showsStatusBar: Bool
+    let romSetupState: ROMSetupState
+    let showROMAssistant: Bool
     let openDisk: () -> Void
     let loadPRG: () -> Void
+    let openROMAssistant: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -423,14 +486,37 @@ private struct C64DisplayWorkspace: View {
 
                     MetalView(emulator: emulator)
                         .frame(width: displaySize.width, height: displaySize.height)
+
+                    if showROMAssistant {
+                        VStack {
+                            HStack {
+                                ROMWarningBadge(state: romSetupState, action: openROMAssistant)
+                                Spacer()
+                            }
+                            Spacer()
+                        }
+                        .padding(18)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .overlay {
                 if isDropTargeted {
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.accentColor, lineWidth: 3)
-                        .padding(12)
+                    VStack(spacing: 10) {
+                        Image(systemName: "arrow.down.doc")
+                            .font(.system(size: 34, weight: .semibold))
+                        Text("Drop C64 media")
+                            .font(.headline)
+                        Text("D64, G64, NIB, NBZ, P64, T64, TAP, PRG, P00, CRT")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(22)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -443,6 +529,8 @@ private struct C64DisplayWorkspace: View {
         .contextMenu {
             Button("Open Disk Image...") { openDisk() }
             Button("Load Program...") { loadPRG() }
+            Divider()
+            Button("ROM Setup...") { openROMAssistant() }
         }
     }
 
@@ -608,6 +696,7 @@ private struct DriveStatusPopover: View {
                 StatusRow(label: "Fast Media", value: highLevelMediaDescription)
                 StatusRow(label: "Modified", value: modifiedDescription)
                 StatusRow(label: "Write Protect", value: status.highLevelDiskWriteProtected ? "on" : "off")
+                StatusRow(label: "DOS Exec", value: highLevelDriveExecuteDescription)
                 StatusRow(label: "Tape Capture", value: tapeCaptureDescription)
                 StatusRow(label: "Tape Save", value: tapeSaveDescription)
                 StatusRow(label: "Tape Decode", value: tapeDecodeDescription)
@@ -686,6 +775,11 @@ private struct DriveStatusPopover: View {
             return "yes"
         }
         return "no"
+    }
+
+    private var highLevelDriveExecuteDescription: String {
+        guard let address = status.highLevelDriveExecuteAddress else { return "none" }
+        return "$\(hex16(address))"
     }
 
     private var tapeCaptureDescription: String {
@@ -795,6 +889,523 @@ private struct StatusRow: View {
     }
 }
 
+struct ROMSetupState {
+    struct Item: Identifiable {
+        let id: String
+        let title: String
+        let path: String
+        let bookmarkKey: String
+        let importedPathKey: String
+        let storedFileName: String
+        let required: Bool
+        let expectedSize: Int
+
+        var isConfigured: Bool {
+            let defaults = UserDefaults.standard
+            if let importedPath = defaults.string(forKey: importedPathKey),
+               !importedPath.isEmpty,
+               FileManager.default.isReadableFile(atPath: importedPath) {
+                return true
+            }
+            if !path.isEmpty, FileManager.default.isReadableFile(atPath: path) {
+                return true
+            }
+            return defaults.data(forKey: bookmarkKey) != nil
+        }
+
+        var statusText: String {
+            if let importedPath = UserDefaults.standard.string(forKey: importedPathKey),
+               !importedPath.isEmpty,
+               FileManager.default.isReadableFile(atPath: importedPath) {
+                return "Imported"
+            }
+            if isConfigured {
+                return "Configured"
+            }
+            return required ? "Required" : "Optional"
+        }
+    }
+
+    let items: [Item]
+
+    var requiredItems: [Item] {
+        items.filter(\.required)
+    }
+
+    var missingRequiredCount: Int {
+        requiredItems.filter { !$0.isConfigured }.count
+    }
+
+    var isComplete: Bool {
+        missingRequiredCount == 0
+    }
+
+    var driveROMConfigured: Bool {
+        items.first { $0.id == "drive1541" }?.isConfigured == true
+    }
+
+    var summary: String {
+        if isComplete && driveROMConfigured {
+            return "C64 and 1541 ROMs are ready."
+        }
+        if isComplete {
+            return "C64 ROMs are ready. 1541 ROM is optional until true-drive mode is used."
+        }
+        return "\(missingRequiredCount) required ROM\(missingRequiredCount == 1 ? "" : "s") missing."
+    }
+}
+
+private struct ROMWarningBadge: View {
+    let state: ROMSetupState
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(state.summary, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.yellow)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Open ROM setup")
+    }
+}
+
+private struct C64InspectorView: View {
+    @ObservedObject var emulator: EmulatorController
+    let status: C64.EmulationStatus
+    let openDisk: () -> Void
+    let openTape: () -> Void
+    let loadPRG: () -> Void
+    let openCartridge: () -> Void
+    let exportModifiedD64: () -> Void
+    let exportModifiedG64: () -> Void
+    let exportCapturedTAP: () -> Void
+    let exportSavedT64: () -> Void
+    let openDebugger: () -> Void
+    let reset: () -> Void
+    let openROMAssistant: () -> Void
+
+    @State private var tab: InspectorTab = .media
+    @State private var showsAdvancedDrive = false
+
+    enum InspectorTab: String, CaseIterable, Identifiable {
+        case media = "Media"
+        case machine = "Machine"
+        case drive = "Drive"
+        case audio = "Audio"
+
+        var id: String { rawValue }
+
+        var systemImage: String {
+            switch self {
+            case .media: return "externaldrive"
+            case .machine: return "memorychip"
+            case .drive: return "opticaldiscdrive"
+            case .audio: return "speaker.wave.2"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Inspector", selection: $tab) {
+                ForEach(InspectorTab.allCases) { tab in
+                    Label(tab.rawValue, systemImage: tab.systemImage).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(12)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    switch tab {
+                    case .media:
+                        mediaPanel
+                    case .machine:
+                        machinePanel
+                    case .drive:
+                        drivePanel
+                    case .audio:
+                        audioPanel
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .background(.bar)
+    }
+
+    private var mediaPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            InspectorSection("Mounted Media") {
+                InspectorRow("Disk", status.mountedDiskName ?? "none", systemImage: "opticaldiscdrive")
+                InspectorRow("Tape", status.mountedTapeName ?? "none", systemImage: "cassette")
+                InspectorRow("Cartridge", status.mountedCartridgeName ?? "none", systemImage: "memorychip")
+                InspectorRow("Format", status.mountedDiskFormat?.displayName ?? "none", systemImage: "square.stack.3d.down.right")
+            }
+
+            InspectorSection("Open") {
+                InspectorButtonGrid {
+                    Button("Disk", systemImage: "opticaldiscdrive", action: openDisk)
+                    Button("PRG", systemImage: "doc.badge.gearshape", action: loadPRG)
+                    Button("Tape", systemImage: "cassette", action: openTape)
+                    Button("CRT", systemImage: "memorychip", action: openCartridge)
+                }
+            }
+
+            InspectorSection("Write / Export") {
+                Toggle("Write Protect D64", isOn: Binding(
+                    get: { status.highLevelDiskWriteProtected },
+                    set: { emulator.setMountedDiskWriteProtected($0) }
+                ))
+                .disabled(status.highLevelDiskFormat != .d64)
+
+                InspectorButtonGrid {
+                    Button("Export D64", action: exportModifiedD64)
+                        .disabled(!status.canExportModifiedD64 || !status.diskHasUnsavedChanges)
+                    Button("Export G64", action: exportModifiedG64)
+                        .disabled(!status.canExportModifiedG64 || !status.diskHasUnsavedChanges)
+                    Button("Export TAP", action: exportCapturedTAP)
+                        .disabled(!status.canExportCapturedTAP)
+                    Button("Export T64", action: exportSavedT64)
+                        .disabled(!status.canExportSavedT64 || !status.tapeHasUnsavedChanges)
+                }
+            }
+
+            if !emulator.romSetupState.isComplete {
+                InspectorSection("ROMs") {
+                    Label(emulator.romSetupState.summary, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Button("Open ROM Setup", systemImage: "folder.badge.gearshape", action: openROMAssistant)
+                }
+            }
+        }
+    }
+
+    private var machinePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            InspectorSection("Preset") {
+                ForEach(CompatibilityPresetPreference.allCases) { preset in
+                    Button {
+                        emulator.applyCompatibilityPreset(preset)
+                    } label: {
+                        Label(preset.title, systemImage: preset.systemImage)
+                    }
+                    .help(preset.subtitle)
+                }
+            }
+
+            InspectorSection("Current") {
+                InspectorRow("Profile", emulator.machineSummary.profile, systemImage: "desktopcomputer")
+                InspectorRow("Drive", status.trueDriveMode.displayName, systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+                InspectorRow("SID", emulator.machineSummary.sid, systemImage: "waveform")
+                InspectorRow("Joystick", emulator.machineSummary.joystick, systemImage: "gamecontroller")
+            }
+
+            InspectorSection("Actions") {
+                Toggle("True Drive 1541 Compat", isOn: Binding(
+                    get: { emulator.c64.trueDriveEmulation },
+                    set: { emulator.setTrueDriveMode($0 ? .compat1541 : .off) }
+                ))
+                Button("Reset C64", systemImage: "arrow.counterclockwise", action: reset)
+                Button("Open Debugger", systemImage: "ladybug", action: openDebugger)
+            }
+        }
+    }
+
+    private var drivePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let failure = status.lastFailureReason {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+
+            InspectorSection("1541") {
+                InspectorRow("CPU", "$\(hex16(status.drive.cpuPC))\(status.drive.cpuJammed ? " JAM" : "")", systemImage: status.drive.cpuJammed ? "exclamationmark.triangle" : "cpu")
+                InspectorRow("LED / Motor", "\(onOff(status.drive.ledOn)) / \(onOff(status.drive.motorOn))", systemImage: status.drive.ledOn ? "record.circle.fill" : "circle")
+                InspectorRow("Track", "\(status.drive.track) half \(status.drive.halfTrack)", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                InspectorRow("Sync", "\(onOff(status.drive.syncDetected)) count \(status.drive.syncDetectionCount)", systemImage: "waveform.path")
+                InspectorRow("Byte Ready", "\(onOff(status.drive.byteReady)) count \(status.drive.byteReadyCount)", systemImage: "arrow.left.arrow.right")
+            }
+
+            DisclosureGroup("Advanced", isExpanded: $showsAdvancedDrive) {
+                VStack(alignment: .leading, spacing: 8) {
+                    InspectorRow("Head Bit", "\(status.drive.headBitPosition)", systemImage: "smallcircle.filled.circle")
+                    InspectorRow("Port A Reads", "\(status.drive.via2PortAReadCount)", systemImage: "number")
+                    InspectorRow("Weak Bits", "\(status.drive.weakBitReadCount)", systemImage: "sparkles")
+                    InspectorRow("Speed Zones", "\(status.drive.variableSpeedZoneSampleCount) mask $\(hex8(status.drive.variableSpeedZoneMask))", systemImage: "speedometer")
+                    InspectorRow("IEC Bytes", status.drive.lastIECCommandSummary, systemImage: "cable.connector")
+                    InspectorRow("No Progress", "\(status.drive.noProgressCycleCount) cycles", systemImage: "clock")
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    private var audioPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            InspectorSection("SID") {
+                InspectorRow("Model", emulator.machineSummary.sid, systemImage: "waveform")
+                InspectorRow("Accuracy", emulator.c64.sid.accuracyMode.rawValue, systemImage: "slider.horizontal.3")
+                InspectorRow("Underruns", "\(emulator.audioUnderrunFrames)", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+            }
+
+            InspectorSection("Display") {
+                Toggle("CRT Shader", isOn: Binding(
+                    get: { emulator.crtShaderEnabled },
+                    set: { enabled in
+                        UserDefaults.standard.set(enabled, forKey: PreferenceKey.crtShaderEnabled)
+                        emulator.applyDisplayPreferences()
+                    }
+                ))
+                HStack {
+                    Text("Intensity")
+                    Slider(value: Binding(
+                        get: { Double(emulator.crtShaderIntensity) },
+                        set: { value in
+                            UserDefaults.standard.set(value, forKey: PreferenceKey.crtShaderIntensity)
+                            emulator.applyDisplayPreferences()
+                        }
+                    ), in: 0...1)
+                }
+                .disabled(!emulator.crtShaderEnabled)
+            }
+        }
+    }
+
+    private func onOff(_ value: Bool) -> String {
+        value ? "on" : "off"
+    }
+
+    private func hex16(_ value: UInt16) -> String {
+        String(format: "%04X", value)
+    }
+
+    private func hex8(_ value: UInt8) -> String {
+        String(format: "%02X", value)
+    }
+}
+
+private struct InspectorSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 8) {
+                content
+            }
+        }
+    }
+}
+
+private struct InspectorRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    init(_ title: String, _ value: String, systemImage: String) {
+        self.title = title
+        self.value = value
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        Label {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(value)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            .font(.caption)
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct InspectorButtonGrid<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+            content
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+}
+
+private struct ROMSetupAssistantView: View {
+    @ObservedObject var emulator: EmulatorController
+    let dismiss: () -> Void
+
+    @AppStorage(PreferenceKey.basicROMPath) private var basicROMPath = ""
+    @AppStorage(PreferenceKey.kernalROMPath) private var kernalROMPath = ""
+    @AppStorage(PreferenceKey.characterROMPath) private var characterROMPath = ""
+    @AppStorage(PreferenceKey.driveROMPath) private var driveROMPath = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: emulator.romSetupState.isComplete ? "checkmark.seal.fill" : "folder.badge.gearshape")
+                    .font(.largeTitle)
+                    .foregroundStyle(emulator.romSetupState.isComplete ? .green : .orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("ROM Setup")
+                        .font(.title2.weight(.semibold))
+                    Text(emulator.romSetupState.summary)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(spacing: 10) {
+                ForEach(emulator.romSetupState.items) { item in
+                    ROMSetupRow(item: item) {
+                        chooseROM(item)
+                    } clear: {
+                        clearROM(item)
+                    }
+                }
+            }
+
+            Text("Swift64 cannot distribute Commodore ROMs. Choose your own ROM files once; Swift64 imports private sandbox-safe copies for future launches.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer()
+                Button("Later") {
+                    dismiss()
+                }
+                Button {
+                    applyROMs()
+                } label: {
+                    Label("Apply", systemImage: "checkmark")
+                }
+                Button("OK") {
+                    applyROMs()
+                    if emulator.romSetupState.isComplete {
+                        dismiss()
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 620)
+    }
+
+    private func chooseROM(_ item: ROMSetupState.Item) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose \(item.title) ROM"
+        panel.message = "Choose the \(item.title) ROM so Swift64 can import a private copy."
+        panel.allowedContentTypes = [.data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try ROMFileStore.importAuthorizedROM(
+                from: url,
+                bookmarkKey: item.bookmarkKey,
+                importedPathKey: item.importedPathKey,
+                storedFileName: item.storedFileName
+            )
+            setPath(url.path, for: item)
+            emulator.romStatusMessage = "\(item.title) ROM imported."
+        } catch {
+            emulator.romStatusMessage = "Could not import \(item.title) ROM: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearROM(_ item: ROMSetupState.Item) {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: item.bookmarkKey)
+        defaults.removeObject(forKey: item.importedPathKey)
+        setPath("", for: item)
+        emulator.romStatusMessage = "\(item.title) ROM configuration cleared."
+    }
+
+    private func applyROMs() {
+        emulator.reloadROMs(reset: true)
+    }
+
+    private func setPath(_ path: String, for item: ROMSetupState.Item) {
+        switch item.id {
+        case "basic": basicROMPath = path
+        case "kernal": kernalROMPath = path
+        case "characters": characterROMPath = path
+        case "drive1541": driveROMPath = path
+        default: break
+        }
+    }
+}
+
+private struct ROMSetupRow: View {
+    let item: ROMSetupState.Item
+    let choose: () -> Void
+    let clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: item.isConfigured ? "checkmark.circle.fill" : (item.required ? "exclamationmark.circle.fill" : "circle"))
+                .foregroundStyle(item.isConfigured ? .green : (item.required ? .orange : .secondary))
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.callout.weight(.semibold))
+                Text(item.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Choose", action: choose)
+            Button("Clear", action: clear)
+                .disabled(!item.isConfigured)
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MediaSummary {
+    let disk: String
+    let tape: String
+    let cartridge: String
+    let diskFormat: String
+    let hasUnsavedChanges: Bool
+}
+
+struct MachineSummary {
+    let profile: String
+    let drive: String
+    let sid: String
+    let joystick: String
+}
+
 /// Controls the emulator lifecycle: ROM loading, audio, keyboard events.
 final class EmulatorController: ObservableObject {
     let c64 = C64()
@@ -843,6 +1454,84 @@ final class EmulatorController: ObservableObject {
         let url = URL(fileURLWithPath: name)
         let base = url.deletingPathExtension().lastPathComponent
         return "\(base)-saved.t64"
+    }
+
+    var romSetupState: ROMSetupState {
+        let defaults = UserDefaults.standard
+        return ROMSetupState(items: [
+            ROMSetupState.Item(
+                id: "basic",
+                title: "BASIC",
+                path: defaults.string(forKey: PreferenceKey.basicROMPath) ?? "",
+                bookmarkKey: PreferenceKey.basicROMBookmark,
+                importedPathKey: PreferenceKey.basicROMImportedPath,
+                storedFileName: "basic.rom",
+                required: true,
+                expectedSize: 8192
+            ),
+            ROMSetupState.Item(
+                id: "kernal",
+                title: "Kernal",
+                path: defaults.string(forKey: PreferenceKey.kernalROMPath) ?? "",
+                bookmarkKey: PreferenceKey.kernalROMBookmark,
+                importedPathKey: PreferenceKey.kernalROMImportedPath,
+                storedFileName: "kernal.rom",
+                required: true,
+                expectedSize: 8192
+            ),
+            ROMSetupState.Item(
+                id: "characters",
+                title: "Characters",
+                path: defaults.string(forKey: PreferenceKey.characterROMPath) ?? "",
+                bookmarkKey: PreferenceKey.characterROMBookmark,
+                importedPathKey: PreferenceKey.characterROMImportedPath,
+                storedFileName: "characters.rom",
+                required: true,
+                expectedSize: 4096
+            ),
+            ROMSetupState.Item(
+                id: "drive1541",
+                title: "1541 Drive",
+                path: defaults.string(forKey: PreferenceKey.driveROMPath) ?? "",
+                bookmarkKey: PreferenceKey.driveROMBookmark,
+                importedPathKey: PreferenceKey.driveROMImportedPath,
+                storedFileName: "1541.rom",
+                required: false,
+                expectedSize: 16384
+            ),
+        ])
+    }
+
+    var mediaSummary: MediaSummary {
+        let status = c64.emulationStatus
+        return MediaSummary(
+            disk: status.mountedDiskName ?? "none",
+            tape: status.mountedTapeName ?? "none",
+            cartridge: status.mountedCartridgeName ?? "none",
+            diskFormat: status.mountedDiskFormat?.displayName ?? "none",
+            hasUnsavedChanges: status.diskHasUnsavedChanges || status.tapeHasUnsavedChanges
+        )
+    }
+
+    var machineSummary: MachineSummary {
+        let defaults = UserDefaults.standard
+        let profileID = defaults.string(forKey: PreferenceKey.machineProfile) ?? MachineProfilePreference.palC64.rawValue
+        let modeID = defaults.string(forKey: PreferenceKey.trueDriveMode) ?? TrueDriveModePreference.off.rawValue
+        let sidModelID = defaults.string(forKey: PreferenceKey.sidModel) ?? SIDModelPreference.profileDefault.rawValue
+        let sidAccuracyID = defaults.string(forKey: PreferenceKey.sidAccuracyMode) ?? SIDAccuracyModePreference.fast.rawValue
+        let joystickID = defaults.string(forKey: PreferenceKey.joystickRouting) ?? JoystickRoutingPreference.both.rawValue
+        let profile = MachineProfilePreference(rawValue: profileID) ?? .palC64
+        let drive = TrueDriveModePreference(rawValue: modeID) ?? .off
+        let sidModel = SIDModelPreference(rawValue: sidModelID) ?? .profileDefault
+        let sidAccuracy = SIDAccuracyModePreference(rawValue: sidAccuracyID) ?? .fast
+        let joystick = JoystickRoutingPreference(rawValue: joystickID) ?? .both
+
+        return MachineSummary(
+            profile: profile.title,
+            drive: drive.title,
+            sid: "\(sidModel.title), \(sidAccuracy.title)",
+            joystick: joystick.title
+        )
     }
 
     init() {
@@ -1344,29 +2033,45 @@ final class EmulatorController: ObservableObject {
             for buffer in bufferList {
                 let frames = Int(frameCount)
                 let ptr = buffer.mData!.bindMemory(to: Float.self, capacity: frames)
-                for i in 0..<frames {
-                    let availableSamples = sid.availableAudioSamplesForPlayback()
-                    if prebuffering && availableSamples < prebufferTarget {
+                let availableSamples = sid.availableAudioSamplesForPlayback()
+                if prebuffering && availableSamples < prebufferTarget {
+                    for i in 0..<frames {
                         ptr[i] = lastOutput
-                        underrunFrames += 1
-                        continue
                     }
-                    prebuffering = false
+                    underrunFrames += UInt64(frames)
+                    continue
+                }
+                prebuffering = false
 
-                    guard let rawSample = sid.readAudioSampleForPlayback() else {
-                        prebuffering = true
+                let output = UnsafeMutableBufferPointer(start: ptr, count: frames)
+                let samplesRead = sid.readAudioSamplesForPlayback(into: output)
+
+                if samplesRead == 0 {
+                    prebuffering = true
+                    for i in 0..<frames {
                         ptr[i] = lastOutput
-                        underrunFrames += 1
-                        continue
                     }
-                    if availableSamples <= underrunLowWatermark {
-                        prebuffering = true
-                    }
+                    underrunFrames += UInt64(frames)
+                    continue
+                }
+
+                for i in 0..<samplesRead {
+                    let rawSample = ptr[i]
                     let coupledSample = rawSample - dcBlockerLastInput + dcBlockerPole * dcBlockerLastOutput
                     dcBlockerLastInput = rawSample
                     dcBlockerLastOutput = coupledSample
                     lastOutput = min(max(coupledSample, -0.95), 0.95)
                     ptr[i] = lastOutput
+                }
+
+                if samplesRead < frames {
+                    prebuffering = true
+                    for i in samplesRead..<frames {
+                        ptr[i] = lastOutput
+                    }
+                    underrunFrames += UInt64(frames - samplesRead)
+                } else if sid.availableAudioSamplesForPlayback() <= underrunLowWatermark {
+                    prebuffering = true
                 }
             }
             self?.audioUnderrunFrames = underrunFrames

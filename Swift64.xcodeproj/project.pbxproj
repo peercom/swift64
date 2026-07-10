@@ -12,7 +12,6 @@
 		0C7BA180E37360E6FFE568D6 /* DebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86A4DFB898B876FC77D7709 /* DebuggerView.swift */; };
 		0E0ABC6CD6C8A0ADD9CB2D3D /* ColorPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */; };
 		12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CA3D09FA940CA84F595C9C /* SID.swift */; };
-		1F0E07AF8C8C4A05B654F001 /* SIDRegisterTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F0E07AF8C8C4A05B654F000 /* SIDRegisterTrace.swift */; };
 		237804E7A0DB0B5647CDF6DE /* DiskDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */; };
 		25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */; };
 		265046B932FB1B4566FBAC25 /* VIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118A9E70995FB663B124F661 /* VIC.swift */; };
@@ -29,6 +28,7 @@
 		63A1943C769CD9CC6DB30CD0 /* Bus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BC4533014D9BB87EF27F4D3 /* Bus.swift */; };
 		64C9AA86930964522A1649E3 /* Cartridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */; };
 		757762D6A8621E5A0CCDAE9C /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 677BA4C907BF97D425E001A0 /* MetalKit.framework */; };
+		7625FE6D0F4D2D2AA0086F22 /* SIDRegisterTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */; };
 		7C527898C5FB1F00B5911383 /* Instructions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FCE7B1EFA4B960CF8646CF /* Instructions.swift */; };
 		80BC47C92ED182334E2EDD78 /* C64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D5E8A112118514B27CCE218 /* C64.swift */; };
 		92DE108DF8221F3C31CC13AA /* Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2DF1EFA74DD2855CA6DD0E /* Types.swift */; };
@@ -78,7 +78,6 @@
 		05218A2819F982209E94FD95 /* TapeUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapeUnit.swift; sourceTree = "<group>"; };
 		0544971F445D40AAACADAB98 /* MemoryMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryMap.swift; sourceTree = "<group>"; };
 		06CA3D09FA940CA84F595C9C /* SID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SID.swift; sourceTree = "<group>"; };
-		1F0E07AF8C8C4A05B654F000 /* SIDRegisterTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIDRegisterTrace.swift; sourceTree = "<group>"; };
 		0A427BE176A05A2316D09A2F /* G64Parser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G64Parser.swift; sourceTree = "<group>"; };
 		0BC4533014D9BB87EF27F4D3 /* Bus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bus.swift; sourceTree = "<group>"; };
 		0F150B58515AB1146B51A5A4 /* Swift64.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Swift64.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -100,6 +99,7 @@
 		7C7FC9314BC445E26A33A4C2 /* Joystick.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Joystick.swift; sourceTree = "<group>"; };
 		7EA8A4D190AA8B2D7F886CFB /* IECBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IECBus.swift; sourceTree = "<group>"; };
 		8C5238177200FD6BB810A221 /* PRGLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRGLoader.swift; sourceTree = "<group>"; };
+		93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIDRegisterTrace.swift; sourceTree = "<group>"; };
 		979027D7F59AB7A5559A257A /* C64Trace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Trace.swift; sourceTree = "<group>"; };
 		A1F02EA636B5026B5622417D /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
 		A63B0E9A51796888B094878A /* libEmu6502.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libEmu6502.a; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -191,7 +191,7 @@
 				0544971F445D40AAACADAB98 /* MemoryMap.swift */,
 				8C5238177200FD6BB810A221 /* PRGLoader.swift */,
 				06CA3D09FA940CA84F595C9C /* SID.swift */,
-				1F0E07AF8C8C4A05B654F000 /* SIDRegisterTrace.swift */,
+				93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */,
 				05218A2819F982209E94FD95 /* TapeUnit.swift */,
 				B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */,
 				118A9E70995FB663B124F661 /* VIC.swift */,
@@ -434,7 +434,7 @@
 				FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */,
 				FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */,
 				12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */,
-				1F0E07AF8C8C4A05B654F001 /* SIDRegisterTrace.swift in Sources */,
+				7625FE6D0F4D2D2AA0086F22 /* SIDRegisterTrace.swift in Sources */,
 				952FABD7E385142307C0B270 /* TapeUnit.swift in Sources */,
 				3888A62B48755A2A868CD3B0 /* VIA6522.swift in Sources */,
 				265046B932FB1B4566FBAC25 /* VIC.swift in Sources */,
@@ -526,7 +526,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -539,7 +539,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -586,7 +586,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -605,7 +605,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
