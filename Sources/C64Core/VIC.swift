@@ -862,7 +862,7 @@ public final class VIC {
             if columnMulticolorMode {
                 let pair = bitOffset / 2
                 let bits = (pixelData >> (6 - pair * 2)) & 0x03
-                return bits != 0
+                return bits >= 2
             }
             return pixelData & (0x80 >> bitOffset) != 0
         }
@@ -870,7 +870,7 @@ public final class VIC {
         if columnMulticolorMode && (colorData & 0x08) != 0 {
             let pair = bitOffset / 2
             let bits = (pixelData >> (6 - pair * 2)) & 0x03
-            return bits != 0
+            return bits >= 2
         }
         return pixelData & (0x80 >> bitOffset) != 0
     }
@@ -1398,8 +1398,10 @@ public final class VIC {
             if px0 >= 0 && px0 < VIC.screenWidth { line[px0] = color }
             if px1 >= 0 && px1 < VIC.screenWidth { line[px1] = color }
             if bits != 0 {
-                if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
-                if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+                if bits >= 2 {
+                    if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
+                    if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+                }
             }
             switch bits {
             case 0, 1, 2:
@@ -1457,8 +1459,10 @@ public final class VIC {
                 if px0 >= 0 && px0 < VIC.screenWidth { line[px0] = color }
                 if px1 >= 0 && px1 < VIC.screenWidth { line[px1] = color }
                 if bits != 0 {
-                    if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
-                    if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+                    if bits >= 2 {
+                        if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
+                        if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
+                    }
                 } else {
                     markBackgroundPixel?(px0, 0)
                     markBackgroundPixel?(px1, 0)
