@@ -15,6 +15,12 @@ public enum TrueDriveEmulationMode: Equatable {
     }
 }
 
+public enum DriveTickPlacement: Equatable {
+    case afterC64
+    case beforeC64
+    case beforeCIA2SampleWhenDue
+}
+
 public enum C64ROMValidationError: Error, Equatable, LocalizedError {
     case invalidSize(name: String, expected: Int, actual: Int)
 
@@ -118,6 +124,13 @@ public final class C64 {
 
     /// Fractional clock accumulator for drive timing.
     var driveClockAccumulator: Double = 0.0
+    private var driveTickBudgetConsumedThisC64Cycle = false
+
+    /// Diagnostic scheduler knob for IEC/1541 phase investigations.
+    /// Normal emulation keeps the drive after the C64-side chips so the
+    /// drive observes lines written during the current C64 cycle.
+    public var driveTickPlacement: DriveTickPlacement = .afterC64
+
     /// Debug counter for CIA2 PA reads
     var cia2ReadLog: Int = 0
 
@@ -278,6 +291,7 @@ public final class C64 {
         }
         cia2.readPortAExternal = { [weak self] in
             guard let self = self else { return 0xFF }
+            self.tickDueDriveCycleBeforeIECInputSample()
             let result = 0x3F | self.iecBus.c64ReadClk | self.iecBus.c64ReadData
             self.onCIA2PortARead?(result, self.iecBus.snapshot)
             // Log reads in Kernal serial bus code regions
@@ -858,6 +872,14 @@ public final class C64 {
 
     /// Run a single system clock cycle.
     func tickOneCycle() {
+        driveTickBudgetConsumedThisC64Cycle = false
+        switch driveTickPlacement {
+        case .beforeC64:
+            tickDriveForCurrentC64Cycle()
+        case .afterC64, .beforeCIA2SampleWhenDue:
+            break
+        }
+
         let cpuStalledByVIC = vic.isStealingCPU
         cpu.setRDYLine(high: !cpuStalledByVIC)
 
@@ -896,19 +918,32 @@ public final class C64 {
         cia1.joystickPort2 = joystick.port2
         cia1.joystickPort1 = joystick.port1
 
-        // 1541 drive ticks AFTER C64 — it sees the bus state the C64 just wrote.
-        // The drive's VIA1 inputs are updated at the start of its tick().
-        if trueDriveEmulationMode != .off && drive1541.enabled {
-            driveClockAccumulator += driveClockRatio
-            if driveClockAccumulator >= 1.0 {
-                while driveClockAccumulator >= 1.0 {
-                    driveClockAccumulator -= 1.0
-                    drive1541.tick()
-                }
-            }
+        if driveTickPlacement != .beforeC64 {
+            tickDriveForCurrentC64Cycle()
         }
 
         monitorEmulationProgress()
+    }
+
+    private func tickDriveForCurrentC64Cycle() {
+        guard trueDriveEmulationMode != .off && drive1541.enabled else { return }
+        guard !driveTickBudgetConsumedThisC64Cycle else { return }
+
+        driveTickBudgetConsumedThisC64Cycle = true
+        driveClockAccumulator += driveClockRatio
+        while driveClockAccumulator >= 1.0 {
+            driveClockAccumulator -= 1.0
+            drive1541.tick()
+        }
+    }
+
+    private func tickDueDriveCycleBeforeIECInputSample() {
+        guard driveTickPlacement == .beforeCIA2SampleWhenDue else { return }
+        guard trueDriveEmulationMode != .off && drive1541.enabled else { return }
+        guard !driveTickBudgetConsumedThisC64Cycle else { return }
+        guard driveClockAccumulator + driveClockRatio >= 1.0 else { return }
+
+        tickDriveForCurrentC64Cycle()
     }
 
     func shouldUseKernalTrapAtCurrentInstruction() -> Bool {

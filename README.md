@@ -1,19 +1,22 @@
-# C64 Emulator
+# Swift64 C64 Emulator
 
-A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, runs simple programs, supports fast media loading, and now includes an in-progress true-drive 1541 path for compatibility testing with low-level disk images.
+A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, runs common PRG/D64/G64 workflows, includes both fast Kernal-trap loading and a compatibility true-drive 1541 path, and is being developed toward preservation-grade C64 compatibility.
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
+
+Latest packaged macOS release: [Swift64 0.3.0](https://github.com/peercom/swift64/releases/tag/v0.3.0). ROMs and commercial media are not included.
 
 ## Status
 
 - Boots to the C64 BASIC screen
 - Keyboard input, joystick (numpad)
-- Audio output (SID chip)
+- Audio output with selectable SID model and fast/compatibility synthesis modes
 - Loads PRG, D64, G64, NIB, NBZ, P64, T64, TAP, standard CRT cartridge files, Action Replay, KCS Power, Atomic Power/Nordic Power, Action Replay 3, Action Replay 4, Final Cartridge I, Final Cartridge Plus, Final Cartridge III, Simon's BASIC, Super Games, C64 Game System/System 3, Warp Speed, Stardos, Game Killer, Prophet64, EXOS, Freeze Frame, Freeze Machine, Snapshot64, Super Explode V5, Super Snapshot V5, MACH 5, Dinamic, Zaxxon/Super Zaxxon, COMAL-80, Structured BASIC, Ross, Dela EP64, Dela EP7x8, Dela EP256, Rex EP256, Mikro Assembler, Magic Formel, Magic Desk, Ocean type 1, Fun Play/Power Play, Epyx FastLoad, Westermann Learning, Rex Utility, and EasyFlash CRTs
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
-- Compact drive status popover for disk, IEC, GCR, and hang diagnostics
+- Display-first macOS app with optional right inspector, compact status bar, fullscreen chrome hiding, ROM setup assistant, and CRT shader
+- Compact drive status popover for disk, IEC, GCR, protected-media, and hang diagnostics
 - Built-in debugger with CPU trace, breakpoints, and memory inspection
-- Focused regression coverage for VIC, CIA, disk, IEC, GCR, SID, and 1541 behavior
+- Focused regression coverage for VIC, CIA, disk, IEC, GCR, SID, 1541, cartridge, tape, compatibility-manifest, and performance-benchmark behavior
 - Phase 2 CPU, memory, and bus certification is complete for the preservation roadmap gate, with public CPU suites kept opt-in and sequential
 
 ### What works
@@ -22,12 +25,13 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 |-----------|--------|
 | 6502 CPU | Phase 2 complete: cycle-stepped, 222 opcodes including undocumented, RDY/SO/interrupt edge coverage, decimal edge coverage, and opt-in public conformance runners |
 | VIC-II | Rasterline rendering, sprites, bad-line and sprite BA/AEC phases, low-phase VIC access decoding, two-cycle sprite DMA slots, CPU stalls, raster/collision IRQs |
-| SID | 3 voices, ADSR envelopes with exponential decay/release, waveforms/noise LFSR, model-aware routed filter foundation |
+| SID | 3 voices with 6581/8580 model selection, fast/compatibility modes, ADSR delay/exponential behavior, sync/ring/noise, model-aware combined waveform approximations, OSC3/ENV3/POT readback, data-bus latch behavior, audio signatures, and a bounded routed filter/output-stage foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, read-only raw and compressed NIBTOOLS NIB/NBZ plus first-stage P64 import for the true-drive path, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path and first-stage low-level GCR write-head/erase plumbing with IEC/VIA/GCR emulation |
-| Tape | T64 and TAP container formats |
+| Tape | T64 and TAP container formats, raw TAP pulse playback, stock CBM TAP decode diagnostics, cassette signal/motor/sense plumbing, virtual T64 SAVE output, and TAP/T64 export surfaces |
 | Cartridges | Standard CRT parsing with 8K/16K/Ultimax ROM mapping, Action Replay bank/RAM/IO2 mapping, KCS Power ROM/IO/RAM mode control, Atomic Power/Nordic Power ROM/RAM/Ultimax mode control, Action Replay 3 mirrored ROML/ROMH mapping, Action Replay 4 bank/control/IO2 mapping, Final Cartridge I IO-toggle mapping, Final Cartridge Plus segmented ROM/control mapping, Final Cartridge III 16K bank/control/NMI mapping, Simon's BASIC upper-ROM control, Super Games 16K bank/control latch, C64 Game System/System 3 IO1-address bank switching, Warp Speed IO mirroring and ROM-window control, Stardos capacitor-gated ROML/Kernal replacement mapping, Game Killer Kernal-window ROM and IO disable latch, Prophet64 IO2 bank/disable control, EXOS HIRAM-gated Kernal replacement mapping, Freeze Frame reset/IO/freeze ROM-window control, Freeze Machine 16K/32K reset/IO/freeze ROM-window control, Snapshot64 freeze-visible 4K Ultimax ROM mapping, Super Explode V5 bank/IO2/capacitor-gated ROM control, Super Snapshot V5 ROM/RAM/control mapping, MACH 5 ROM/IO mirror enable-disable control, Dinamic IO1-read bank switching, Zaxxon fixed-ROM read-selected upper banks, COMAL-80 black/default 16K bank switching, Structured BASIC IO1 bank/off control, Ross read-triggered bank/off control, Dela EP64/EP7x8/EP256 and Rex EP256 EPROM bank decoding, Mikro Assembler IO mirrors, Magic Formel `$E000` bank switching, Magic Desk ROML bank switching, Ocean type 1 bank switching, Fun Play/Power Play bank switching, Epyx FastLoad ROM/IO2/capacitor-gate behavior, EasyFlash bank/control/RAM mapping, and normal-mapped Westermann/Rex cartridge aliases |
+| macOS app | Xcode-based SwiftUI/Metal app with display-first main window, toolbar workflows, optional inspector tabs, ROM setup assistant, Settings tabs, fullscreen display mode, CRT shader, sandbox-safe ROM/media access, and release packaging |
 
 ### What needs work
 
@@ -35,7 +39,7 @@ There is also an NES emulator sharing the same 6502 CPU core, in even earlier st
 - True-drive 1541 compatibility is still being validated against protected G64/custom-loader disks
 - Analog magnetic erase strength/decay, complete low-level 1541 format support, and flux-level write semantics are deferred until the low-level read/write path is stable
 - P64 import now decodes NRZI flux-pulse chunks into native low-level GCR tracks for true-drive emulation, but exact analog flux timing is still quantized to GCR bit cells; raw and compressed NIBTOOLS NIB/NBZ images mount as read-only native low-level tracks for true-drive emulation, weak/random bit readback and G64 export/write-back are available for native low-level tracks, and Swift64 appends a compatible metadata extension to preserve weak-bit annotations across G64 export/import
-- SID filter is simplified and not yet calibrated to measured 6581/8580 curves
+- SID analog filter, output-stage distortion, and model-specific 6581/8580 calibration remain approximate and are not yet matched to measured hardware curves
 - Freezer button CPU-state capture, Super Snapshot V5 32K RAM-expansion setting, COMAL-80 grey-revision mode selection, deeper fastloader protocol validation, EasyFlash flash writes, REU, and broader expansion-port DMA/I/O are not implemented
 - Selectable CRT display shader support is available in the macOS app for scanlines, phosphor mask, and a little composite-style softness
 
@@ -43,7 +47,9 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 ### Recent emulation work
 
-- The macOS app now has Settings for machine/drive profile selection and local ROM file paths instead of relying on distributable bundled ROMs
+- The macOS app now has a display-first main window, optional right inspector, optional compact status bar, and fullscreen mode that hides toolbar/status/inspector chrome
+- Settings are organized into General, ROMs, Display, and Advanced tabs for presets, machine/drive/SID/joystick preferences, ROM setup, CRT shader controls, and diagnostics
+- A first-run ROM setup assistant appears when required C64 ROMs are missing and uses the same sandbox-safe private-copy import flow as Settings
 - The macOS app now includes an opt-in CRT display shader with adjustable intensity
 - The macOS app now exposes Fast Load, Compat True Drive, Strict PAL, PAL C64C, NTSC C64, and CRT + Accurate SID presets from Settings, the toolbar, and the Emulation menu
 - ROM configuration now imports sandbox-safe private copies into Application Support, provides Apply/OK semantics, and lets stale ROM entries be cleared from Settings
@@ -202,7 +208,7 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 - TAP mounts now expose decode diagnostics through emulator status, distinguishing raw pulse-only playback, decoded standard CBM programs, malformed/parity-damaged blocks, incomplete header/data pairs, and conflicting duplicate data copies
 - The 6510 cassette write and motor-control outputs now emit effective line-change callbacks, and the datasette captures motor-gated write pulse timing with C64 status/API visibility, TAP v0/v1 export, and macOS File/toolbar export actions for future SAVE/write support
 - Kernal-trap SAVE to tape device 1 now creates or appends to a virtual T64 image with C64 status/API visibility and macOS export actions, while mounted TAP images are left untouched
-- Mounted tape names now surface through C64 status and the macOS sidebar/popover, and virtual T64 SAVE output round-trips through the tape LOAD trap
+- Mounted tape names now surface through C64 status and the macOS status/inspector/popover UI, and virtual T64 SAVE output round-trips through the tape LOAD trap
 - macOS tape opens now use the same sandbox-safe user-selected file path as disk images, covering menu opens, toolbar opens, and drag/drop
 - Tape image replacement now clears stale raw TAP playback cursors, signal level, and pulse data so T64/TAP swaps cannot inherit the previous tape's signal path
 - T64 mounting now rejects directory entries whose payload ranges fall outside the image, preventing mounted-but-unreadable tape state after corrupt media swaps
@@ -254,34 +260,52 @@ See [CompatibilityStatus.md](CompatibilityStatus.md) for the preservation-grade 
 
 Requires Swift 5.9+ and macOS 14+.
 
+For the macOS app, use the Xcode project:
+
+```sh
+xcodebuild -project Swift64.xcodeproj -scheme Swift64 -configuration Release build
+```
+
+For the normal local app loop, the helper below regenerates the Xcode project from `project.yml`, builds Release with a bounded job count, and launches `Swift64.app` from repo-local DerivedData. It requires `xcodegen`; use the direct `xcodebuild` command above if you only want to build the checked-in project:
+
+```sh
+script/build_and_run.sh
+```
+
+For package-level development and test builds:
+
 ```sh
 swift build -c release
 ```
 
 ### ROMs
 
-ROM files are copyrighted and are not distributed with this project. Open the app's Settings window and choose local paths for:
+ROM files are copyrighted and are not distributed with this project. On first launch, Swift64 opens the ROM setup assistant when required ROMs are missing. You can also open Settings > ROMs to choose local paths for:
 
 - BASIC ROM (8K)
 - Kernal ROM (8K)
 - Character ROM (4K)
 - 1541/1541C/1541-II drive ROM (16K)
 
-For local development and compatibility testing, the app still falls back to untracked ROM files under `C64/ROMS` or `Sources/C64App/ROMS` when explicit Settings paths are not configured.
+Use Apply to validate and import sandbox-safe private copies into Application Support, or OK to apply and close the settings window. The 1541 drive ROM is optional for fast-load mode but required for true-drive compatibility. For local development and compatibility testing, the app still falls back to untracked ROM files under `C64/ROMS` or `Sources/C64App/ROMS` when explicit Settings paths are not configured.
 
 ## Running
 
 ```sh
-.build/release/C64App
+script/build_and_run.sh
 ```
 
 ### Loading software
 
-- **Drag and drop** D64, G64, PRG, T64, TAP, or CRT files onto the window
+- **Drag and drop** PRG, D64, G64, NIB, NBZ, P64, T64, TAP, or CRT files onto the window
 - **File menu**: Open Disk Image (Cmd+D), Open Tape (Cmd+T), Load PRG (Cmd+L), Open Cartridge (Cmd+K)
-- **Toolbar**: switch between Fast Load and compatibility True Drive 1541 mode
-- **Drive Status**: inspect mounted media, LED/motor, track, sync, byte-ready, IEC lines, recent command bytes, and detected hang/JAM reason
+- **Toolbar**: open media, apply presets, switch between Fast Load and compatibility True Drive 1541 mode, show Drive Status, toggle Inspector, open Debugger, reset, and open Settings
+- **Inspector**: optional Media, Machine, Drive, and Audio tabs for mounted media, profile/mode selection, 1541 diagnostics, and audio/display status
+- **Status bar**: optional compact media, drive, ROM, mode, and failure summary at the bottom of the display
+- **Drive Status**: inspect mounted media, LED/motor, track, sync, byte-ready, IEC lines, protected-media capabilities, recent command bytes, and detected hang/JAM reason
 - **Reset**: Cmd+Shift+R
+
+Fullscreen hides toolbar, inspector, and status chrome so the C64 display fills the stage.
 
 ### True-drive compatibility testing
 
@@ -293,6 +317,12 @@ SWIFT64_LOCAL_TRUE_DRIVE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testL
 SWIFT64_LOCAL_MILESTONE_MATRIX=1 swift test --filter LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64DirectoryLoadStartsGCRReadHardware
 SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
+```
+
+Performance benchmarks are also opt-in and should usually be run in Release. They measure fast-load, compat true-drive, strict true-drive, raw cycle throughput, SID fast/compatibility throughput, and audio drain paths without starting broad media matrices:
+
+```sh
+SWIFT64_PERF_BENCHMARKS=1 swift test -c release --filter PerformanceBenchmarkTests
 ```
 
 Local public CPU functional-test binaries are also opt-in and run as a single bounded emulator instance. Keep those binaries untracked and provide the success self-loop address for the specific fixture you are running. Set `SWIFT64_CPU_FUNCTIONAL_RESULT_JSON` when you want a machine-readable result artifact with binary metadata, final CPU registers, final PC, cycle counts, and pass/jam/timeout reason:

@@ -126,6 +126,9 @@ public final class VIA6522 {
     /// Callback when port B is written (used by Drive1541 to update bus immediately)
     public var onPortBWrite: (() -> Void)?
 
+    /// Callback when port B is read (used by diagnostics for IEC handshakes).
+    public var onPortBRead: ((UInt8) -> Void)?
+
     /// Callback when CA2 output state changes (used by Drive1541 for byte-ready gating).
     public var onCA2Change: ((Bool) -> Void)?
 
@@ -549,6 +552,7 @@ public final class VIA6522 {
             clearIFR(IRQ.cb1 | IRQ.cb2)
             let value = portBReadValue
             handleCB2PortBHandshakeAccess()
+            onPortBRead?(value)
             portBInputLatch = nil
             return value
 

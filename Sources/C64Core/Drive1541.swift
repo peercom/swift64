@@ -203,6 +203,9 @@ public final class Drive1541 {
     /// Optional diagnostic hook fired whenever the 1541 writes VIA1 port B or DDRB.
     public var onVIA1PortBWrite: ((UInt64, UInt16, UInt8, UInt8, IECBus.Snapshot?) -> Void)?
 
+    /// Optional diagnostic hook fired whenever the 1541 reads VIA1 port B.
+    public var onVIA1PortBRead: ((UInt64, UInt16, UInt8, IECBus.Snapshot?) -> Void)?
+
     /// Optional diagnostic hook fired when the 1541 CPU reads the GCR data register.
     public var onVIA2PortARead: ((UInt64, UInt16, UInt8, UInt64, Int, Int, Int, Int) -> Void)?
 
@@ -255,6 +258,16 @@ public final class Drive1541 {
                     self.iecBus?.snapshot
                 )
             }
+        }
+
+        via1.onPortBRead = { [weak self] value in
+            guard let self else { return }
+            self.onVIA1PortBRead?(
+                self.debugCycleCount,
+                self.cpu.pc,
+                value,
+                self.iecBus?.snapshot
+            )
         }
 
         // VIA1 DDRB write also affects driven outputs

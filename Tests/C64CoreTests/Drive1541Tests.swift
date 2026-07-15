@@ -1445,6 +1445,21 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertFalse(c64.drive1541.enabled)
     }
 
+    func testDriveTickPlacementDefaultsAfterC64AndDoesNotDoubleTick() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .compat1541
+
+        XCTAssertEqual(c64.driveTickPlacement, .afterC64)
+        c64.powerOn()
+
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.statusSnapshot.cycleCount, 1)
+
+        c64.driveTickPlacement = .beforeC64
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.statusSnapshot.cycleCount, 2)
+    }
+
     func testC64EmulationStatusReportsMountedMediaAndDriveState() throws {
         let c64 = C64()
         try loadBundledROMs(into: c64)
@@ -2232,6 +2247,68 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(sawMemoryWriteCommand, "1541 should receive M-W command bytes over listener data")
         XCTAssertTrue(sawMemoryWritePayload, "1541 should receive binary M-W address/count/data payload")
         XCTAssertTrue(wroteMemory, "1541 ROM should execute unterminated M-W when the C64 sends UNLISTEN")
+    }
+
+    func testTrueDriveCommandChannelMemoryReadReturnsDriveRAMThroughBasicGetNumberSign15() throws {
+        try requireSlowTrueDriveTests()
+        let c64 = try makeBootedTrueDriveC64WithMinimalD64()
+
+        var feeder = KeyboardTextFeeder(
+            "10 OPEN15,8,15\r" +
+            "20 PRINT#15,\"M-W\";CHR$(0);CHR$(7);CHR$(2);CHR$(186);CHR$(94)\r" +
+            "30 PRINT#15,\"M-R\";CHR$(0);CHR$(7);CHR$(2)\r" +
+            "40 GET#15,A$:IF A$=\"\" THEN 40\r" +
+            "50 GET#15,B$:IF B$=\"\" THEN 50\r" +
+            "60 POKE1024,ASC(A$):POKE1025,ASC(B$)\r" +
+            "RUN\r"
+        )
+
+        var sawCommandChannelSecondary = false
+        var sawMemoryWriteCommand = false
+        var sawMemoryWritePayload = false
+        var sawMemoryReadCommand = false
+        var sawMemoryReadPayload = false
+        var sawTalk = false
+        var wroteDriveRAM = false
+        var returnedBytesToBasic = false
+
+        for _ in 0..<18_000_000 {
+            feeder.tick(c64)
+            c64.tickOneCycle()
+
+            sawCommandChannelSecondary = sawCommandChannelSecondary || c64.drive1541.decodedIECCommandBytes.contains(0x6F)
+            sawTalk = sawTalk || c64.drive1541.decodedIECCommandBytes.contains(0x48)
+            let data = c64.drive1541.decodedIECDataBytes
+            sawMemoryWriteCommand = sawMemoryWriteCommand || containsBytes(in: data, from: 0, to: data.count, Array("M-W".utf8))
+            sawMemoryWritePayload = sawMemoryWritePayload || containsBytes(in: data, from: 0, to: data.count, [0x00, 0x07, 0x02, 0xBA, 0x5E])
+            sawMemoryReadCommand = sawMemoryReadCommand || containsBytes(in: data, from: 0, to: data.count, Array("M-R".utf8))
+            sawMemoryReadPayload = sawMemoryReadPayload || containsBytes(in: data, from: 0, to: data.count, [0x00, 0x07, 0x02])
+            wroteDriveRAM = wroteDriveRAM || (
+                c64.drive1541.memory.ram[0x0700] == 0xBA &&
+                c64.drive1541.memory.ram[0x0701] == 0x5E
+            )
+
+            if c64.memory.ram[0x0400] == 0xBA,
+               c64.memory.ram[0x0401] == 0x5E {
+                returnedBytesToBasic = true
+                break
+            }
+        }
+
+        print(
+            "True-drive M-R diagnostic commandBytes=\(hexBytes(c64.drive1541.decodedIECCommandBytes)) " +
+            "dataBytes=\(hexBytes(c64.drive1541.decodedIECDataBytes)) " +
+            "drive0700=\(hexBytes(c64.drive1541.memory.ram[0x0700..<0x0708])) " +
+            "screen0400=\(hexBytes(c64.memory.ram[0x0400..<0x0408]))"
+        )
+        XCTAssertTrue(sawCommandChannelSecondary, "1541 should receive command-channel secondary address 15")
+        XCTAssertTrue(sawMemoryWriteCommand, "1541 should receive M-W command bytes over listener data")
+        XCTAssertTrue(sawMemoryWritePayload, "1541 should receive binary M-W address/count/data payload")
+        XCTAssertTrue(wroteDriveRAM, "1541 ROM should apply M-W before M-R reads the same drive RAM")
+        XCTAssertTrue(sawMemoryReadCommand, "1541 should receive M-R command bytes over listener data")
+        XCTAssertTrue(sawMemoryReadPayload, "1541 should receive binary M-R address/count payload")
+        XCTAssertTrue(sawTalk, "C64 should TALK to the command channel to fetch the M-R response")
+        XCTAssertTrue(returnedBytesToBasic, "BASIC GET#15 should receive the two bytes returned by 1541 M-R")
     }
 
     func testTrueDriveD64PrgLoadUsesFileAddress() throws {
