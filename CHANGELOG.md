@@ -1,0 +1,212 @@
+# Changelog
+
+## Recent emulation work
+
+- The macOS app now has a display-first main window, optional right inspector, optional compact status bar, and fullscreen mode that hides toolbar/status/inspector chrome
+- Settings are organized into General, ROMs, Display, and Advanced tabs for presets, machine/drive/SID/joystick preferences, ROM setup, CRT shader controls, and diagnostics
+- A first-run ROM setup assistant appears when required C64 ROMs are missing and uses the same sandbox-safe private-copy import flow as Settings
+- The macOS app now includes an opt-in CRT display shader with adjustable intensity
+- The macOS app now exposes Fast Load, Compat True Drive, Strict PAL, PAL C64C, NTSC C64, and CRT + Accurate SID presets from Settings, the toolbar, and the Emulation menu
+- ROM configuration now imports sandbox-safe private copies into Application Support, provides Apply/OK semantics, and lets stale ROM entries be cleared from Settings
+- The macOS Release run path now defaults to the Xcode Release configuration, uses App Store-relevant sandbox/bookmark/user-selected-file entitlements without `get-task-allow`, and keeps the presented C64 frame centered in the app display without changing core VIC timing constants
+- ROM loading now validates expected stock ROM sizes before applying Settings-selected files
+- PAL/NTSC machine profiles now drive exact emulation frame cadence and macOS display refresh hints as well as VIC/CIA/SID timing
+- Machine profiles can now target 1541-II drive variants for PAL/NTSC C64 and C64C compatibility manifests
+- CIA CNT line rising edges now drive Timer A/Timer B CNT counting and SP serial input shifts, improving pin-level serial/timer compatibility for loaders and peripherals
+- CIA serial output now preserves SDR writes made before output mode is enabled and starts shifting the pending byte when CRA serial-output mode is selected
+- NMOS 6502 decimal ADC/SBC now have exhaustive operand/carry coverage for hardware-style accumulator and flag behavior, including invalid BCD inputs and cases where the final BCD result differs from the flags' source values
+- NMOS 6502 RDY input is now modeled as a line-level CPU pin that stalls opcode/data reads while allowing in-progress write cycles to complete
+- VIC-II AEC-low bus stealing now drives the CPU RDY line instead of skipping CPU ticks, so halted reads freeze while pending writes can still drain
+- NMOS 6502 IRQ masking now honors the one-boundary delay after late `I` flag changes from `CLI`, `SEI`, and `PLP`
+- Simultaneous NMI/IRQ arbitration now has focused coverage: NMI vectors first, then a still-asserted IRQ is serviced after RTI restores `I` clear
+- BRK/IRQ/NMI stack status bytes now have focused coverage: BRK pushes the break flag set while hardware IRQ/NMI pushes it clear
+- NMI can now hijack BRK/IRQ vector fetches before the low vector byte is read, while late NMIs are prevented from half-hijacking only the high byte; held late NMIs are deferred until after the first handler opcode, and released transients are missed
+- VIC-II low-phase refresh and idle memory side effects are now visible: refresh slots read `$3fff` downward through the 8-bit refresh counter, reset at frame start, wrap correctly, and idle slots read `$3fff` or `$39ff` in ECM without stalling the CPU
+- VIC-II late-start bad-line/DMA-delay behavior now latches unstable `$ff/$f` startup data for the first newly-started c-accesses before normal matrix/color fetches resume
+- VIC-II sprite DMA eligibility is now latched by the cycle-55/56 enable/Y-coordinate check, so post-check `$D015` or sprite-Y writes cannot falsely create current-line DMA while already-latched DMA still reaches its fetch slot and continues through later sprite body rows
+- VIC-II sprite vertical-expansion state now keeps an MCBASE counter and covers the cycle-15 `$D017` clear crunch formula so the next sprite DMA fetch starts from the crunched byte offset
+- VIC-II sprite rendering now honors the 9-bit horizontal counter wraparound for normal, expanded, and multicolor sprites in both beam-time sprite tracing and end-of-line rendering, with capped active width, live `$D015` output gating, wrap-edge normal/multicolor sprite collision, expanded-multicolor display-foreground data collision, and foreground-priority coverage
+- CIA keyboard scanning now propagates pressed-key bridges through the 8x8 matrix, including phantom-key behavior in both row-driven and column-driven scan directions
+- CIA joystick-port lows now participate in keyboard matrix propagation, matching the shared CIA1 row/column wiring used by real joystick and keyboard interactions
+- SID 6581 combined noise waveforms now approximate DAC-bit drain toward noise LFSR lockup while 8580 preserves the cleaner digital combined-noise path; TEST-bit reseeding covers recovery from the locked state
+- SID waveform DAC output now floats briefly after all waveforms are disabled, preserving short sample-trick output windows before the latch decays to silence
+- SID TEST-bit handling now suppresses active waveform output, preserves already-floating waveform-DAC output for direct TEST assertions and OSC3 readback, and clears stale floating DAC state on control-register TEST writes while resetting oscillator and noise state
+- SID OSC3/ENV3 readback now samples voice 3's oscillator and envelope at the first phase of a SID tick while debugger snapshots continue to expose live internal values
+- SID voice-3 TEST writes now invalidate sampled OSC3 readback immediately so a forced oscillator reset cannot leak a stale sampled value, while sampled ENV3 remains intact
+- SID voice-3 control-register writes now invalidate sampled OSC3 readback only when oscillator-output-affecting bits change between SID ticks; gate-only envelope changes preserve the sampled OSC3 latch
+- SID voice-3 pulse-width writes now invalidate sampled OSC3 readback for pulse/combined-pulse waveforms when the 12-bit comparator threshold changes, while non-pulse waveform readback remains latched
+- SID now exposes separate debug/effective and non-mutating chip-readable register snapshots, so compatibility result logs can inspect write-only bus-latch behavior without changing emulated SID state
+- SID audio/debug state and compatibility manifests now expose the SID-local data-bus latch value and decay countdown, so write-only register readback tests can fail with a specific bus-latch mismatch instead of a generic SID state mismatch
+- SID audio/debug state and compatibility manifests now expose sampled OSC3/ENV3 latch values and validity flags, so corpus runs can distinguish latched readback from live fallback reads
+- SID audio/debug state and compatibility manifests now expose SID sample scheduler position and cycles-per-sample timing, so audio signature drift can be separated from waveform/filter drift
+- SID audio/debug state and compatibility manifests now expose POTX/POTY values, paddle targets, and active scan counter state so paddle-register timing tests can be captured as normal milestones
+- Whole-machine C64 ticking now drives continuous SID POTX/POTY scan cycles while standalone SID tests can still exercise one-shot scans and direct latched paddle values
+- SID 6581 saw+pulse combined waveform output now uses the saw/triangle DAC-mix approximation, while 8580 keeps pulse-gated digital saw masking; the ring-mod bit no longer affects this non-triangle waveform combination
+- SID 6581 triangle+saw combined waveform output now uses a bounded analog pull-down approximation, while 8580 keeps clean digital masking
+- SID 6581 triangle+pulse combined waveform output now uses a bounded analog pull-down approximation, while 8580 keeps clean digital masking
+- SID 6581 triangle+saw+pulse combined waveform output now uses a stronger bounded analog pull-down approximation, while 8580 keeps clean digital masking
+- SID combined noise waveforms now mask against the model-specific non-noise waveform base, so 6581 analog pull-down approximations also affect noise+triangle/saw/pulse combinations
+- SID ADSR attack now switches to decay on the same envelope step that reaches maximum level instead of waiting for an extra attack period
+- SID ADSR decay now enters sustain on the same envelope decrement that reaches the current sustain level
+- SID ADSR release now latches hold-zero immediately when gate drops while the envelope is already silent
+- SID ADSR exponential decay/release periods now latch only at the SID threshold envelope values (`255, 93, 54, 26, 14, 6, 0`) instead of recomputing from broad ranges every decrement or sustain-level resume
+- SID ADSR attack now models the `$ff -> $00` envelope wrap/freeze case, with a release-to-attack gate cycle unlocking the frozen zero state
+- SID ADSR sustain now keeps the internal rate counter running at the decay rate while holding the envelope level, preserving rate-counter phase for later gate/rate changes
+- SID voice output now applies a model-specific envelope DAC curve, preserving linear 8580 levels while giving 6581 mid-level envelopes a deterministic non-linear response
+- SID output-stage volume DAC now uses model-specific curves: a stronger non-linear 6581 DC offset path and a smaller near-linear 8580 path
+- SID 6581 compatibility-mode filter input now avoids self-charging from volume-DAC DC bleed when no voice or external audio is routed into the filter
+- SID compatibility-mode external audio input now applies model-specific gain before direct or filtered routing, so 6581 and 8580 profiles produce distinct EXT IN behavior
+- SID filter resonance damping is now model-specific, with routed voices remaining inaudible when no low/band/high-pass output mode is selected while still precharging filter state for later mode changes
+- SID filter cutoff calculations now mask to the hardware 11-bit register width before applying the model-specific 6581/8580 cutoff response
+- SID audio debug state and compatibility manifests now expose filter resonance/control/volume registers, SID-local bus-latch value/decay countdown, POTX/POTY scan state, per-voice and external-input filter routing flags, filter mode flags, voice-3-off state, raw and normalized filter cutoff, and damping values, so corpus milestones can assert model-specific filter, bus, and paddle behavior directly
+- SID per-voice debug state and compatibility manifests now expose decoded control flags for gate, sync, ring modulation, TEST, triangle, sawtooth, pulse, noise, any-waveform selection, the per-cycle oscillator-MSB/noise-clock edge flags, sustain level, and selected ADSR rate period alongside the raw control register
+- VIA 6522 shift-register reads and writes now acknowledge the SR interrupt flag, matching register-side behavior needed before deeper serial shift timing work
+- VIA 6522 shift-register modes 1-7 now shift CB2 data in/out under Timer 2, PHI2, or external CB1 clock control, including free-running T2 output recirculation and eight-pulse SR interrupts
+- VIA 6522 internally clocked shift-register modes now expose CB1 output-clock pulses for peripherals that observe the generated serial clock
+- VIA 6522 Timer 1 now drives and notifies PB7 output changes from underflows and ACR mode changes when PB7 is configured as an output, while preserving external PB7 input reads for SYNC/write-protect style wiring
+- VIA 6522 Port A output changes now have observable callbacks on ORA/DDRA writes, giving disk/peripheral integrations the same kind of immediate pin-update hook already used on Port B
+- VIA 6522 CA2 handshake and pulse output modes now respond to ORA writes as well as ORA reads
+- VIA 6522 CB2 manual, handshake, and pulse output modes now track PCR and Port B access with observable output-state callbacks, including CB1-edge handshake release
+- Low-level GCR tracks can now be mutated in memory by the 1541 write head: while VIA2 Port A is configured as output, the rotating head serializes fresh GCR bytes bit-by-bit using the active speed-zone timing, erases bits to zero when the write gate is open without a freshly latched data byte, splices changes into the current exact halftrack while the motor is running and write-protect is clear, creates missing native low-level G64/NIB/NBZ/P64 halftracks with the active speed-zone length for first-stage format/write-back work, marks write-gate entry/exit splice regions as weak/random bits, clears overlapping weak-bit annotations at bit precision, exposes write-mode/write-count/splice-count/erase-bit diagnostics, and marks the low-level image dirty
+- D64-backed low-level GCR writes can now be decoded back into exportable D64 sectors when the resulting GCR headers/data/checksums are valid; low-level writes that cannot be represented as clean D64 sectors now block stale D64 export instead of silently dropping raw-track changes and surface that blocked state in drive status; native low-level G64/NIB/NBZ/P64 byte streams can be exported to G64 with raw track bytes, per-byte speed maps, and Swift64 weak/splice metadata preserved, while overlapping G64 track payloads and malformed or overlapping per-byte speed-map offsets are rejected during mount; G64 media status floors max-track-size reporting to the largest accepted payload when the header under-reports it
+- Raw and compressed NIBTOOLS `MNIB-1541-RAW`/NBZ images now mount as read-only native low-level halftracks in the true-drive path, reject duplicate halftrack table entries instead of silently overriding captured streams, preserve captured halftrack streams and density-derived speed zones, expose NIB/NBZ media capabilities to status/corpus checks, and appear in the macOS disk picker and compatibility manifest media types
+- P64 NRZI flux-pulse images now parse VICE/Micro64-style `HTPx` range-coded chunks with header/chunk CRC validation, reject unsupported double-sided/side-B chunks, duplicate halftrack chunks, and trailing chunks after `DONE`, preserve the image write-protect flag for true-drive mounts, quantize pulse positions into native GCR track cells while retaining the quantized full-rotation bit length, preserve weak pulse strengths as weak-bit annotations, and mount through the macOS disk picker and compatibility manifest media types
+- 1541 motor control now models a bounded spindle spin-down window after the VIA motor command turns off, instead of stopping the GCR head instantly
+- 1541 media insert/eject now clears stale GCR head sync, byte-ready, shift-register, and delayed-SO state so a new disk cannot inherit read-pipeline state from the previous image
+- High-level KERNAL SAVE to mounted D64 images now writes proper PRG load-address headers, accepts `0:`/`,P` style disk filename syntax, supports `@0:` replace saves, updates PRG sector chains, directory entries, and BAM free maps, and provides app-visible dirty tracking with an explicit Export Modified D64 command
+- High-level D64 logical-file writes now support `OPEN`/`PRINT#`/`CLOSE` style output channels for `,P,W`, `,S,W`, and `,A`, creating, appending, replacing, and zero-block PRG/SEQ files through the same BAM and sector-chain allocator used by SAVE
+- High-level D64 SAVE now extends a full first directory sector by allocating another directory sector on track 18, matching 1541 DOS behavior instead of failing after eight files, while avoiding partial directory-chain mutation when the data area has no free sectors
+- High-level 1541 command-channel `N:`/`NEW:` formatting now clears writable D64 images, rebuilds the BAM and empty directory, preserves D64 geometry/error-table shape, and reports status-channel results
+- High-level disk command-channel support now handles typed file lookup for `,P`/`,S`/`,U`/`,L` reads, wildcards, scratch, rename, copy sources, append sources, and filtered `$` directory listings, `OPEN15,8,15,"S:FILE"` style SCRATCH/delete commands, wildcard deletes, `R:NEW=OLD` renames, `C:NEW=OLD` copies with source file-type preservation and comma-separated source concatenation, `V:`/`VALIDATE` BAM rebuilds, `B-A`/`B-F` BAM updates with next-free-block `65, NO BLOCK` status, `B-R`/`U1` block reads, `U2` block writes with immediate BAM/directory metadata refresh, requested track/sector reporting for direct-block `66, ILLEGAL TRACK OR SECTOR` status, binary/text `M-R`/`M-W`/`M-E` memory commands including count-zero full-page reads/writes, `U0` reset/device-address forms, and status-channel readback
+- Extended 40/41/42-track D64 images remain mountable/readable, while BAM-mutating allocation paths are fenced to the standard 1541 BAM range so `B-A`/`B-F` cannot corrupt disk-name metadata by treating tracks above 35 as standard BAM entries
+- The 1541 GCR head now supports weak/random bit ranges on low-level tracks, producing unstable readback for protected-media regions that importers can annotate
+- Empty odd halftracks now fall back to adjacent full-track flux, while explicit native G64 halftrack data still overrides the fallback
+- Drive status, local milestone expectations, and JSONL results now distinguish requested head halftrack from the effective low-level halftrack being read
+- Compatibility manifests can now select PRG/D64/G64/NIB/NBZ/P64/T64/TAP/CRT media, `fastLoad`, `compat1541`, or `standard1541` drive modes, and explicit SID model/accuracy settings per milestone
+- Compatibility milestone manifests now reject duplicate milestone IDs and duplicate result keys before running, keeping resume logs and aggregate summaries unambiguous
+- Compatibility milestone timeouts now report deterministic unmet expectations for PC ranges, GCR/byte-ready progress, drive status including last weak/random bit halftrack and exact or ranged bit position plus last sampled variable-speed G64 halftrack/byte/zone, media capabilities, per-halftrack low-level track byte/bit length, speed-zone, byte-hash, speed-map-hash, and weak-range checks, RAM/color-RAM signatures, screen hashes, and color RAM hashes
+- Media capability checks now include weak/random-bit range counts, total weak-bit coverage, weak-bit preservation flags, and per-byte variable-speed-zone coverage for protected G64 validation
+- Compatibility milestone runs can now append categorized JSONL result logs with stable run IDs, milestone IDs/names, manifest fingerprints, expected-failure metadata and mismatch diagnostics, final CPU/VIC/drive/media/tape/screen state plus bounded decoded screen text, SID debug and non-mutating chip-readable register snapshots, write compact aggregate JSON summaries with run configuration metadata, manifest content fingerprints, selected/missing media counts, expected-failure drift counts/details, derived `outcome`/`acceptanceFailures` fields, optionally fail acceptance runs on missing manifest media, unclassified failures, or unexpected failures, optionally capture failed milestone screenshots, and resume by skipping milestones that already passed in a previous log while recording those skips in JSONL; `C64_TRACE=sid` now writes bounded SID register-write traces with CPU/raster context for audio divergence triage
+- Compatibility milestones with `screenshotName` can now write opt-in PPM framebuffer snapshots through `SWIFT64_LOCAL_MILESTONE_SCREENSHOT_DIR`
+- Machine profiles now include PAL/NTSC C64C variants that select the 8580 SID while preserving matching video, CIA TOD, and 1541C timing
+- Standard CRT cartridge images now mount through the app and map ROML/ROMH for 8K, 16K, and Ultimax cartridges
+- Action Replay CRT cartridges now parse type 1 images, switch 8K ROM banks through IO1, expose the current ROM or cartridge RAM through IO2, support the RAM overlay at `$8000-$9FFF`, and honor the disable bit
+- KCS Power CRT cartridges now parse type 2 images, expose 16K/8K/Ultimax/RAM-off modes through IO1 access, mirror the second-last ROML page in IO1, and provide the 128-byte IO2 RAM/status behavior
+- Atomic Power/Nordic Power CRT cartridges now parse type 9 images, switch four 8K ROM banks, expose ROM/RAM/off/Ultimax modes through IO1, support the special `$A000` RAM window, and mirror the active ROM/RAM page through IO2
+- Action Replay 3 CRT cartridges now parse type 35 images, switch two 8K ROM banks through IO1, mirror the active bank into ROML/ROMH, and honor EXROM-hide and disable control
+- Action Replay 4 CRT cartridges now parse type 30 images, switch 8K ROM banks through IO1, mirror the selected ROM's first page through IO2, and honor ROM-hide/freeze-end disable control
+- Final Cartridge I CRT cartridges now parse type 13 images, map the 16K ROM at `$8000-$BFFF`, expose cartridge ROM through IO1/IO2, and toggle ROM visibility off/on through IO1/IO2 access
+- Final Cartridge Plus CRT cartridges now parse type 29 images, map the 32K image segments into `$8000`, `$A000`, and `$E000`, and honor IO2 enable/visibility/readback control bits
+- Final Cartridge III CRT cartridges now parse type 3 images, select 16K banks through `$DFFF`, mirror selected bank bytes through IO1/IO2, honor the register-hide bit, and drive the CPU NMI line through the cartridge control register
+- Simon's BASIC CRT cartridges now parse type 4 images and control the upper ROM through IO1 writes
+- Super Games CRT cartridges now parse type 8 images, switch four 16K banks through `$DF00`, and honor the disable/write-protect latch until reset
+- C64 Game System/System 3 CRT cartridges now parse type 15 images and select 64 ROML banks through `$DE00-$DE3F` IO1 address accesses
+- Warp Speed CRT cartridges now parse type 16 images, mirror `$9E00-$9FFF` into IO1/IO2, and toggle the `$8000-$BFFF` ROM window through IO2/IO1 writes
+- Stardos CRT cartridges now parse type 31 images, expose the `$E000-$FFFF` Kernal replacement, and model IO1/IO2 capacitor-gated ROML enable/disable behavior
+- Game Killer CRT cartridges now parse type 42 images, expose the `$E000-$FFFF` ROM while leaving lower memory as normal RAM, and disable after two IO1/IO2 writes
+- Prophet64 CRT cartridges now parse type 43 banked ROML images and use IO2 writes for 32-bank selection and cartridge disable control
+- EXOS CRT cartridges now parse type 44 images and expose the `$E000-$FFFF` Kernal replacement only while HIRAM is selected
+- Freeze Frame CRT cartridges now parse type 45 images, map their 8K ROM at `$8000` after reset, toggle visibility through IO1/IO2 reads, and mirror the ROM into `$E000` through the cartridge freeze hook
+- Freeze Machine CRT cartridges now parse type 46 16K/32K images plus VICE-compatible split 8K layouts, map lower/upper ROM halves through reset, IO1, IO2, and freeze-window behavior, and toggle the active 16K bank on reset for 32K images
+- Snapshot64 CRT cartridges now parse type 47 images, keep their 4K ROM hidden after reset, expose it in Ultimax-style `$8000/$9000/$E000/$F000` mirrors through the cartridge freeze hook, and hide it again on IO2 writes
+- Super Explode V5 CRT cartridges now parse type 48 images, switch two 8K ROML banks through `$DF00` bit 7, mirror the active bank's last page in IO2, and approximate its capacitor-gated ROM visibility timeout
+- Super Snapshot V5 CRT cartridges now parse type 20 64K/128K images, mirror the selected `$9E00` ROM page through IO1, switch ROM banks and ROM/RAM visibility through IO1 writes, and expose the stock 8K RAM overlay path
+- MACH 5 CRT cartridges now parse type 51 4K/8K images, mirror `$9E00-$9FFF` into IO1/IO2, and use IO1/IO2 writes for ROM enable/disable control
+- Dinamic CRT cartridges now parse type 17 images and select 16 ROML banks through `$DE00-$DE0F` IO1 read accesses
+- Zaxxon/Super Zaxxon CRT cartridges now parse type 18 images, mirror the fixed `$8000-$8FFF` ROM at `$9000`, and select upper ROMH banks through fixed-ROM reads
+- COMAL-80 CRT cartridges now parse type 21 4-bank and optional 8-bank black/default images, map 16K banks at `$8000-$BFFF`, and use mirrored IO1 writes for bank/off control
+- Structured BASIC CRT cartridges now parse type 22 images and use `$DE00-$DE03` read/write accesses for bank selection and cartridge-off control
+- Ross CRT cartridges now parse type 23 16K/32K images and use `$DE00/$DF00` reads for bank selection and cartridge-off control
+- Dela EP64 CRT cartridges now parse type 24 images, accept 8K banks or 32K EPROM blocks, decode `$DE00` bank bits, and honor bit 7 cartridge-off control
+- Dela EP7x8 CRT cartridges now parse type 25 images and select one of eight 8K banks through one-hot-low `$DE00` values
+- Dela EP256 CRT cartridges now parse type 26 images and decode the documented `$38-$3F`, `$28-$2F`, `$18-$1F`, and `$08-$0F` bank windows
+- Rex EP256 CRT cartridges now parse type 27 images, bank 8K/16K/32K EPROM sockets through `$DFA0`, and honor `$DFC0/$DFE0` EXROM off/on reads
+- Mikro Assembler CRT cartridges now parse type 28 images and mirror `$9E00-$9FFF` into IO1/IO2
+- Magic Formel CRT cartridges now parse type 14 images, switch eight `$E000-$FFFF` ROM banks through `$DF00-$DF07`, and support the `$FF` to `$DF00` normal-Kernal fallback
+- Magic Desk CRT cartridges now parse type 19 banked ROML images and switch banks through IO1 writes
+- C64 reset/power-on now restores cartridge latch state so banked cartridges return to their startup bank
+- Ocean type 1 CRT cartridges now parse type 5 banked ROML/ROMH images and switch banks through IO1 writes
+- Fun Play/Power Play CRT cartridges now parse type 7 banked ROML images and switch banks through their decoded IO1 values
+- Westermann Learning and Rex Utility CRT cartridge types now mount through the existing normal 16K/8K mapping path
+- Epyx FastLoad CRT cartridges now parse type 10 images, expose the 8K ROM at `$8000`, mirror the last ROM page through IO2, and model the documented 512-cycle IO1/ROML capacitor-gated ROM enable timeout
+- EasyFlash CRT cartridges now parse type 32 images, switch banks through `$DE00`, control 8K/16K/Ultimax/off modes through `$DE02`, and expose the `$DF00` RAM page
+- RESTORE is now modeled as a C64 machine input that triggers an edge-sensitive CPU NMI
+- SID voice output now centers before envelope application and distinguishes 6581 vs 8580 volume-DAC bias
+- SID voice routing now feeds a bounded state-variable filter with model-specific cutoff scaling and correct voice-3-off direct-output behavior
+- SID external audio input is clamped to audio range, can be mixed directly or routed through the filter through `$D417` bit 3, and is model-shaped in compatibility mode
+- SID ADSR decay/release now use the exponential counter thresholds instead of decrementing linearly at every rate tick
+- SID sustain state now responds to lowered sustain levels by resuming decay instead of freezing at the old level
+- SID noise generation now clocks the LFSR on accumulator bit 19 and maps the documented shift-register taps into OSC/noise output bits
+- SID combined noise waveforms now mask noise output with selected triangle/saw/pulse output instead of ignoring the other waveform bits
+- SID triangle ring modulation now follows the sync-source oscillator MSB and leaves non-triangle waveforms unaffected
+- SID pulse waveforms now handle zero/max pulse-width edge cases and compare against the top 12 accumulator bits
+- SID pulse-width use and voice diagnostics now mask to the hardware 12-bit register width instead of treating stale upper bits as part of the comparator
+- SID voices with no waveform selected now contribute silence instead of a spurious centered negative signal
+- SID TEST-bit handling now keeps noise cleared while held and reseeds the noise shift register when released
+- SID direct chip reads now model a decaying local data-bus latch while memory-mapped write-only SID reads still preserve C64 CPU open-bus behavior
+- C64 CPU open-bus reads now use a bounded data-bus decay model, including color RAM high-nibble reads, unmapped I/O/expansion reads, and whole-machine cycle aging while the CPU is idle or jammed
+- 6510 internal port registers at `$0000/$0001` are certified as CPU-internal overlays that do not mutate underlying RAM, and VIC/SID/CIA register mirrors are covered by focused memory-map tests
+- SID ADSR timing now uses a 15-bit equality-based rate counter, exposing the classic delay-bug behavior when switching to faster envelope rates after the counter has already passed the new period
+- VIC-II timing now follows the active PAL/NTSC profile for cycles per rasterline and rasterlines per frame
+- CIA TOD timing now exposes PAL/NTSC-derived 50 Hz and 60 Hz rates and switches them through CRA bit 7
+- CIA serial input now shifts SP on CNT pulses, serial output shifts on Timer A underflows, and completed transfers raise the serial interrupt source
+- CIA serial output now keeps SDR bytes pending across output-mode changes so software can prime the serial register before enabling CRA bit 6
+- CIA keyboard matrix reads now include multi-key bridge/phantom behavior instead of only direct key intersections
+- CIA joystick port 1/2 switch lows now feed the same keyboard matrix bridge model instead of only affecting final port bits
+- CIA timer output now drives PB6/PB7 pulse and toggle modes for software that observes user-port/timer pins
+- SID oscillator sync now resets voices on source MSB rising edges instead of source level, improving hard-sync behavior
+- The 6510 CPU port now exposes cassette sense, write, and motor-control line levels for later datasette signal-path work
+- TAP v0/v1 images now auto-arm raw pulse playback through the C64 tape mount path and can drive CIA1 FLAG edges
+- TAP raw playback now idles CIA1 FLAG high whenever the cassette motor is off, avoiding stale tape pulses after motor stops or reset
+- Raw TAP playback now has machine-level play/stop control, app-visible tape signal status, and end-of-tape cassette sense release so TAP playback no longer leaves the machine thinking PLAY is held after the pulse stream ends
+- Stock CBM TAP files now decode short/medium/long pulse pairs into parity-checked bytes for raw PRG-like blocks, header+data block pairs, multiple named programs per TAP, duplicate header/data layouts, clean duplicate data fallback after a parity-damaged first copy, cross-copy byte voting when duplicate data copies have different parity-damaged bytes, and conservative rejection of conflicting duplicate data copies
+- TAP mounts now expose decode diagnostics through emulator status, distinguishing raw pulse-only playback, decoded standard CBM programs, malformed/parity-damaged blocks, incomplete header/data pairs, and conflicting duplicate data copies
+- The 6510 cassette write and motor-control outputs now emit effective line-change callbacks, and the datasette captures motor-gated write pulse timing with C64 status/API visibility, TAP v0/v1 export, and macOS File/toolbar export actions for future SAVE/write support
+- Kernal-trap SAVE to tape device 1 now creates or appends to a virtual T64 image with C64 status/API visibility and macOS export actions, while mounted TAP images are left untouched
+- Mounted tape names now surface through C64 status and the macOS status/inspector/popover UI, and virtual T64 SAVE output round-trips through the tape LOAD trap
+- macOS tape opens now use the same sandbox-safe user-selected file path as disk images, covering menu opens, toolbar opens, and drag/drop
+- Tape image replacement now clears stale raw TAP playback cursors, signal level, and pulse data so T64/TAP swaps cannot inherit the previous tape's signal path
+- T64 mounting now rejects directory entries whose payload ranges fall outside the image, preventing mounted-but-unreadable tape state after corrupt media swaps
+- True-drive D64 directory and PRG loads now pass hardware-path smoke tests through IEC, 1541 DOS, GCR byte-ready, and C64 RAM transfer checks
+- Extended 40/41/42-track D64 images now keep their extra-track geometry for fast sector reads and synthetic true-drive GCR tracks
+- D64 images with appended sector-error tables now preserve per-sector error metadata for future bad-sector/GCR error simulation
+- D64 sector-error tables now corrupt synthetic GCR sync/header/data/checksum/disk-ID fields for common read-error codes, including suppressing both header and data sync marks for no-sync sectors and suppressing only the data sync for data-block-not-present sectors
+- Media capabilities and compatibility manifests now expose total and non-default D64 sector-error code counts so bad-sector fixtures can be validated without opening binary snapshots
+- D64 directory and PRG sector-chain walkers now stop on cyclic chains instead of hanging on malformed media
+- KERNAL VERIFY traps now compare disk data against RAM and report verify mismatches without modifying memory
+- KERNAL SAVE traps now write PRG files with proper load-address headers to mounted D64 images in fast/convenience mode and still report an error when no writable disk path is available
+- G64 fast-path sector decoding now keeps whole-track data beyond track 35 by producing extended D64 geometry when present
+- G64 fast-path sector decoding now validates GCR symbols plus header/data checksums instead of accepting corrupted sectors as good data
+- G64 fast-path sector decoding now fails when no sectors decode, while native true-drive G64 streams still mount as low-level media
+- G64 low-level loading now rejects unsupported G64 versions instead of accepting unknown layouts as native tracks
+- G64 low-level loading now rejects images without track data and keeps the previous disk mounted after failed loads
+- G64 native tracks now preserve per-byte speed-zone blocks and the 1541 GCR head uses those maps for variable-speed read timing
+- G64 media capabilities now report raw track length, constant speed-zone, and halftrack preservation accurately for native tracks
+- 1541 media insert and write-protect changes now refresh the VIA2 disk-controller input lines that drive ROM code observes
+- 1541 reset/power-on now clears VIA timers, interrupts, port state, byte-ready, and GCR head state while keeping mounted media inserted
+- C64 reset now also resets true-drive 1541 hardware state and clears host-queued typed commands without ejecting mounted media
+- C64 reset now clears CIA timer, interrupt, serial, TOD, and CIA2 IEC output state so reset releases serial lines and deasserts IRQ/NMI
+- C64 reset now clears VIC-II register/raster/IRQ state and SID voice/filter/audio state while preserving selected video and SID models
+- C64 reset now restores the 6510 CPU port before reset-vector fetches, so Kernal ROM is visible even after software banks ROM out
+- Machine profiles now carry the cold RAM power-on pattern, and `C64.powerOn()` applies that profile-selected pattern instead of using a hidden hard-coded initializer
+- 6502/6510 reset now recovers from JAM/KIL opcodes and resumes through the reset vector instead of staying halted
+- 6502/6510 reset now discards stale pending NMI edges and does not immediately retrigger a held NMI line after reset
+- VIC-II sprite rendering now has corrected X placement, sprite-sprite and sprite-background collision latches, collision IRQs, and foreground-mask based sprite priority/collision behavior
+- VIC-II bad-line timing now exposes separate BA warning and AEC halt phases, reports per-cycle bad-line character-fetch bus ownership, and stalls the C64 CPU only during the AEC-low fetch window while VIC/CIA/SID/drive timing continues
+- VIC-II sprite fetching now uses deterministic two-cycle per-sprite DMA slots with observable bus ownership and CPU stalls instead of repeatedly fetching every sprite during the loose sprite window
+- VIC-II sprite DMA now drops BA during the pre-DMA warning window, including slots that begin just after the rasterline wraps, while keeping the CPU running until AEC goes low and preserving latched warnings after post-check `$D015` changes
+- VIC-II sprite display now latches separately at the cycle-58 DMA/Y-match check, so sprite DMA can continue after `$D015` is cleared while a late Y-coordinate change can still suppress display for that line
+- VIC-II sprite DMA now continues across following sprite body rows after the initial Y compare instead of dropping the second row at the next cycle-55/56 check, with whole-machine RDY stall coverage
+- VIC-II timing now exposes low-phase refresh, display-data, sprite-pointer, and active-sprite middle-byte access phases separately from CPU-stealing high-phase bus ownership
+- VIC-II sprite pointer bytes are now latched during their low-phase pointer slots and later consumed by the sprite DMA fetch path
+- VIC-II wrapped sprite DMA now keeps the low-phase middle-byte read tied to the latched DMA burst instead of falling back to the new rasterline's sprite row calculation
+- VIC-II bad-line fetches now latch both character codes and color RAM nibbles into the line buffers during the character-fetch window
+- VIC-II text/bitmap rendering now uses completed bad-line matrix/color buffers instead of rereading live screen/color RAM for the already-latched character row
+- VIC-II latched matrix buffers are now tied to their fetched VCBASE, preventing a completed row buffer from being reused for the wrong character row
+- VIC-II row-counter state now resets on bad lines, advances through rendered display lines, and selects glyph rows for completed latched matrix rows
+- VIC-II low-phase display-data cycles now latch glyph/bitmap bytes into a graphics buffer that rendering can consume when the row and pixel row match
+- VIC-II live color RAM fallback reads now mask to the same four-bit color RAM values used by bad-line latches
+- VIC-II sprite vertical-expansion state now initializes per rasterline, keeps unexpanded sprites advancing every line, and repeats expanded sprite rows through the sprite data counter path
+- VIC-II sprite MC now tracks byte offsets through sprite data and advances by three bytes after each sprite DMA row fetch
+- CIA interrupt masking/read-clear behavior now deasserts CPU IRQ/NMI lines cleanly and avoids duplicate active callbacks
+- C64-level interrupt tests cover combined CIA/VIC IRQ assertion and deassertion
