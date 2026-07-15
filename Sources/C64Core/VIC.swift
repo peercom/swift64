@@ -329,6 +329,8 @@ public final class VIC {
     var spriteTracePriorityBehindBG = [Bool](repeating: false, count: VIC.screenWidth)
     var spriteTraceDisplayForeground = [Bool](repeating: false, count: VIC.screenWidth)
     var spriteTraceSpriteMask = [UInt8](repeating: 0, count: VIC.screenWidth)
+    private var rasterTraceTouchedPixels: [Int] = []
+    private var spriteTraceTouchedPixels: [Int] = []
 
     /// Sprite DMA slots are currently modeled as deterministic two-cycle bursts
     /// per sprite during the VIC-II's sprite-fetch part of the line.
@@ -362,6 +364,10 @@ public final class VIC {
     private var backgroundColorSourceScratch = [Int8](repeating: -1, count: VIC.screenWidth)
     private var finalLineScratch = [UInt32](repeating: 0, count: VIC.screenWidth)
     private var spriteForegroundMaskScratch = [Bool](repeating: false, count: VIC.screenWidth)
+    private var spriteOccupancyScratch = [UInt8](repeating: 0, count: VIC.screenWidth)
+    private var spriteOccupancyGenerationScratch = [UInt32](repeating: 0, count: VIC.screenWidth)
+    private var spriteOccupancyGeneration: UInt32 = 1
+    private var spriteSourceLineScratch = [UInt32](repeating: 0, count: VIC.screenWidth)
 
     // MARK: - Memory access callback
 
@@ -627,7 +633,7 @@ public final class VIC {
         rasterTraceHasDisplayOpen = false
         spriteTraceLine = nil
         spriteTraceHasSamples = false
-        for index in 0..<VIC.screenWidth {
+        for index in rasterTraceTouchedPixels {
             rasterTraceValid[index] = false
             rasterTraceDisplayOpen[index] = false
             rasterTraceBorderColor[index] = 0
@@ -635,31 +641,29 @@ public final class VIC {
             rasterTraceBackgroundColor1[index] = 0
             rasterTraceBackgroundColor2[index] = 0
             rasterTraceBackgroundColor3[index] = 0
+        }
+        rasterTraceTouchedPixels.removeAll(keepingCapacity: true)
+        for index in spriteTraceTouchedPixels {
             spriteTraceValid[index] = false
             spriteTraceColor[index] = 0
             spriteTracePriorityBehindBG[index] = false
             spriteTraceDisplayForeground[index] = false
             spriteTraceSpriteMask[index] = 0
         }
+        spriteTraceTouchedPixels.removeAll(keepingCapacity: true)
     }
 
     func prepareRasterTraceForCurrentLine() {
         if rasterTraceLine == rasterLine {
             return
         }
+        clearRasterTrace()
 
         rasterTraceLine = rasterLine
         rasterTraceHasSamples = false
         rasterTraceHasDisplayOpen = false
         spriteTraceLine = rasterLine
         spriteTraceHasSamples = false
-        for index in 0..<VIC.screenWidth {
-            rasterTraceValid[index] = false
-            rasterTraceDisplayOpen[index] = false
-            spriteTraceValid[index] = false
-            spriteTraceDisplayForeground[index] = false
-            spriteTraceSpriteMask[index] = 0
-        }
     }
 
     func captureRasterTraceForCurrentCycle() {
@@ -689,6 +693,9 @@ public final class VIC {
             }
 
             let displayOpen = displayActive && displayEnabled && !verticalBorderActive && !horizontalBorderActive
+            if !rasterTraceValid[pixel] {
+                rasterTraceTouchedPixels.append(pixel)
+            }
             rasterTraceValid[pixel] = true
             rasterTraceDisplayOpen[pixel] = displayOpen
             rasterTraceBorderColor[pixel] = borderColor & 0x0F
@@ -705,19 +712,21 @@ public final class VIC {
     }
 
     func captureSpriteTrace(startPixel: Int, endPixel: Int) {
-        guard spriteDisplay.contains(true) else { return }
+        let activeMask = activeVisibleSpriteMask()
+        guard activeMask != 0 else { return }
         guard spriteTraceLine == rasterLine else { return }
 
         for sprite in stride(from: 7, through: 0, by: -1) {
-            guard spriteDisplay[sprite] else { continue }
-
             let spriteMask = UInt8(1 << sprite)
-            guard spriteEnabled & spriteMask != 0 else { continue }
+            guard activeMask & spriteMask != 0 else { continue }
             let behindBG = spritePriority & spriteMask != 0
             for x in startPixel..<endPixel {
                 guard let color = spritePixelColor(sprite: sprite, x: x) else { continue }
                 let hasForeground = displayForegroundAtTracePixel(x)
 
+                if spriteTraceSpriteMask[x] == 0 {
+                    spriteTraceTouchedPixels.append(x)
+                }
                 if spriteTraceSpriteMask[x] != 0 && spriteTraceSpriteMask[x] & spriteMask == 0 {
                     spriteSpriteCollision |= spriteTraceSpriteMask[x] | spriteMask
                     raiseInterrupt(0x04)
@@ -736,6 +745,14 @@ public final class VIC {
                 spriteTraceHasSamples = true
             }
         }
+    }
+
+    func activeVisibleSpriteMask() -> UInt8 {
+        var mask: UInt8 = 0
+        for sprite in 0..<8 where spriteDisplay[sprite] {
+            mask |= UInt8(1 << sprite)
+        }
+        return mask & spriteEnabled
     }
 
     func spritePixelColor(sprite: Int, x: Int) -> UInt32? {
@@ -1130,15 +1147,17 @@ public final class VIC {
 
         let lineInDisplay = Int(rasterLine) >= topBorder && Int(rasterLine) < bottomBorder
         let graphicsY = Int(rasterLine) - VIC.displayTop
+        let useRasterTrace = rasterTraceHasSamples && rasterTraceLine == rasterLine
 
         // Render character/bitmap graphics for this line.
         for px in 0..<VIC.screenWidth {
             graphicsLineScratch[px] = bgCol
             foregroundMaskScratch[px] = false
-            backgroundColorSourceScratch[px] = -1
+            if useRasterTrace {
+                backgroundColorSourceScratch[px] = -1
+            }
         }
 
-        let useRasterTrace = rasterTraceHasSamples && rasterTraceLine == rasterLine
         if ((lineInDisplay && displayActive && displayEnabled) || (useRasterTrace && rasterTraceHasDisplayOpen)) && graphicsY >= 0 {
             let charRow = graphicsY / 8
             let rowBase = charRow * 40
@@ -1182,18 +1201,6 @@ public final class VIC {
                 let color = traceValid ? rasterTraceBorderColor[px] : borderColor
                 finalLineScratch[px] = ColorPalette.rgba[Int(color & 0x0F)]
             }
-        }
-
-        for px in 0..<VIC.screenWidth {
-            let traceValid = useRasterTrace && rasterTraceValid[px]
-            let fallbackDisplayOpen = lineInDisplay
-                && displayActive
-                && displayEnabled
-                && px >= leftBorder
-                && px < rightBorder
-            let displayOpen = traceValid
-                ? rasterTraceDisplayOpen[px]
-                : fallbackDisplayOpen
             spriteForegroundMaskScratch[px] = displayOpen ? foregroundMaskScratch[px] : false
         }
 
@@ -1798,23 +1805,38 @@ public final class VIC {
     }
 
     func renderSprites(_ line: inout [UInt32], fbY: Int, foregroundMask: [Bool]? = nil) {
-        guard spriteDisplay.contains(true) else { return }
+        let activeMask = activeVisibleSpriteMask()
+        guard activeMask != 0 else { return }
 
-        let graphicsLine = line
         let background = ColorPalette.rgba[Int(backgroundColor[0] & 0x0F)]
-        var spriteOccupancy = [UInt8](repeating: 0, count: VIC.screenWidth)
+        spriteOccupancyGeneration &+= 1
+        if spriteOccupancyGeneration == 0 {
+            spriteOccupancyGeneration = 1
+            for x in 0..<VIC.screenWidth {
+                spriteOccupancyGenerationScratch[x] = 0
+            }
+        }
+        if foregroundMask == nil {
+            for x in 0..<VIC.screenWidth {
+                spriteSourceLineScratch[x] = line[x]
+            }
+        }
 
         func plotSpritePixel(sprite: Int, x: Int, color: UInt32, behindBG: Bool) {
             guard x >= 0 && x < VIC.screenWidth else { return }
 
             let spriteMask = UInt8(1 << sprite)
-            if spriteOccupancy[x] != 0 {
-                spriteSpriteCollision |= spriteOccupancy[x] | spriteMask
+            if spriteOccupancyGenerationScratch[x] != spriteOccupancyGeneration {
+                spriteOccupancyGenerationScratch[x] = spriteOccupancyGeneration
+                spriteOccupancyScratch[x] = 0
+            }
+            if spriteOccupancyScratch[x] != 0 {
+                spriteSpriteCollision |= spriteOccupancyScratch[x] | spriteMask
                 raiseInterrupt(0x04)  // IMMC
             }
-            spriteOccupancy[x] |= spriteMask
+            spriteOccupancyScratch[x] |= spriteMask
 
-            let hasForeground = foregroundMask?[x] ?? (graphicsLine[x] != background)
+            let hasForeground = foregroundMask?[x] ?? (spriteSourceLineScratch[x] != background)
             if hasForeground {
                 spriteDataCollision |= spriteMask
                 raiseInterrupt(0x02)  // IMBC
@@ -1827,8 +1849,7 @@ public final class VIC {
 
         // Render sprites from back to front (sprite 7 first, 0 last = highest priority)
         for i in stride(from: 7, through: 0, by: -1) {
-            guard spriteDisplay[i] else { continue }
-            guard spriteEnabled & (1 << i) != 0 else { continue }
+            guard activeMask & UInt8(1 << i) != 0 else { continue }
 
             let sx = Int(spriteX[i] & 0x01FF)
             let expandX = spriteExpandX & (1 << i) != 0

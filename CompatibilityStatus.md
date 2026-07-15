@@ -4,6 +4,10 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 
 ## Current Baseline
 
+Recent VIC-II work:
+- Sprite-heavy beam tracing and raster rendering now use an active visible-sprite mask, touched-pixel trace cleanup, single-pass sprite foreground-mask composition, and reusable generation-stamped occupancy buffers, preserving `$D015` display gating while reducing per-line allocation/clearing in multiplexing-heavy scenes.
+- Phase 3 VIC example milestones for FLI, open-border, and sprite-multiplex demos explicitly track placeholder proof hashes, so template manifests cannot be mistaken for calibrated framebuffer/register proof.
+
 | Area | Status | Notes |
 | --- | --- | --- |
 | Machine/chip profiles | Partial | PAL/NTSC C64 profiles select 6581 SID timing, PAL/NTSC C64C profiles select 8580 SID timing, and compatibility manifests can select 1541C or 1541-II drive variants with matching VIC geometry, CIA TOD, SID clock, and drive clock defaults; more board/chip revisions and deeper 1541-family hardware differences remain open. |

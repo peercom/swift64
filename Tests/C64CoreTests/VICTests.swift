@@ -2690,6 +2690,8 @@ final class VICTests: XCTestCase {
         vic.spriteLineData[0] = [0x80, 0x00, 0x00]
         vic.spriteLineData[1] = [0x80, 0x00, 0x00]
 
+        XCTAssertEqual(vic.activeVisibleSpriteMask(), 0x02)
+
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
         XCTAssertEqual(line[0], ColorPalette.rgba[2])

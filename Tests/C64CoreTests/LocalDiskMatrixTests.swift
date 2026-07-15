@@ -1143,6 +1143,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         for proofType in MilestoneVICProofType.requiredPhase3Proofs {
             XCTAssertEqual(proofCounts[proofType], 3, "Expected all Phase 3 demo milestones to include \(proofType)")
         }
+        XCTAssertEqual(Self.placeholderProofHashCount(in: manifest.milestones), 6)
     }
 
     func testManifestPlaceholderProofHashCoverageCountsUncalibratedDigests() throws {
