@@ -1169,7 +1169,6 @@ public final class VIC {
                 charRow: charRow,
                 pixelRow: pixelRow,
                 leftBorder: VIC.displayLeft,
-                rightBorder: rightBorder,
                 markBackgroundPixel: { pixel, backgroundIndex in
                     guard pixel >= 0 && pixel < VIC.screenWidth else { return }
                     self.backgroundColorSourceScratch[pixel] = Int8(backgroundIndex)
@@ -1205,7 +1204,7 @@ public final class VIC {
         }
 
         if useRasterTrace && spriteTraceHasSamples && spriteTraceLine == rasterLine {
-            applySpriteTrace(&finalLineScratch)
+            applyTouchedSpriteTrace(&finalLineScratch)
         } else {
             renderSprites(&finalLineScratch, fbY: fbY, foregroundMask: spriteForegroundMaskScratch)
         }
@@ -1229,8 +1228,8 @@ public final class VIC {
         }
     }
 
-    func applySpriteTrace(_ line: inout [UInt32]) {
-        for x in 0..<VIC.screenWidth where spriteTraceValid[x] {
+    func applyTouchedSpriteTrace(_ line: inout [UInt32]) {
+        for x in spriteTraceTouchedPixels where spriteTraceValid[x] {
             let hasForeground = spriteTraceDisplayForeground[x]
             if !spriteTracePriorityBehindBG[x] || !hasForeground {
                 line[x] = spriteTraceColor[x]
@@ -1252,7 +1251,7 @@ public final class VIC {
     }
 
     func renderGraphicsLine(_ line: inout [UInt32], foregroundMask: inout [Bool], charRow: Int, pixelRow: Int,
-                            leftBorder: Int, rightBorder: Int,
+                            leftBorder: Int,
                             markBackgroundPixel: ((Int, Int) -> Void)? = nil) {
         let readMem = readMemory ?? { _ in return 0 }
 

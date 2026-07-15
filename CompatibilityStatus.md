@@ -5,7 +5,8 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 ## Current Baseline
 
 Recent VIC-II work:
-- Sprite-heavy beam tracing and raster rendering now use an active visible-sprite mask, touched-pixel trace cleanup, single-pass sprite foreground-mask composition, and reusable generation-stamped occupancy buffers, preserving `$D015` display gating while reducing per-line allocation/clearing in multiplexing-heavy scenes.
+- Sprite-heavy beam tracing and raster rendering now use an active visible-sprite mask, touched-pixel trace cleanup/composition, single-pass sprite foreground-mask composition, and reusable generation-stamped occupancy buffers, preserving `$D015` display gating while reducing per-line allocation/clearing in multiplexing-heavy scenes.
+- Open right-border proof now covers horizontally scrolled last-column graphics appearing beyond the nominal display edge, and the graphics-line renderer signature no longer implies an unused right-border clip.
 - Phase 3 VIC example milestones for FLI, open-border, and sprite-multiplex demos explicitly track placeholder proof hashes, so template manifests cannot be mistaken for calibrated framebuffer/register proof.
 
 | Area | Status | Notes |

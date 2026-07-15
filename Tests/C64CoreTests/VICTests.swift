@@ -828,6 +828,37 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight + 16], ColorPalette.rgba[1])
     }
 
+    func testOpenRightBorderCanRevealScrolledLastColumnGraphics() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+        let x = VIC.displayRight + 5
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.controlReg2 = 0xCF
+        vic.backgroundColor[0] = 0x01
+        vic.borderColor = 0x02
+        vic.rasterTraceLine = line
+        vic.rasterTraceHasSamples = true
+        vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceValid[x] = true
+        vic.rasterTraceDisplayOpen[x] = true
+        vic.readMemory = { address in
+            switch address {
+            case 0x0427: return 0x01
+            case 0x1008: return 0x02
+            default: return 0x00
+            }
+        }
+        vic.readColorRAM = { _ in 0x07 }
+
+        vic.renderRasterline()
+
+        let fbY = VIC.displayTop - VIC.firstVisibleLine
+        let rowOffset = fbY * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + x], ColorPalette.rgba[7])
+    }
+
     func testRightBorderStaysClosedWhenColumnModeWriteMissesWiderCloseComparison() {
         let vic = VIC()
         let line = UInt16(VIC.displayTop)
@@ -1772,8 +1803,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertTrue(readAddresses.contains(0x1008))
@@ -1876,8 +1906,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertTrue(readAddresses.contains(0x1008))
@@ -1908,8 +1937,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
@@ -1939,8 +1967,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
@@ -1970,8 +1997,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
@@ -2446,8 +2472,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertTrue(readAddresses.contains(0x0400))
@@ -3817,8 +3842,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[4])
@@ -3861,8 +3885,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[4])
@@ -4113,6 +4136,43 @@ final class VICTests: XCTestCase {
 
         let rowOffset = (VIC.displayTop - VIC.firstVisibleLine) * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + x], ColorPalette.rgba[0])
+    }
+
+    func testTouchedSpriteTraceCompositionRendersOnlyCapturedPixels() {
+        let vic = VIC()
+        let line = UInt16(VIC.displayTop)
+        let staleX = VIC.displayLeft
+        let capturedX = VIC.displayLeft + 16
+
+        vic.rasterLine = line
+        vic.displayActive = true
+        vic.verticalBorderActive = false
+        vic.horizontalBorderActive = false
+        vic.rasterTraceLine = line
+        vic.rasterTraceHasSamples = true
+        vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceValid[capturedX] = true
+        vic.rasterTraceDisplayOpen[capturedX] = true
+        vic.spriteTraceLine = line
+
+        vic.spriteTraceValid[staleX] = true
+        vic.spriteTraceColor[staleX] = ColorPalette.rgba[6]
+
+        vic.spriteEnabled = 0x01
+        vic.spriteDisplay[0] = true
+        vic.spriteX[0] = UInt16(capturedX)
+        vic.spriteY[0] = UInt8(VIC.displayTop)
+        vic.spriteColors[0] = 0x01
+        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.readMemory = { _ in 0x00 }
+        vic.readColorRAM = { _ in 0x00 }
+
+        vic.captureSpriteTrace(startPixel: capturedX, endPixel: capturedX + 1)
+        vic.renderRasterline()
+
+        let rowOffset = (VIC.displayTop - VIC.firstVisibleLine) * VIC.screenWidth
+        XCTAssertEqual(vic.framebuffer[rowOffset + staleX], ColorPalette.rgba[0])
+        XCTAssertEqual(vic.framebuffer[rowOffset + capturedX], ColorPalette.rgba[1])
     }
 
     func testBeamSpriteTraceKeepsLowerSpriteVisibleWhenTopSpriteIsBehindForeground() {
@@ -5685,8 +5745,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -5725,8 +5784,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -5818,8 +5876,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -5855,8 +5912,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(vic.graphicsBufferScreenBytes[0], 0x37)
@@ -5896,8 +5952,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(vic.graphicsBufferScreenBytes[0], 0x01)
@@ -5943,8 +5998,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -5987,8 +6041,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0x02])
@@ -6022,8 +6075,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
@@ -6053,8 +6105,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[7])
@@ -6067,8 +6118,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 1,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -6172,8 +6222,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
@@ -6187,8 +6236,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[0])
@@ -6222,8 +6270,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[7])
@@ -6252,8 +6299,7 @@ final class VICTests: XCTestCase {
             foregroundMask: &foregroundMask,
             charRow: 0,
             pixelRow: 0,
-            leftBorder: VIC.displayLeft,
-            rightBorder: VIC.displayRight
+            leftBorder: VIC.displayLeft
         )
 
         XCTAssertEqual(line[VIC.displayLeft], ColorPalette.rgba[2])
