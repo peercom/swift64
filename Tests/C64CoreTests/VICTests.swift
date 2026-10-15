@@ -3411,7 +3411,11 @@ final class VICTests: XCTestCase {
         }
 
         XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
-        XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[2])
+        // The held hires dot at X=11 survives the mode switch. Subsequent
+        // pairs start on the odd bit, selecting the sprite color (10), and
+        // the final half-pair completes even after the 24th bit is consumed.
+        for x in 12...24 { XCTAssertEqual(vic.framebuffer[x], ColorPalette.rgba[3]) }
+        XCTAssertEqual(vic.framebuffer[25], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
     }
 
     func testBeamSpriteTraceHonorsMidlineXExpansionChangesByRasterPosition() {

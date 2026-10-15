@@ -21,13 +21,17 @@ final class PublicVICConformanceTests: XCTestCase {
         let path: String
         let profile: MachineProfile
         var referenceArea: ReferenceArea? = nil
+        var knownPixelMismatches: Int? = nil
     }
 
     private let fixtures = [
         Fixture(id: "phi1-pal", path: "phi1timing/phi1timing.prg", profile: .palC64),
         Fixture(id: "phi1-ntsc", path: "phi1timing/phi1timing_ntsc.prg", profile: .ntscC64),
         Fixture(id: "sprite-collision-pal", path: "spritecollisions/sprite-sprite-collision-cycle.prg", profile: .palC64),
-        Fixture(id: "graphics-collision-pal", path: "spritecollisions/sprite-gfx-collision-cycle.prg", profile: .palC64)
+        Fixture(id: "graphics-collision-pal", path: "spritecollisions/sprite-gfx-collision-cycle.prg", profile: .palC64),
+        Fixture(id: "blackmail-fli-pal", path: "flibug/blackmail-fixed.prg", profile: .palC64, referenceArea: .palDisplay, knownPixelMismatches: 5_558),
+        Fixture(id: "graphics-fetch-pal", path: "gfxfetch/gfxfetch.prg", profile: .palC64, referenceArea: .palDisplay),
+        Fixture(id: "graphics-fetch-ntsc", path: "gfxfetch/gfxfetch_ntsc.prg", profile: .ntscC64, referenceArea: .ntscDisplay)
     ] + ["20", "21", "22", "29", "2A", "2B"].map {
         Fixture(id: "fld-\($0.lowercased())-pal", path: "fldscroll/fldscroll-\($0)-60.prg", profile: .palC64, referenceArea: .palDisplay)
     } + ["54", "57"].flatMap { timing in
@@ -35,8 +39,13 @@ final class PublicVICConformanceTests: XCTestCase {
          Fixture(id: "sprite-dma-\(timing)-ntsc", path: "spritedma/d017-\(timing)_ntsc.prg", profile: .ntscC64, referenceArea: .ntscDisplay)]
     } + ["vborder-32-08", "vborder-32-09", "vborder-33-08", "vborder-33-09",
          "vborder2-21", "vborder2-22", "vborder2-35", "vborder2-36", "vborder2-63", "vborder2-64",
-         "hvborder1", "hvborder2"].map {
+         "hvborder1", "hvborder2", "border-bm-idle", "border-bm-ysh", "border-bm-ysh2", "border-mcbm"].map {
         Fixture(id: "\($0)-pal", path: "border/\($0).prg", profile: .palC64, referenceArea: .palBorder)
+    } + ["ss-hires-mc", "ss-hires-mc-exp", "ss-mc-hires", "ss-mc-hires-exp",
+         "ss-hires-color", "ss-mc-color0", "ss-mc-color1", "ss-mc-color2", "ss-xpos",
+         "ss-unexp-exp-hires", "ss-exp-unexp-hires", "ss-unexp-exp-mc", "ss-exp-unexp-mc",
+         "ss-pri", "ss-pri-exp", "ss-pri-mc", "ss-pri-mc-exp"].map {
+        Fixture(id: "\($0)-pal", path: "spritesplit/\($0).prg", profile: .palC64, referenceArea: .palBorder)
     }
 
     func testOptInPublicVICPrograms() throws {
@@ -92,15 +101,18 @@ final class PublicVICConformanceTests: XCTestCase {
                 }
                 c64.debugger.addWatchpoint(0xD7FF, type: .write)
                 let traceRaster = env["SWIFT64_PUBLIC_VIC_TRACE_RASTER"] == "1"
+                let traceAfterCycles = max(0, Int(env["SWIFT64_PUBLIC_VIC_TRACE_AFTER_CYCLES"] ?? "0") ?? 0)
+                let tracedRegisters: Set<UInt16> = [0xD000, 0xD011, 0xD016, 0xD018, 0xD01B, 0xD01C, 0xD01D,
+                                                    0xD020, 0xD021, 0xD025, 0xD026, 0xD027]
                 if traceRaster {
-                    c64.debugger.addWatchpoint(0xD011, type: .write)
-                    c64.debugger.addWatchpoint(0xD016, type: .write)
+                    for address in tracedRegisters { c64.debugger.addWatchpoint(address, type: .write) }
                 }
                 var rasterWrites = 0
+                var cycles = 0
                 c64.debugger.onBreak = { reason in
                     if case let .watchpointWrite(address, value) = reason {
                         if address == 0xD7FF { result = value }
-                        if address == 0xD011 || address == 0xD016, traceRaster, rasterWrites < 100 {
+                        if traceRaster, cycles >= traceAfterCycles, tracedRegisters.contains(address), rasterWrites < 100 {
                             rasterWrites += 1
                             print("VIC write \(fixture.id) line=\(c64.vic.rasterLine) cycle=\(c64.vic.rasterCycle) register=\(String(format: "%04X", address)) value=\(value) RC=\(c64.vic.rowCounter) VC=\(c64.vic.videoCounter) BASE=\(c64.vic.videoCounterBase) active=\(c64.vic.displayActive) vertical=\(c64.vic.verticalBorderActive) main=\(c64.vic.horizontalBorderActive)")
                         }
@@ -114,7 +126,6 @@ final class PublicVICConformanceTests: XCTestCase {
                 // Use BASIC RUN and the fixture's own SYS stub, setup, and IRQ
                 // vectors. Never patch code or infer completion from a PC scan.
                 c64.loadPRG(program, autoRun: true)
-                var cycles = 0
                 while result == nil && !c64.cpu.jammed && cycles < 3_000_000 {
                     c64.tickOneCycle()
                     cycles += 1
@@ -141,13 +152,15 @@ final class PublicVICConformanceTests: XCTestCase {
                 if let area = fixture.referenceArea, result == 0 {
                     let programURL = root.appendingPathComponent("VICII/" + fixture.path)
                     let reference = programURL.deletingLastPathComponent().appendingPathComponent("references/" + programURL.lastPathComponent + ".png")
-                    try compareFrame(c64.vic.framebuffer, reference: reference, area: area, id: fixture.id)
+                    try compareFrame(c64.vic.framebuffer, reference: reference, area: area,
+                                     id: fixture.id, knownPixelMismatches: fixture.knownPixelMismatches)
                 }
             }
         }
     }
 
-    private func compareFrame(_ pixels: [UInt32], reference: URL, area: ReferenceArea, id: String) throws {
+    private func compareFrame(_ pixels: [UInt32], reference: URL, area: ReferenceArea, id: String,
+                              knownPixelMismatches: Int?) throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: reference)))
         let crop = area.crop
         XCTAssertEqual(bitmap.pixelsWide, 384)
@@ -178,7 +191,15 @@ final class PublicVICConformanceTests: XCTestCase {
             }
         }
         print("Public VIC \(id): \(mismatches)/\(crop.width * crop.height) pixel differences; \(examples.joined(separator: "; "))")
-        XCTAssertEqual(mismatches, 0, "\(id): display differs from upstream reference")
+        if let knownPixelMismatches {
+            print("Public VIC \(id): knownFailure=vic expectedPixelMismatches=\(knownPixelMismatches)")
+            XCTAssertEqual(mismatches, knownPixelMismatches, "\(id): known failure changed; re-evaluate its classification")
+            XCTExpectFailure("\(id): unresolved FLI row alignment; not a compatibility pass") {
+                XCTAssertEqual(mismatches, 0, "\(id): display differs from upstream reference")
+            }
+        } else {
+            XCTAssertEqual(mismatches, 0, "\(id): display differs from upstream reference")
+        }
         if let directory = ProcessInfo.processInfo.environment["SWIFT64_PUBLIC_VIC_CAPTURE_DIR"] {
             let url = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 - 2026-10-15
+
+- Refined within-cycle sprite X, priority, expansion, multicolor, and color-register updates. Decoded pixels survive mode switches, final multicolor pairs complete, and hidden sprites cannot recolor the visible priority winner.
+- Added eight ROM-independent sprite-register regressions and expanded the opt-in public VIC runner with sprite splits, PAL/NTSC graphics-fetch checks, and bitmap-border/FLI diagnostics. Public programs and reference images remain local and untracked.
+- Known visual gaps remain in Blackmail FLI row alignment and standard-bitmap open-border color retention. These are documented failures, not completed compatibility claims. No SID behavior changes are included in this patch.
+
 ## 0.4.0 - 2026-10-15
 
 - Refined VIC-II graphics counters, sprite DMA/shifters, border latches, collision timing, and PAL/NTSC bus sampling. Open borders survive frame wrap, and expanded sprites retain their final pixels after DMA stops.

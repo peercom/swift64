@@ -323,29 +323,38 @@ public final class VIC {
         var remainingBits = 0
         var expansionSecondDot = false
         var multicolorSecondBit = false
-        var pair: UInt8 = 0
+        var pixel: UInt8 = 0
+
+        var active: Bool { remainingBits > 0 || multicolorSecondBit || expansionSecondDot }
 
         mutating func clock(matchesX: Bool, expanded: Bool, multicolor: Bool) -> UInt8 {
-            if remainingBits == 0 {
+            if !active {
                 guard matchesX else { return 0 }
                 remainingBits = 24
                 expansionSecondDot = false
                 multicolorSecondBit = false
             }
-            if !multicolorSecondBit { pair = UInt8((data >> 22) & 3) }
-            let output: UInt8 = multicolor ? pair : (data & 0x800000 != 0 ? 2 : 0)
+            if !expansionSecondDot {
+                if !multicolor {
+                    pixel = data & 0x800000 != 0 ? 2 : 0
+                } else {
+                    if !multicolorSecondBit { pixel = UInt8((data >> 22) & 3) }
+                    multicolorSecondBit.toggle()
+                }
+            }
             if !expanded || expansionSecondDot {
                 data = (data << 1) & 0xFFFFFF
-                remainingBits -= 1
-                multicolorSecondBit.toggle()
+                remainingBits = max(0, remainingBits - 1)
             }
             expansionSecondDot = expanded && !expansionSecondDot
-            return output
+            return pixel
         }
     }
     /// DMA fills the live register byte by byte. X comparison starts shifting;
     /// it must never reload a consumed row from the diagnostic line buffer.
     var spriteShifters = [SpriteShifter](repeating: SpriteShifter(), count: 8)
+    private var spriteXWriteThisCycle: (register: UInt8, previous: UInt8)?
+    private var spriteMulticolorWriteThisCycle: UInt8?
     /// Sprite data pointer bytes latched during the low-phase sprite-pointer slots.
     var spritePointers = [UInt8](repeating: 0, count: 8)
     /// Rasterline for which sprite DMA enable/Y-match has been sampled.
@@ -370,6 +379,7 @@ public final class VIC {
     var spriteTraceHasSamples: Bool = false
     var spriteTraceValid = [Bool](repeating: false, count: VIC.screenWidth)
     var spriteTraceColor = [UInt32](repeating: 0, count: VIC.screenWidth)
+    private var spriteTraceColorRegister = [UInt8](repeating: 0, count: VIC.screenWidth)
     var spriteTracePriorityBehindBG = [Bool](repeating: false, count: VIC.screenWidth)
     var spriteTraceDisplayForeground = [Bool](repeating: false, count: VIC.screenWidth)
     var spriteTraceSpriteMask = [UInt8](repeating: 0, count: VIC.screenWidth)
@@ -508,6 +518,8 @@ public final class VIC {
         spriteDisplay = [Bool](repeating: false, count: 8)
         spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
         spriteShifters = [SpriteShifter](repeating: SpriteShifter(), count: 8)
+        spriteXWriteThisCycle = nil
+        spriteMulticolorWriteThisCycle = nil
         spritePointers = [UInt8](repeating: 0, count: 8)
         spriteDMACheckLine = nil
         spriteDMACheckMask = 0
@@ -547,6 +559,8 @@ public final class VIC {
     /// Low phase precedes the CPU's bus access. In particular, a CPU write to
     /// D018/DDR/bank pins cannot change a pointer already read in this phase.
     func beginCycle() {
+        spriteXWriteThisCycle = nil
+        spriteMulticolorWriteThisCycle = nil
         if recordsBusAccessTraces {
             lastHighPhaseMemoryReads.removeAll(keepingCapacity: true)
             lastHighPhaseColorRAMReads.removeAll(keepingCapacity: true)
@@ -598,6 +612,18 @@ public final class VIC {
 
     func endCycle() {
         cpuPhaseActive = false
+        // Control/priority changes reach the sequencer before X-position
+        // writes reach its comparator. The public spritesplit probes exercise
+        // both boundaries at each of the eight sprite-X alignments.
+        if let previous = spriteMulticolorWriteThisCycle {
+            clockSpritePixels(startX: beamX(atDot: 2), dotCount: 1, collisionStage: 1,
+                              oldX: true, multicolorBits: previous)
+            applySpriteMulticolorChange(from: previous)
+            clockSpritePixels(startX: beamX(atDot: 3), dotCount: 1, collisionStage: 1, oldX: true)
+        } else {
+            clockSpritePixels(startX: beamX(atDot: 2), dotCount: 2, collisionStage: 1, oldX: true)
+        }
+        clockSpritePixels(startX: beamX(atDot: 4), dotCount: 4, collisionStage: 2)
         if rasterCycle == spriteDMAFirstStartCycle - 2 {
             for sprite in 0..<8 where spriteDMAEligible(sprite) && spriteExpandY & (1 << sprite) != 0 {
                 spriteYExpFF[sprite].toggle()
@@ -799,10 +825,11 @@ public final class VIC {
             captureRasterTrace(startX: first, dotCount: 4)
             captureRasterTrace(startX: second, dotCount: 4)
         }
+        // Mature the two half-cycle collision stages before the CPU samples
+        // the latches. New pixels are queued by their original half-cycle.
         advanceCollisionPipeline()
-        clockSpritePixels(startX: first, dotCount: 4)
         advanceCollisionPipeline()
-        clockSpritePixels(startX: second, dotCount: 4)
+        clockSpritePixels(startX: first, dotCount: 2, collisionStage: 1)
     }
 
     private func advanceCollisionPipeline() {
@@ -850,7 +877,8 @@ public final class VIC {
         rasterTraceHasSamples = true
     }
 
-    private func clockSpritePixels(startX: Int, dotCount: Int) {
+    private func clockSpritePixels(startX: Int, dotCount: Int, collisionStage: Int,
+                                   oldX: Bool = false, multicolorBits: UInt8? = nil) {
         let activeMask = activeVisibleSpriteMask()
         guard activeMask != 0 else { return }
         let capturesLine = spriteTraceLine == rasterLine
@@ -868,12 +896,19 @@ public final class VIC {
             let mask = UInt8(1 << sprite)
             guard activeMask & mask != 0 else { continue }
             var shifter = spriteShifters[sprite]
-            let spritePosition = Int(spriteX[sprite])
-            if shifter.remainingBits == 0 && !(startX..<startX + dotCount).contains(spritePosition) {
+            var spritePosition = Int(spriteX[sprite])
+            if oldX, let write = spriteXWriteThisCycle {
+                if write.register == UInt8(sprite * 2) {
+                    spritePosition = (spritePosition & 0x100) | Int(write.previous)
+                } else if write.register == 0x10 {
+                    spritePosition = (spritePosition & 0xFF) | (write.previous & mask != 0 ? 0x100 : 0)
+                }
+            }
+            if !shifter.active && !(startX..<startX + dotCount).contains(spritePosition) {
                 continue
             }
             let expanded = spriteExpandX & mask != 0
-            let multicolor = spriteMulticolor & mask != 0
+            let multicolor = (multicolorBits ?? spriteMulticolor) & mask != 0
             for dot in 0..<dotCount {
                 let x = startX + dot
                 let value = shifter.clock(matchesX: spriteDisplay[sprite] && x == spritePosition,
@@ -883,9 +918,11 @@ public final class VIC {
                 occupancy |= UInt64(mask) << (dot * 8)
                 let capture = capturesLine && x < VIC.screenWidth
                 let color = value == 1 ? spriteMulticolor0 : value == 2 ? spriteColors[sprite] : spriteMulticolor1
+                let colorRegister = value == 1 ? UInt8(0x25) : value == 2 ? UInt8(0x27 + sprite) : UInt8(0x26)
                 recordSpritePixel(sprite: sprite, x: x, color: ColorPalette.rgba[Int(color & 15)],
                                   foreground: capture && displayForegroundAtTracePixel(x),
-                                  previousSprites: previous, capture: capture, delayedCollisions: true)
+                                  previousSprites: previous, capture: capture, collisionStage: collisionStage,
+                                  colorRegister: colorRegister)
             }
             spriteShifters[sprite] = shifter
         }
@@ -911,16 +948,20 @@ public final class VIC {
     }
 
     private func recordSpritePixel(sprite: Int, x: Int, color: UInt32, foreground: Bool,
-                                   previousSprites: UInt8, capture: Bool, delayedCollisions: Bool = false) {
+                                   previousSprites: UInt8, capture: Bool, collisionStage: Int? = nil,
+                                   colorRegister: UInt8 = 0) {
         let mask = UInt8(1 << sprite)
+        var pendingCollisions: UInt16 = 0
         if previousSprites != 0 && previousSprites & mask == 0 {
-            if delayedCollisions { collisionPipeline2 |= UInt16(previousSprites | mask) }
+            if collisionStage != nil { pendingCollisions |= UInt16(previousSprites | mask) }
             else { latchSpriteCollision(previousSprites | mask) }
         }
         if foreground {
-            if delayedCollisions { collisionPipeline2 |= UInt16(mask) << 8 }
+            if collisionStage != nil { pendingCollisions |= UInt16(mask) << 8 }
             else { latchSpriteDataCollision(mask) }
         }
+        if collisionStage == 1 { collisionPipeline1 |= pendingCollisions }
+        else { collisionPipeline2 |= pendingCollisions }
         guard capture else { return }
         if spriteTraceSpriteMask[x] == 0 { spriteTraceTouchedPixels.append(x) }
         spriteTraceSpriteMask[x] |= mask
@@ -928,14 +969,51 @@ public final class VIC {
         // higher-priority sprite still blocks every lower-priority sprite.
         spriteTraceValid[x] = true
         spriteTraceColor[x] = color
+        spriteTraceColorRegister[x] = colorRegister
         spriteTracePriorityBehindBG[x] = spritePriority & mask != 0
         spriteTraceDisplayForeground[x] = foreground
         spriteTraceHasSamples = true
     }
 
+    private func updateColorOutput(register: UInt8, value: UInt8) {
+        guard cpuPhaseActive, rasterTraceLine == rasterLine else { return }
+        // Color selection follows the data/priority pipeline. A phi2 write
+        // changes colors eleven dots before the next whole-cycle sample,
+        // without moving the sprite data or changing collision occupancy.
+        let period = videoStandard == .pal ? 504 : 512
+        let first = beamX(atDot: 0) - 3 + period
+        if register <= 0x24 {
+            let shift = register == 0x20 ? 16 : Int(register - 0x21) * 4
+            let mask = UInt32(15) << shift
+            for dot in 0..<11 {
+                let x = (first + dot) % period
+                if x < VIC.screenWidth && rasterTraceValid[x] {
+                    rasterTraceColors[x] = (rasterTraceColors[x] & ~mask) | UInt32(value & 15) << shift
+                }
+            }
+        } else {
+            for dot in 0..<11 {
+                let x = (first + dot) % period
+                if x < VIC.screenWidth && spriteTraceValid[x] && spriteTraceColorRegister[x] == register {
+                    spriteTraceColor[x] = ColorPalette.rgba[Int(value & 15)]
+                }
+            }
+        }
+    }
+
+    private func applySpriteMulticolorChange(from previous: UInt8) {
+        let changed = previous ^ spriteMulticolor
+        for sprite in 0..<8 where changed & (1 << sprite) != 0 {
+            guard spriteShifters[sprite].active else { continue }
+            // Enabling multicolor holds the decoded hires pixel for the first
+            // half-pair; disabling it releases the latch at the next dot/bit.
+            spriteShifters[sprite].multicolorSecondBit = spriteMulticolor & (1 << sprite) != 0
+        }
+    }
+
     func activeVisibleSpriteMask() -> UInt8 {
         var mask: UInt8 = 0
-        for sprite in 0..<8 where spriteDisplay[sprite] || spriteShifters[sprite].remainingBits > 0 {
+        for sprite in 0..<8 where spriteDisplay[sprite] || spriteShifters[sprite].active {
             mask |= UInt8(1 << sprite)
         }
         return mask
@@ -2058,6 +2136,14 @@ public final class VIC {
 
     public func writeRegister(_ reg: UInt16, value: UInt8) {
         let register = reg & 0x3F
+        if cpuPhaseActive {
+            if register < 0x10 && register & 1 == 0 {
+                spriteXWriteThisCycle = (UInt8(register), UInt8(truncatingIfNeeded: spriteX[Int(register) / 2]))
+            } else if register == 0x10 {
+                spriteXWriteThisCycle = (0x10, spriteXMSB)
+            }
+            if (0x20...0x2E).contains(register) { updateColorOutput(register: UInt8(register), value: value) }
+        }
         switch register {
         case 0x00...0x0F:
             let sprite = Int(register) / 2
@@ -2116,7 +2202,11 @@ public final class VIC {
             updateIRQLine()
 
         case 0x1B: spritePriority = value
-        case 0x1C: spriteMulticolor = value
+        case 0x1C:
+            let previous = spriteMulticolor
+            spriteMulticolor = value
+            if cpuPhaseActive { spriteMulticolorWriteThisCycle = previous }
+            else { applySpriteMulticolorChange(from: previous) }
         case 0x1D: spriteExpandX = value
         case 0x20: borderColor = value & 0x0F
         case 0x21: backgroundColor[0] = value & 0x0F

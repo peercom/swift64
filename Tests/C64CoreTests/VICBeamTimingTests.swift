@@ -127,12 +127,14 @@ final class VICBeamTimingTests: XCTestCase {
         XCTAssertFalse(c64.cpu.jammed)
     }
 
-    func testCPUColorStoreHasAnEightDotAlignedSplit() {
+    func testCPUColorStoreReachesTheColorOutputStageWithinTheCycle() {
         for standard in standards {
             for cycle in [19, 30, 44] {
                 let c64 = machine(standard, line: VIC.firstVisibleLine)
                 store(c64, register: 0x20, value: 5, atCycle: cycle)
-                let split = (cycle + 1) * 8 - 100
+                // The color mux is eleven dots later than the old whole-cycle
+                // data sample. Public sprite/color splits independently verify it.
+                let split = cycle * 8 - 103
                 XCTAssertEqual(c64.vic.framebuffer[split - 1], ColorPalette.rgba[2])
                 XCTAssertEqual(c64.vic.framebuffer[split], ColorPalette.rgba[5])
                 XCTAssertEqual(c64.vic.framebuffer[split + 7], ColorPalette.rgba[5])
