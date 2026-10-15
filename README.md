@@ -4,7 +4,7 @@ A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, ru
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
 
-Latest packaged macOS release: [Swift64 0.4.1](https://github.com/peercom/swift64/releases/tag/v0.4.1). ROMs and commercial media are not included.
+Latest packaged macOS release: [Swift64 0.4.2](https://github.com/peercom/swift64/releases/tag/v0.4.2). ROMs and commercial media are not included.
 
 ## Status
 
@@ -24,7 +24,7 @@ Latest packaged macOS release: [Swift64 0.4.1](https://github.com/peercom/swift6
 | Component | Status |
 |-----------|--------|
 | 6502 CPU | Phase 2 complete: cycle-stepped, 222 opcodes including undocumented, RDY/SO/interrupt edge coverage, decimal edge coverage, and opt-in public conformance runners |
-| VIC-II | PAL/NTSC beam sampling, clocked graphics counters, sprite DMA/shifters, phased sprite-register effects, shared-bus fetches, bad-line and sprite BA/AEC phases, raster/collision IRQs, software light-pen synchronization, and rasterline framebuffer composition; 46 of 50 public programs pass, including 42 exact visual fixtures for PAL FLD/line-crunch/FLI, open borders, sprite-register splits, and PAL/NTSC sprite expansion/graphics-fetch timing. Four named visual failures and broader external demo validation remain open |
+| VIC-II | PAL/NTSC beam sampling, clocked graphics counters/color latches, sprite DMA/shifters, phased sprite-register effects, shared-bus fetches, bad-line and sprite BA/AEC phases, raster/collision IRQs, software light-pen synchronization, and rasterline framebuffer composition; 49 of 50 public programs pass, including 45 exact visual fixtures for PAL FLD/line-crunch/FLI, text/bitmap open borders, sprite-register splits, and PAL/NTSC sprite expansion/graphics-fetch timing. Blackmail FLI and broader external demo validation remain open |
 | SID | 3 voices with 6581/8580 model selection, fast/compatibility modes, ADSR delay/exponential behavior, sync/ring/noise, model-aware combined waveform approximations, OSC3/ENV3/POT readback, data-bus latch behavior, audio signatures, and a bounded routed filter/output-stage foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
@@ -35,7 +35,7 @@ Latest packaged macOS release: [Swift64 0.4.1](https://github.com/peercom/swift6
 
 ### What needs work
 
-- Known public VIC failures include Blackmail FLI row alignment and three standard-bitmap open-border color cases. The full opt-in visual suite is not green; see [public graphics-fetch and bitmap-border results](TESTING.md#public-graphics-fetch-and-bitmap-border-results).
+- Blackmail FLI row alignment remains a known public VIC failure, explicitly reported rather than counted as a visual pass. Three standard-bitmap border failures are fixed in 0.4.2; see [bitmap output-latch proof](TESTING.md#bitmap-open-border-output-latch).
 - Many games and demos will not run correctly yet — VIC-II timing, sprite multiplexing, and advanced raster effects need further refinement
 - True-drive 1541 compatibility is still being validated against protected G64/custom-loader disks
 - Analog magnetic erase strength/decay, complete low-level 1541 format support, and flux-level write semantics are deferred until the low-level read/write path is stable

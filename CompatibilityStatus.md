@@ -4,6 +4,12 @@ This project is targeting preservation-grade Commodore 64 compatibility: stock P
 
 ## Current Baseline
 
+Release 0.4.2 VIC bitmap-border fixes (2026-10-15):
+- All three previously failing standard-bitmap border images now match exactly: 7,938 / 5,389 / 4,718 differing pixels reduced to zero without changing the programs, expected images, or tolerance. A clocked matrix-color latch retains the bitmap background between graphics cells and lines; same-cycle CPU X-scroll writes now affect the fetched byte before its output begins.
+- The public set now passes 49 of 50 programs, including 45 exact visual fixtures and 4,142,976 matching color-index comparisons. Blackmail FLI remains the unchanged strict expected failure at 5,558 differing pixels, not a pass. Full external multiplexer demos, broader PAL/NTSC software, and NTSC extreme-edge physical output mapping remain unproved; the VIC goal is still active.
+- Eight new PAL/NTSC regressions cover held colors, all X-scroll values, idle/vertical gating, fetch-vs-output timing, all eight graphics modes, color writes, rendering without clock side effects, cropped lines, and reset/frame wrap. The checked Debug slice passes 604 tests with one opt-in skip. Release integration passes 757 tests with 11 optional slow-drive skips and the separately reported Blackmail expected failure. `swift build --build-tests -j 2` passes. No SID changes/tests or CIA timing changes are included.
+- These changes are included in 0.4.2, not the earlier 0.4.1 app. See [bitmap output-latch proof](TESTING.md#bitmap-open-border-output-latch).
+
 Release 0.4.1 validation (2026-10-15):
 - This patch contains the sprite-register timing fixes described below, with no SID behavior changes. The checked Debug slice passed 596 tests with one opt-in skip; the Release slice passed 748 tests with 12 opt-in skips. Both had zero failures, and `swift build --build-tests -j 2` passed.
 - The expanded public VIC runner completes all 50 programs, but only 46 satisfy their checks: 42 exact visual fixtures covering 3,836,160 color-index comparisons, plus four bus/collision probes. PAL/NTSC graphics-fetch and multicolor bitmap-border images now join the passing set.

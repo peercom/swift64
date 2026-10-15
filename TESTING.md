@@ -218,7 +218,7 @@ This calibrates the default PAL 6569 reference behavior, not the alternate 8565 
 
 ## Public graphics-fetch and bitmap-border results
 
-The runner now selects 50 public programs by default. Seven additional unchanged programs probe PAL/NTSC graphics-fetch timing, Blackmail FLI, and bitmap open borders. The 43-program result above is a historical sprite-split checkpoint, not a claim that this expanded suite is green.
+The runner selects 50 public programs by default. Seven additional unchanged programs probe PAL/NTSC graphics-fetch timing, Blackmail FLI, and bitmap open borders. The 43-program result above is a historical sprite-split checkpoint. The table below records release 0.4.1; newer results follow in [bitmap output-latch proof](#bitmap-open-border-output-latch).
 
 Release 0.4.1 validation (2026-10-15): all 50 programs reach their own `$D7FF=$00` completion write, but four fail their visual comparison. There are 46 passing programs: four bus/collision probes and 42 exact visual fixtures, covering 3,836,160 matching color indices. All previously passing sprite-split cases remain exact. The seven additional results are:
 
@@ -234,7 +234,7 @@ Release 0.4.1 validation (2026-10-15): all 50 programs reach their own `$D7FF=$0
 
 `swift build --build-tests -j 2` passes. Without the public-fixture environment variable, the focused Debug slice executes 597 tests (596 passed, one opt-in skip) and Release integration executes 760 (748 passed, 12 opt-in skips), both with zero failures. The separate full public run takes 259.6 seconds and exits 1 with three ordinary assertions and the Blackmail expected failure. The full public suite is deliberately not reported as green.
 
-Blackmail has a scoped, strict expected failure for its unresolved FLI row alignment. Its exact mismatch count is asserted outside that waiver, so changed results require investigation; the failure is not counted as a visual pass. The three standard-bitmap border probes retain ordinary failing assertions. The unfiltered public-suite command exits nonzero while those cases remain broken. Multicolor bitmap and standard bitmap are tested separately; a pass for one does not certify the other.
+Blackmail has a scoped, strict expected failure for its unresolved FLI row alignment. Its exact mismatch count is asserted outside that waiver, so changed results require investigation; the failure is not counted as a visual pass. The three standard-bitmap border probes retain ordinary zero-difference assertions: they failed in 0.4.1 and now pass without waivers. Multicolor bitmap and standard bitmap are tested separately; a pass for one does not certify the other.
 
 The pinned [bitmap-border observations](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/border/readme.txt) describe held bitmap background colors outside the graphics window, including an effect used by Krestology/Crest. These failures are useful compatibility targets, not reasons to adjust the upstream reference images. Speculative CIA timer/phase experiments did not resolve Blackmail and were removed; this release changes neither CIA timing nor the machine's CIA/CPU clock order.
 
@@ -247,6 +247,18 @@ SWIFT64_PUBLIC_VIC_TEST_IDS=blackmail-fli-pal,graphics-fetch-pal,graphics-fetch-
 ```
 
 `SWIFT64_PUBLIC_VIC_TRACE_RASTER=1` includes `$D018` writes. Set `SWIFT64_PUBLIC_VIC_TRACE_AFTER_CYCLES` to a nonnegative cycle count after RUN to inspect steady-state behavior instead of setup; the trace remains capped at 100 register writes. Downloads, ROMs, reference PNGs, and optional PPM captures remain local and untracked. No SID test or playback run is part of this release validation.
+
+## Bitmap open-border output latch
+
+Release 0.4.2 (2026-10-15) fixes all three standard-bitmap visual failures above, with unchanged completion cycles, PC, raster positions, and upstream references. Each now has **0 / 102,272** differing pixels. The multicolor bitmap case also stays exact. The public set now has 49 passing programs, 45 exact images, and 4,142,976 matching color indices. Blackmail remains a strict expected failure at 5,558 pixels; an exit-zero runner result does not certify that fixture.
+
+The VIC now keeps the matrix byte used by its output color selector across rows and frame wrap. G-accesses still run under the vertical border, but they cannot replace that output latch while graphics loading is disabled. During idle graphics, zero matrix bits arrive only at the horizontally scrolled cell boundary. Outside graphics cells, standard bitmap therefore uses the retained low nibble instead of `$D021`; other graphics modes use their own background selector. The existing per-pixel trace packs the held matrix and mode alongside its colors, with no new framebuffer or per-line allocations. Constant graphics pixels are distinguished from uncovered output, so foreground and bitmap colors are not accidentally replaced by the idle source.
+
+That change alone removed 7,938 and 5,389 differences from the first two cases and reduced the third from 4,718 to two. The remaining pixels at logical X=328/332, raster 240 exposed a separate fetch/output timing error. The fixture's actual `DEC $D016` writes X-scroll 7 in CPU phase of cycle 53, after column 38's fetch but before its earliest shifter load. Raster capture now straddles the CPU phase, and the current fetched byte takes the new scroll value before loading; it is no longer painted seven dots too soon. Public CPU/bus/collision timing and all seventeen sprite-register split images remain unchanged. Neither CIA timing nor the CPU scheduler was adjusted.
+
+`VICGraphicsColorLatchTests` adds eight ROM-independent PAL/NTSC regressions covering held colors across both side borders, all eight X-scroll values, zero-matrix idle loads, vertical gating with continuing memory access, fetched rather than reread matrix data, all eight mode selectors, CPU-phase color and scroll writes, repeat rendering without state advancement, invisible rasterlines, frame wrap, and reset. Pixel checks use the shared 376-pixel border crop; NTSC's skipped logical X=392...395 positions still require separate physical-output mapping, and are not silently claimed as correct.
+
+Validation is sequential with two build jobs and one emulator. `swift build --build-tests -j 2` passes; the checked Debug slice executes 605 tests (604 passed, one opt-in skip). Full Release integration executes 768 tests (757 passed, 11 slow-drive skips, zero unexpected failures), with Blackmail's existing expected failure reported separately. The full public set retains identical completion observables; the three bitmap comparisons improve to exact without weakening an assertion. No SID suite or audio playback was run. These changes ship in 0.4.2 and do not complete broader game/demo or chip-revision certification.
 
 ## VIC graphics counters and raster effects
 

@@ -299,6 +299,8 @@ public final class VIC {
     var graphicsBufferBackgroundColors = [[UInt8]](repeating: [0, 0, 0, 0], count: 40)
     var graphicsBufferScreenBytes = [UInt8](repeating: 0, count: 40)
     var graphicsBufferColorData = [UInt8](repeating: 0, count: 40)
+    /// Matrix bits held by the graphics color selector, including between rows.
+    private(set) var graphicsOutputMatrix: UInt8 = 0
 
     /// Sprite advance-line flip-flops; D017 clear holds these set.
     var spriteYExpFF = [Bool](repeating: true, count: 8)
@@ -373,7 +375,7 @@ public final class VIC {
     var rasterTraceValid = [Bool](repeating: false, count: VIC.screenWidth)
     var rasterTraceDisplayOpen = [Bool](repeating: false, count: VIC.screenWidth)
     var rasterTraceGraphicsOutput = [Bool](repeating: false, count: VIC.screenWidth)
-    // Five four-bit colors share one trace write per pixel.
+    // Five colors, held matrix bits, and the idle-output mode share one trace word.
     private var rasterTraceColors = [UInt32](repeating: 0, count: VIC.screenWidth)
     var spriteTraceLine: UInt16?
     var spriteTraceHasSamples: Bool = false
@@ -508,6 +510,7 @@ public final class VIC {
         graphicsBufferBackgroundColors = [[UInt8]](repeating: [0, 0, 0, 0], count: 40)
         graphicsBufferScreenBytes = [UInt8](repeating: 0, count: 40)
         graphicsBufferColorData = [UInt8](repeating: 0, count: 40)
+        graphicsOutputMatrix = 0
         spriteYExpFF = [Bool](repeating: true, count: 8)
         spriteCrunchPendingMask = 0
         spriteMC = [Int](repeating: 0, count: 8)
@@ -612,6 +615,7 @@ public final class VIC {
 
     func endCycle() {
         cpuPhaseActive = false
+        captureRasterTrace(startX: beamX(atDot: 4), dotCount: 4)
         // Control/priority changes reach the sequencer before X-position
         // writes reach its comparator. The public spritesplit probes exercise
         // both boundaries at each of the eight sprite-X alignments.
@@ -818,13 +822,7 @@ public final class VIC {
         }
 
         let first = beamX(atDot: 0)
-        let second = beamX(atDot: 4)
-        if second == first + 4 {
-            captureRasterTrace(startX: first, dotCount: 8)
-        } else {
-            captureRasterTrace(startX: first, dotCount: 4)
-            captureRasterTrace(startX: second, dotCount: 4)
-        }
+        captureRasterTrace(startX: first, dotCount: 4)
         // Mature the two half-cycle collision stages before the CPU samples
         // the latches. New pixels are queued by their original half-cycle.
         advanceCollisionPipeline()
@@ -849,7 +847,10 @@ public final class VIC {
         guard startPixel < endPixel else { return }
 
         guard rasterLine >= UInt16(VIC.firstVisibleLine),
-              rasterLine <= UInt16(VIC.lastVisibleLine) else { return }
+              rasterLine <= UInt16(VIC.lastVisibleLine) else {
+            for pixel in startPixel..<endPixel { clockGraphicsColorLatch(at: pixel) }
+            return
+        }
         prepareRasterTraceForCurrentLine()
 
         let colors = UInt32(borderColor & 15) << 16
@@ -857,6 +858,8 @@ public final class VIC {
             | UInt32(backgroundColor[2] & 15) << 8
             | UInt32(backgroundColor[1] & 15) << 4
             | UInt32(backgroundColor[0] & 15)
+            | UInt32(controlReg1 & 0x60) << 24
+            | UInt32(controlReg2 & 0x10) << 24
 
         rasterTraceValid.withUnsafeMutableBufferPointer { valid in
             rasterTraceGraphicsOutput.withUnsafeMutableBufferPointer { graphics in
@@ -865,9 +868,10 @@ public final class VIC {
                         // The main border masks final output, not collision detection.
                         // DEN arms the vertical border; it is not a live pixel blank.
                         let graphicsOutput = !verticalBorderActive
+                        clockGraphicsColorLatch(at: pixel)
                         valid[pixel] = true
                         graphics[pixel] = graphicsOutput
-                        color[pixel] = colors
+                        color[pixel] = colors | UInt32(graphicsOutputMatrix) << 20
                         if !horizontalBorderActive { rasterTraceHasDisplayOpen = true }
                         if graphicsOutput { rasterTraceHasGraphicsOutput = true }
                     }
@@ -875,6 +879,18 @@ public final class VIC {
             }
         }
         rasterTraceHasSamples = true
+    }
+
+    private func clockGraphicsColorLatch(at pixel: Int) {
+        guard !verticalBorderActive, graphicsBufferLine == rasterLine,
+              pixel >= VIC.displayLeft, pixel < VIC.displayRight else { return }
+        let position = pixel - VIC.displayLeft
+        let column = position >> 3
+        guard graphicsFetchMask & (UInt64(1) << column) != 0,
+              position & 7 == Int(graphicsBufferControlReg2[column] & 7) else { return }
+        // A g-access precedes the shifter load. Horizontal scroll delays this
+        // color latch too; an idle fetch contributes zero matrix bits only here.
+        graphicsOutputMatrix = graphicsBufferScreenBytes[column]
     }
 
     private func clockSpritePixels(startX: Int, dotCount: Int, collisionStage: Int,
@@ -1418,7 +1434,8 @@ public final class VIC {
         graphicsLineScratch.withUnsafeMutableBufferPointer { $0.update(repeating: bgCol) }
         foregroundMaskScratch.withUnsafeMutableBufferPointer { $0.update(repeating: false) }
         if useRasterTrace {
-            backgroundColorSourceScratch.withUnsafeMutableBufferPointer { $0.update(repeating: -1) }
+            // -2: no graphics byte, -1: constant color, 0...3: D021...D024.
+            backgroundColorSourceScratch.withUnsafeMutableBufferPointer { $0.update(repeating: -2) }
         }
 
         let renderGraphics = useRasterTrace
@@ -1453,8 +1470,10 @@ public final class VIC {
                     let traceValid = useRasterTrace && rasterTraceValid[px]
                     let graphicsOutput = traceValid ? rasterTraceGraphicsOutput[px] : renderGraphics
 
-                    if graphicsOutput {
-                        let backgroundIndex = Int(backgroundColorSourceScratch[px])
+                    let backgroundIndex = Int(backgroundColorSourceScratch[px])
+                    if traceValid && (!graphicsOutput || backgroundIndex == -2) {
+                        line[px] = ColorPalette.rgba[Int(rasterTraceIdleColor(pixel: px))]
+                    } else if graphicsOutput {
                         if traceValid && backgroundIndex >= 0 {
                             line[px] = ColorPalette.rgba[Int(rasterTraceBackgroundColor(backgroundIndex, pixel: px) & 0x0F)]
                         } else {
@@ -1524,6 +1543,17 @@ public final class VIC {
     func rasterTraceBackgroundColor(_ index: Int, pixel: Int) -> UInt8 {
         let shift = (1...3).contains(index) ? index * 4 : 0
         return UInt8((rasterTraceColors[pixel] >> shift) & 15)
+    }
+
+    private func rasterTraceIdleColor(pixel: Int) -> UInt8 {
+        let state = rasterTraceColors[pixel]
+        let matrix = UInt8(truncatingIfNeeded: state >> 20)
+        switch (state >> 28) & 7 {
+        case 2: return matrix & 15
+        case 4: return rasterTraceBackgroundColor(Int(matrix >> 6), pixel: pixel)
+        case 5...7: return 0
+        default: return UInt8(state & 15)
+        }
     }
 
     func renderGraphicsLine(_ line: inout [UInt32], foregroundMask: inout [Bool], charRow: Int, pixelRow: Int,
@@ -1627,17 +1657,19 @@ public final class VIC {
             }
 
             if columnInvalidECMMode {
-                maskInvalidECMOutput(line: &line, xPos: xPos)
+                maskInvalidECMOutput(line: &line, xPos: xPos, markBackgroundPixel: markBackgroundPixel)
             }
         }
     }
 
-    func maskInvalidECMOutput(line: inout [UInt32], xPos: Int) {
+    func maskInvalidECMOutput(line: inout [UInt32], xPos: Int,
+                              markBackgroundPixel: ((Int, Int) -> Void)? = nil) {
         let black = ColorPalette.rgba[0]
         for bit in 0..<8 {
             let px = xPos + bit
             guard px >= 0 && px < VIC.screenWidth else { continue }
             line[px] = black
+            markBackgroundPixel?(px, -1)
         }
     }
 
@@ -1654,6 +1686,7 @@ public final class VIC {
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
                 foregroundMask[px] = true
+                markBackgroundPixel?(px, -1)
             } else {
                 line[px] = bgColor
                 markBackgroundPixel?(px, 0)
@@ -1691,7 +1724,8 @@ public final class VIC {
                 markBackgroundPixel?(px0, Int(bits))
                 markBackgroundPixel?(px1, Int(bits))
             default:
-                break
+                markBackgroundPixel?(px0, -1)
+                markBackgroundPixel?(px1, -1)
             }
         }
     }
@@ -1711,6 +1745,7 @@ public final class VIC {
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
                 foregroundMask[px] = true
+                markBackgroundPixel?(px, -1)
             } else {
                 line[px] = bgColor
                 markBackgroundPixel?(px, bgIndex)
@@ -1742,6 +1777,8 @@ public final class VIC {
                 if px0 >= 0 && px0 < VIC.screenWidth { line[px0] = color }
                 if px1 >= 0 && px1 < VIC.screenWidth { line[px1] = color }
                 if bits != 0 {
+                    markBackgroundPixel?(px0, -1)
+                    markBackgroundPixel?(px1, -1)
                     if bits >= 2 {
                         if px0 >= 0 && px0 < VIC.screenWidth { foregroundMask[px0] = true }
                         if px1 >= 0 && px1 < VIC.screenWidth { foregroundMask[px1] = true }
@@ -1760,6 +1797,7 @@ public final class VIC {
         for bit in 0..<8 {
             let px = xPos + bit
             guard px >= 0 && px < VIC.screenWidth else { continue }
+            markBackgroundPixel?(px, -1)
             if pixelData & (0x80 >> bit) != 0 {
                 line[px] = fgColor
                 foregroundMask[px] = true
@@ -2183,7 +2221,14 @@ public final class VIC {
             checkRasterInterrupt()
 
         case 0x15: spriteEnabled = value
-        case 0x16: controlReg2 = value
+        case 0x16:
+            controlReg2 = value
+            if cpuPhaseActive, (15..<55).contains(rasterCycle), graphicsBufferLine == rasterLine {
+                // Phi1 fetched this byte, but its first possible output dot is
+                // in phi2. XSCROLL selects that load point after the CPU write.
+                let column = rasterCycle - 15
+                graphicsBufferControlReg2[column] = (graphicsBufferControlReg2[column] & ~7) | (value & 7)
+            }
         case 0x17:
             spriteExpandY = value
             applySpriteYExpansionWrite(newValue: value)

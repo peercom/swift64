@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 - 2026-10-15
+
+- Fixed standard-bitmap open-border colors by retaining the graphics output matrix byte across cells, rasterlines, and frame wrap, with mode-aware idle colors and vertical-border gating.
+- Corrected same-cycle CPU X-scroll changes between graphics fetch and output, including the last two differing pixels in the public bitmap Y-scroll probe.
+- Added eight PAL/NTSC color-latch regressions. The bounded public VIC set now passes 49 of 50 programs, including 45 exact visual comparisons; all three bitmap-border failures from 0.4.1 are fixed without changing reference images or tolerances.
+- Blackmail FLI row alignment remains a documented expected failure. Broader game/demo and chip-revision compatibility is still in progress. No SID or CIA timing changes are included.
+
 ## 0.4.1 - 2026-10-15
 
 - Refined within-cycle sprite X, priority, expansion, multicolor, and color-register updates. Decoded pixels survive mode switches, final multicolor pairs complete, and hidden sprites cannot recolor the visible priority winner.
