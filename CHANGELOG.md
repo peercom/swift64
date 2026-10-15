@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 - 2026-10-15
+
+- Refined VIC-II graphics counters, sprite DMA/shifters, border latches, collision timing, and PAL/NTSC bus sampling. Open borders survive frame wrap, and expanded sprites retain their final pixels after DMA stops.
+- Connected CIA1 keyboard/joystick PB4 to VIC light-pen synchronization; corrected CPU IRQ polling and RDY-held reads for raster routines and late bad-line startup colors.
+- Added opt-in, sequential public VIC conformance checks: 26 programs pass, with exact color-index matches for 22 FLD/FLI, open-border, and sprite-expansion reference images. Full game/demo and chip-revision compatibility remains work in progress.
+- Improved previously developed SID mixer headroom, envelope timing, filter integration, audio-buffer recovery, and frame pacing. Bounded known-tone/music validation and optional local diagnostics are documented in TESTING.md; preservation-grade analog SID calibration is not claimed.
+- Updated compatibility documentation and retained memory-conscious build/test defaults. ROMs, commercial media, reference images, and generated audio captures remain outside the repository and app bundle.
+
 ## Recent emulation work
 
 - The macOS app now has a display-first main window, optional right inspector, optional compact status bar, and fullscreen mode that hides toolbar/status/inspector chrome

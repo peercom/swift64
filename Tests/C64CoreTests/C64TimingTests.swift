@@ -2,34 +2,63 @@ import XCTest
 @testable import C64Core
 
 final class C64TimingTests: XCTestCase {
+    func testLoadProgressMonitorSeedsAfterIdleAndStillDetectsProgress() {
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .standard1541
+        c64.drive1541.enabled = true
+        c64.driveClockRatio = 0
+        c64.cpu.powerOn()
+        c64.cpu.pc = 0xF500
+        c64.vic.rasterLine = 100
+        c64.vic.rasterCycle = 15
+        c64.vic.badLine = true
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 0)
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 1)
+        c64.trueDriveEmulationMode = .off
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 0)
+        c64.trueDriveEmulationMode = .standard1541
+        c64.drive1541.enabled = true
+        c64.driveClockRatio = 0
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 0)
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 1)
+        c64.memory.ram[0x90] ^= 1
+        c64.tickOneCycle()
+        XCTAssertEqual(c64.drive1541.noProgressCycleCount, 0)
+    }
+
     func testBadLineStallsCPUWhileVICTicks() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 0
         c64.vic.badLineDENLatched = true
 
-        for _ in 0..<15 {
+        for _ in 0..<14 {
             c64.tickOneCycle()
         }
 
         XCTAssertTrue(c64.vic.badLine)
-        XCTAssertEqual(c64.vic.rasterCycle, 15)
+        XCTAssertEqual(c64.vic.rasterCycle, 14)
         let cyclesBeforeStall = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 16)
+        XCTAssertEqual(c64.vic.rasterCycle, 15)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeStall + 1)
     }
 
-    func testBadLineBAWarningDoesNotStallCPUBeforeAEC() {
+    func testBadLineBAWarningKeepsClockRunningBeforeAEC() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 0
         c64.vic.badLineDENLatched = true
 
-        for _ in 0..<12 {
+        for _ in 0..<11 {
             c64.tickOneCycle()
         }
 
@@ -41,20 +70,20 @@ final class C64TimingTests: XCTestCase {
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 13)
+        XCTAssertEqual(c64.vic.rasterCycle, 12)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesAtBAWarning + 1)
 
         c64.tickOneCycle()
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 15)
+        XCTAssertEqual(c64.vic.rasterCycle, 14)
         XCTAssertTrue(c64.vic.aecLineLow)
         XCTAssertEqual(c64.vic.busOwner, .vicBadLine)
         let cyclesBeforeAECStall = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 16)
+        XCTAssertEqual(c64.vic.rasterCycle, 15)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeAECStall + 1)
     }
@@ -65,7 +94,7 @@ final class C64TimingTests: XCTestCase {
         c64.vic.rasterCycle = 0
         c64.vic.badLineDENLatched = true
 
-        for _ in 0..<15 {
+        for _ in 0..<14 {
             c64.tickOneCycle()
         }
 
@@ -74,13 +103,13 @@ final class C64TimingTests: XCTestCase {
             c64.tickOneCycle()
         }
 
-        XCTAssertEqual(c64.vic.rasterCycle, 55)
+        XCTAssertEqual(c64.vic.rasterCycle, 54)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeStall + 40)
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 56)
+        XCTAssertEqual(c64.vic.rasterCycle, 55)
         XCTAssertTrue(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeStall + 41)
     }
@@ -88,28 +117,31 @@ final class C64TimingTests: XCTestCase {
     func testActiveSpriteDMASlotStallsCPU() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 58
+        c64.vic.rasterCycle = 57
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 12
+        c64.vic.spriteDMACheckMask = 1
+        c64.vic.spriteMC[0] = 0
+        c64.vic.spriteMCBase[0] = 0
 
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
         let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 60)
+        XCTAssertEqual(c64.vic.rasterCycle, 59)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 61)
+        XCTAssertEqual(c64.vic.rasterCycle, 60)
         XCTAssertTrue(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
     }
@@ -117,7 +149,7 @@ final class C64TimingTests: XCTestCase {
     func testLateSpriteEnableAfterDMACheckDoesNotStallCPU() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x00
         c64.vic.spriteY[0] = 12
 
@@ -126,14 +158,14 @@ final class C64TimingTests: XCTestCase {
         c64.vic.spriteEnabled = 0x01
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .cpu)
         XCTAssertFalse(c64.vic.aecLineLow)
         let cyclesBeforeLateSlot = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertTrue(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeLateSlot + 1)
     }
@@ -141,21 +173,21 @@ final class C64TimingTests: XCTestCase {
     func testSpriteEnableBeforeSecondDMACheckWarnsAndThenStallsCPU() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x00
         c64.vic.spriteY[0] = 12
 
         c64.tickOneCycle()
         c64.vic.spriteEnabled = 0x01
 
-        XCTAssertEqual(c64.vic.rasterCycle, 56)
+        XCTAssertEqual(c64.vic.rasterCycle, 55)
         XCTAssertEqual(c64.vic.busPhase, .cpu)
         XCTAssertFalse(c64.vic.baLineLow)
 
         let cyclesBeforeSecondCheck = c64.cpu.totalCycles
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 57)
+        XCTAssertEqual(c64.vic.rasterCycle, 56)
         XCTAssertEqual(c64.vic.busPhase, .spriteBAWarning(sprite: 0))
         XCTAssertTrue(c64.vic.baLineLow)
         XCTAssertFalse(c64.vic.aecLineLow)
@@ -163,14 +195,14 @@ final class C64TimingTests: XCTestCase {
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(c64.vic.aecLineLow)
         let cyclesBeforeDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 1)
     }
@@ -178,21 +210,21 @@ final class C64TimingTests: XCTestCase {
     func testSpriteYMatchBeforeSecondDMACheckWarnsAndThenStallsCPU() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 11
 
         c64.tickOneCycle()
         c64.vic.spriteY[0] = 12
 
-        XCTAssertEqual(c64.vic.rasterCycle, 56)
+        XCTAssertEqual(c64.vic.rasterCycle, 55)
         XCTAssertEqual(c64.vic.busPhase, .cpu)
         XCTAssertFalse(c64.vic.baLineLow)
 
         let cyclesBeforeSecondCheck = c64.cpu.totalCycles
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 57)
+        XCTAssertEqual(c64.vic.rasterCycle, 56)
         XCTAssertEqual(c64.vic.busPhase, .spriteBAWarning(sprite: 0))
         XCTAssertTrue(c64.vic.baLineLow)
         XCTAssertFalse(c64.vic.aecLineLow)
@@ -200,14 +232,14 @@ final class C64TimingTests: XCTestCase {
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(c64.vic.aecLineLow)
         let cyclesBeforeDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 1)
     }
@@ -215,7 +247,7 @@ final class C64TimingTests: XCTestCase {
     func testLatchedSpriteDMAStallsCPUEvenIfEnableClearsBeforeFetch() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 12
 
@@ -224,14 +256,14 @@ final class C64TimingTests: XCTestCase {
         c64.vic.spriteEnabled = 0x00
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(c64.vic.aecLineLow)
         let cyclesBeforeLatchedSlot = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeLatchedSlot + 1)
     }
@@ -239,11 +271,11 @@ final class C64TimingTests: XCTestCase {
     func testSpriteDMAContinuationStallsCPUOnSecondSpriteRow() {
         let c64 = C64()
         c64.vic.rasterLine = 7
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 7
 
-        while !(c64.vic.rasterLine == 8 && c64.vic.rasterCycle == 58) {
+        while !(c64.vic.rasterLine == 8 && c64.vic.rasterCycle == 57) {
             c64.tickOneCycle()
         }
 
@@ -253,107 +285,83 @@ final class C64TimingTests: XCTestCase {
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSecondRowDMA + 1)
     }
 
-    func testSpriteTwoDMAStallsCPUAcrossRasterlineWrap() {
+    func testPALSpriteTwoDMAStallsLastTwoCycles() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 62
+        c64.vic.rasterCycle = 61
         c64.vic.spriteEnabled = 0x04
         c64.vic.spriteY[2] = 12
-
+        c64.vic.spriteDMACheckMask = 4
+        c64.vic.spriteMC[2] = 0
+        c64.vic.spriteMCBase[2] = 0
+        let cyclesBeforeDMA = c64.cpu.totalCycles
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
-        XCTAssertTrue(c64.vic.aecLineLow)
-        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
-
         c64.tickOneCycle()
-
+        XCTAssertEqual(c64.vic.rasterLine, 12)
+        XCTAssertEqual(c64.vic.rasterCycle, 62)
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        c64.tickOneCycle()
         XCTAssertEqual(c64.vic.rasterLine, 13)
         XCTAssertEqual(c64.vic.rasterCycle, 0)
-        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
         XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
-
+        XCTAssertEqual(c64.vic.busPhase, .cpu)
         c64.tickOneCycle()
-
-        XCTAssertEqual(c64.vic.rasterCycle, 1)
-        XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
-
-        c64.tickOneCycle()
-
-        XCTAssertEqual(c64.vic.rasterCycle, 2)
         XCTAssertTrue(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 3)
     }
 
-    func testSpriteTwoDMAStallsCPUAcrossRasterlineWrapAfterFinalSpriteRow() {
+    func testPALSpriteTwoDMAStallsLastTwoCyclesOnFinalSpriteRow() {
         let c64 = C64()
         c64.vic.rasterLine = 32
-        c64.vic.rasterCycle = 62
+        c64.vic.rasterCycle = 61
         c64.vic.spriteEnabled = 0x04
         c64.vic.spriteY[2] = 12
-
-        XCTAssertEqual(c64.vic.spriteLineRow(for: 2), 20)
+        c64.vic.spriteDMACheckMask = 4
+        c64.vic.spriteMC[2] = 60
+        c64.vic.spriteMCBase[2] = 60
+        let cyclesBeforeDMA = c64.cpu.totalCycles
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
-        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
-
         c64.tickOneCycle()
-
+        XCTAssertEqual(c64.vic.rasterLine, 32)
+        XCTAssertEqual(c64.vic.rasterCycle, 62)
+        XCTAssertFalse(c64.cpu.rdyLine)
+        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
+        c64.tickOneCycle()
         XCTAssertEqual(c64.vic.rasterLine, 33)
         XCTAssertEqual(c64.vic.rasterCycle, 0)
-        XCTAssertNil(c64.vic.spriteLineRow(for: 2))
-        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 2))
         XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
-
+        XCTAssertEqual(c64.vic.busPhase, .cpu)
         c64.tickOneCycle()
-
-        XCTAssertEqual(c64.vic.rasterCycle, 1)
-        XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
-
-        c64.tickOneCycle()
-
-        XCTAssertEqual(c64.vic.rasterCycle, 2)
         XCTAssertTrue(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 3)
     }
 
-    func testNTSCSpriteThreeDMAStallsCPUAcrossRasterlineWrap() {
+    func testNTSCSpriteThreeBAAndDMAStallCPUAcrossRasterlineBoundary() {
         let c64 = C64()
         c64.machineProfile = .ntscC64
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 64
-        c64.vic.spriteEnabled = 0x08
-        c64.vic.spriteY[3] = 12
-
-        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 3))
-        XCTAssertTrue(c64.vic.aecLineLow)
-        let cyclesBeforeSpriteDMA = c64.cpu.totalCycles
-
-        c64.tickOneCycle()
-
+        c64.vic.rasterCycle = 61
+        c64.vic.spriteDMACheckMask = 8
+        c64.cpu.pc = 0x0600
+        c64.memory.ram[0x0600] = 0xEA
+        let before = c64.cpu.totalCycles
+        for _ in 0..<5 {
+            c64.tickOneCycle()
+            XCTAssertFalse(c64.cpu.rdyLine)
+            XCTAssertEqual(c64.cpu.pc, 0x0600)
+        }
         XCTAssertEqual(c64.vic.rasterLine, 13)
-        XCTAssertEqual(c64.vic.rasterCycle, 0)
-        XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 3))
-        XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 1)
-
-        c64.tickOneCycle()
-
         XCTAssertEqual(c64.vic.rasterCycle, 1)
-        XCTAssertFalse(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 2)
-
+        XCTAssertEqual(c64.cpu.totalCycles, before + 5)
         c64.tickOneCycle()
-
-        XCTAssertEqual(c64.vic.rasterCycle, 2)
         XCTAssertTrue(c64.cpu.rdyLine)
-        XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeSpriteDMA + 3)
+        XCTAssertEqual(c64.cpu.pc, 0x0601)
     }
 
     func testVICStealAllowsCPUWriteCycleToCompleteThroughRDY() {
@@ -376,6 +384,9 @@ final class C64TimingTests: XCTestCase {
         c64.vic.rasterCycle = 58
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 12
+        c64.vic.spriteDMACheckMask = 1
+        c64.vic.spriteMC[0] = 0
+        c64.vic.spriteMCBase[0] = 0
 
         XCTAssertTrue(c64.vic.aecLineLow)
         c64.tickOneCycle()
@@ -385,7 +396,7 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.cpu.cycle, 0)
     }
 
-    func testC64TicksDecayMemoryMapOpenBus() {
+    func testRunningVICKeepsDrivingBusWhenCPUIsJammed() {
         let c64 = C64()
         c64.memory.cpuDataBusDecayDelay = 2
         c64.cpu.pc = 0x0600
@@ -401,38 +412,43 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.memory.read(0xC000), 0x61)
         XCTAssertEqual(c64.memory.read(0xDE00), 0x61)
 
+        c64.memory.ram[0x3FFE] = 0xA2
+        c64.memory.ram[0x3FFD] = 0xB3
         c64.tickOneCycle()
+        XCTAssertEqual(c64.memory.read(0xDE00), 0xA2)
         c64.tickOneCycle()
-        XCTAssertEqual(c64.memory.read(0xDE00), 0xFF)
+        XCTAssertEqual(c64.memory.read(0xDE00), 0xB3)
     }
 
-    func testSpriteBAWarningDoesNotStallCPUBeforeDMA() {
+    func testSpriteBAWarningKeepsClockRunningBeforeDMA() {
         let c64 = C64()
         c64.vic.rasterLine = 12
-        c64.vic.rasterCycle = 55
+        c64.vic.rasterCycle = 54
         c64.vic.spriteEnabled = 0x01
         c64.vic.spriteY[0] = 12
 
-        XCTAssertEqual(c64.vic.busPhase, .spriteBAWarning(sprite: 0))
-        XCTAssertTrue(c64.vic.baLineLow)
+        XCTAssertEqual(c64.vic.busPhase, .cpu)
+        XCTAssertFalse(c64.vic.baLineLow)
         XCTAssertFalse(c64.vic.aecLineLow)
         let cyclesAtBAWarning = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 56)
+        XCTAssertEqual(c64.vic.rasterCycle, 55)
+        XCTAssertEqual(c64.vic.busPhase, .spriteBAWarning(sprite: 0))
+        XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesAtBAWarning + 1)
 
         c64.tickOneCycle()
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
         let cyclesBeforeDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.rasterCycle, 59)
+        XCTAssertEqual(c64.vic.rasterCycle, 58)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 1)
     }
@@ -550,63 +566,75 @@ final class C64TimingTests: XCTestCase {
 
     func testYScrollWriteStartingBadLineLatchesUnstableStartupDataBeforeMatrixFetches() {
         let c64 = C64()
+        c64.cpu.pc = 0x0600
+        c64.memory.ram[0x0600] = 0xEA
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 20
         c64.vic.badLineDENLatched = true
         c64.vic.writeRegister(0x11, value: 0x10)
-        c64.memory.ram[0x0405] = 0x41
-        c64.memory.ram[0x0408] = 0x42
+        c64.memory.ram[0x0400] = 0x41
+        c64.memory.ram[0x0403] = 0x42
 
+        c64.vic.beginCycle()
         c64.vic.writeRegister(0x11, value: 0x13)
-        c64.tickOneCycle()
+        c64.vic.endCycle()
 
+        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0)
+        c64.tickOneCycle()
         XCTAssertTrue(c64.vic.badLine)
-        XCTAssertEqual(c64.vic.badLineFetchMask, UInt64(1) << 5)
+        XCTAssertEqual(c64.vic.badLineFetchMask, UInt64(1) << 0)
         XCTAssertFalse(c64.vic.displayLineBufferValid)
         XCTAssertEqual(c64.vic.displayLineBufferBase, 0)
-        XCTAssertEqual(c64.vic.lineBuffer[5], 0xFF)
-        XCTAssertEqual(c64.vic.colorBuffer[5], 0x0F)
+        XCTAssertEqual(c64.vic.lineBuffer[0], 0xFF)
+        XCTAssertEqual(c64.vic.colorBuffer[0], 0x0A)
 
         c64.tickOneCycle()
         c64.tickOneCycle()
         c64.tickOneCycle()
 
-        XCTAssertEqual(c64.vic.badLineFetchMask, (UInt64(1) << 5) | (UInt64(1) << 6) | (UInt64(1) << 7) | (UInt64(1) << 8))
-        XCTAssertEqual(c64.vic.lineBuffer[6], 0xFF)
-        XCTAssertEqual(c64.vic.lineBuffer[7], 0xFF)
-        XCTAssertEqual(c64.vic.lineBuffer[8], 0x42)
+        XCTAssertEqual(c64.vic.badLineFetchMask, (UInt64(1) << 0) | (UInt64(1) << 1) | (UInt64(1) << 2) | (UInt64(1) << 3))
+        XCTAssertEqual(c64.vic.lineBuffer[1], 0xFF)
+        XCTAssertEqual(c64.vic.lineBuffer[2], 0xFF)
+        XCTAssertEqual(c64.vic.lineBuffer[3], 0x42)
     }
 
-    func testYScrollWriteCanStartBadLineAtLastFetchCycleWithUnstableStartupData() {
+    func testYScrollCPUWriteAtLastFetchCycleCannotRetroactivelyStartDMA() {
+        let c64 = C64()
+        c64.vic.rasterLine = UInt16(VIC.displayTop)
+        c64.vic.rasterCycle = 53
+        c64.vic.badLineDENLatched = true
+        c64.vic.writeRegister(0x11, value: 0x10)
+        c64.memory.ram[0x0427] = 0x5A
+
+        c64.vic.beginCycle()
+        c64.vic.writeRegister(0x11, value: 0x13)
+        c64.vic.endCycle()
+
+        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertEqual(c64.vic.rasterCycle, 54)
+        c64.tickOneCycle()
+        XCTAssertTrue(c64.vic.badLine)
+        XCTAssertTrue(c64.vic.displayActive)
+        XCTAssertEqual(c64.vic.badLineFetchMask, 0)
+        XCTAssertEqual(c64.vic.lineBuffer[0], 0)
+        XCTAssertTrue(c64.vic.lastHighPhaseMemoryReads.isEmpty)
+    }
+
+    func testYScrollWriteAfterLastFetchStartsDisplayWithoutMatrixDMA() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 54
         c64.vic.badLineDENLatched = true
         c64.vic.writeRegister(0x11, value: 0x10)
-        c64.memory.ram[0x0427] = 0x5A
 
         c64.vic.writeRegister(0x11, value: 0x13)
         c64.tickOneCycle()
 
         XCTAssertTrue(c64.vic.badLine)
+        XCTAssertTrue(c64.vic.displayActive)
+        XCTAssertFalse(c64.vic.baLineLow)
         XCTAssertEqual(c64.vic.rasterCycle, 55)
-        XCTAssertEqual(c64.vic.badLineFetchMask, UInt64(1) << 39)
-        XCTAssertEqual(c64.vic.lineBuffer[39], 0xFF)
-        XCTAssertEqual(c64.vic.colorBuffer[39], 0x0F)
-    }
-
-    func testYScrollWriteCannotStartBadLineAfterLastFetchCycle() {
-        let c64 = C64()
-        c64.vic.rasterLine = UInt16(VIC.displayTop)
-        c64.vic.rasterCycle = 55
-        c64.vic.badLineDENLatched = true
-        c64.vic.writeRegister(0x11, value: 0x10)
-
-        c64.vic.writeRegister(0x11, value: 0x13)
-        c64.tickOneCycle()
-
-        XCTAssertFalse(c64.vic.badLine)
-        XCTAssertEqual(c64.vic.rasterCycle, 56)
         XCTAssertEqual(c64.vic.badLineFetchMask, 0)
     }
 
@@ -632,7 +660,7 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.vic.lineBuffer[1], 0x42)
     }
 
-    func testYScrollWriteCanSuppressBadLineBusStealDuringFetchWindow() {
+    func testYScrollWriteBeforeFirstMatrixFetchCanCancelBusSteal() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 20
@@ -650,7 +678,7 @@ final class C64TimingTests: XCTestCase {
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBefore + 1)
     }
 
-    func testYScrollWriteAfterFetchWindowCannotStartBadLine() {
+    func testYScrollWriteAfterFetchWindowDoesNotStallCPU() {
         let c64 = C64()
         c64.vic.rasterLine = UInt16(VIC.displayTop)
         c64.vic.rasterCycle = 56
@@ -663,7 +691,8 @@ final class C64TimingTests: XCTestCase {
         c64.vic.writeRegister(0x11, value: 0x13)
         c64.tickOneCycle()
 
-        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertTrue(c64.vic.badLine)
+        XCTAssertTrue(c64.vic.displayActive)
         XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertTrue(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBefore + 1)
@@ -684,7 +713,7 @@ final class C64TimingTests: XCTestCase {
 
         c64.vic.writeRegister(0x11, value: 0x13)
 
-        XCTAssertFalse(c64.vic.badLine)
+        XCTAssertTrue(c64.vic.badLine)
         XCTAssertEqual(c64.vic.rowCounter, 5)
         XCTAssertEqual(c64.vic.displayLineBufferBase, 80)
         XCTAssertEqual(c64.vic.badLineFetchMask, 0x03)

@@ -4,7 +4,7 @@ A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, ru
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
 
-Latest packaged macOS release: [Swift64 0.3.0](https://github.com/peercom/swift64/releases/tag/v0.3.0). ROMs and commercial media are not included.
+Latest packaged macOS release: [Swift64 0.4.0](https://github.com/peercom/swift64/releases/tag/v0.4.0). ROMs and commercial media are not included.
 
 ## Status
 
@@ -24,7 +24,7 @@ Latest packaged macOS release: [Swift64 0.3.0](https://github.com/peercom/swift6
 | Component | Status |
 |-----------|--------|
 | 6502 CPU | Phase 2 complete: cycle-stepped, 222 opcodes including undocumented, RDY/SO/interrupt edge coverage, decimal edge coverage, and opt-in public conformance runners |
-| VIC-II | Rasterline rendering, sprites, bad-line and sprite BA/AEC phases, low-phase VIC access decoding, two-cycle sprite DMA slots, CPU stalls, raster/collision IRQs |
+| VIC-II | PAL/NTSC beam sampling, clocked graphics counters, sprite DMA/shifters, shared-bus fetches, bad-line and sprite BA/AEC phases, raster/collision IRQs, software light-pen synchronization, and rasterline framebuffer composition; public PAL/NTSC bus and PAL collision probes plus 22 exact visual fixtures for PAL FLD/line-crunch/FLI, PAL open borders, and PAL/NTSC sprite expansion pass, while broader external demo validation remains incomplete |
 | SID | 3 voices with 6581/8580 model selection, fast/compatibility modes, ADSR delay/exponential behavior, sync/ring/noise, model-aware combined waveform approximations, OSC3/ENV3/POT readback, data-bus latch behavior, audio signatures, and a bounded routed filter/output-stage foundation |
 | CIA 1 & 2 | Timers, keyboard matrix, joystick, edge-sensitive IRQ/NMI |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |

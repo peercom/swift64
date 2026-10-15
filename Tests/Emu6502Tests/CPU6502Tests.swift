@@ -461,6 +461,7 @@ final class CPU6502Tests: XCTestCase {
         cpu.setFlag(Flags.interrupt, false)
         cpu.irqLine = true
 
+        runInstructions(cpu, count: 1)  // NOP polls the asserted IRQ.
         runInstructions(cpu, count: 1)
 
         XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, 0)
@@ -567,6 +568,7 @@ final class CPU6502Tests: XCTestCase {
         cpu.setFlag(Flags.interrupt, false)
         cpu.irqLine = true
 
+        runInstructions(cpu, count: 1)  // NOP polls the asserted IRQ.
         for _ in 0..<5 { cpu.tick() }  // IRQ start through pushed status.
         XCTAssertEqual(cpu.cycle, 5)
 
@@ -593,6 +595,7 @@ final class CPU6502Tests: XCTestCase {
         cpu.setFlag(Flags.interrupt, false)
         cpu.irqLine = true
 
+        runInstructions(cpu, count: 1)  // NOP polls the asserted IRQ.
         for _ in 0..<5 { cpu.tick() }  // IRQ start through pushed status.
         cpu.setNMILine(high: true)
         cpu.tick()  // vector low, hijacked by NMI
@@ -757,10 +760,10 @@ final class CPU6502Tests: XCTestCase {
         bus.memory[0x0702] = 0x40  // RTI
         cpu.setFlag(Flags.interrupt, false)
 
+        cpu.irqLine = true  // Arrives in SEI's opcode-fetch polling window.
         runInstructions(cpu, count: 1)  // SEI
         XCTAssertTrue(cpu.getFlag(Flags.interrupt))
 
-        cpu.irqLine = true
         runInstructions(cpu, count: 2)  // IRQ sequence, then handler LDX
 
         XCTAssertEqual(cpu.a, 0x00)

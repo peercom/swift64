@@ -7,8 +7,8 @@ settings:
   base:
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: 2
-    MARKETING_VERSION: 0.2.0
+    CURRENT_PROJECT_VERSION: 4
+    MARKETING_VERSION: 0.4.0
     SWIFT_VERSION: 5.9
 targets:
   Emu6502:
@@ -16,6 +16,10 @@ targets:
     platform: macOS
     sources:
       - path: Sources/Emu6502
+    settings:
+      configs:
+        Release:
+          SWIFT_ENFORCE_EXCLUSIVE_ACCESS: compile-time
   C64Core:
     type: library.static
     platform: macOS
@@ -23,6 +27,10 @@ targets:
       - path: Sources/C64Core
     dependencies:
       - target: Emu6502
+    settings:
+      configs:
+        Release:
+          SWIFT_ENFORCE_EXCLUSIVE_ACCESS: compile-time
   Swift64:
     type: application
     platform: macOS

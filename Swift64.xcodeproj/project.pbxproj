@@ -16,13 +16,17 @@
 		25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */; };
 		265046B932FB1B4566FBAC25 /* VIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118A9E70995FB663B124F661 /* VIC.swift */; };
 		26A69A079EBA706CEB051566 /* C64Trace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 979027D7F59AB7A5559A257A /* C64Trace.swift */; };
+		2C9EC3AC9377AA1438FEB365 /* AudioPlaybackValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C85B84EEF594DCC763E080 /* AudioPlaybackValidation.swift */; };
 		2FA754BF02D45F6B5430ADB3 /* Joystick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7FC9314BC445E26A33A4C2 /* Joystick.swift */; };
 		31A83EA49D0E0C56CC9C40F9 /* DiskImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C9714128738A08B2767150 /* DiskImage.swift */; };
 		326E85E04717EA1ABA30CA35 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F02EA636B5026B5622417D /* MetalRenderer.swift */; };
 		3505A4CD61FBCA8B19D71215 /* GCRDisk.swift in Sources */ = {isa = PBXBuildFile; fileRef = E872D132D76715546D258507 /* GCRDisk.swift */; };
 		3888A62B48755A2A868CD3B0 /* VIA6522.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */; };
+		40C25266B68D9B7AE518FA99 /* AudioFramePacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6694B9ABFBCE58EFBE3A15 /* AudioFramePacer.swift */; };
 		4D78973A36171B1668208C34 /* G64Parser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A427BE176A05A2316D09A2F /* G64Parser.swift */; };
+		575F42D776D835E842561E60 /* SIDSoundCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC257D299BA0CFF4392C222 /* SIDSoundCheck.swift */; };
 		5A0F18B62641B9CA4DFF2BFE /* Drive1541.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C2C70F5179425125360113 /* Drive1541.swift */; };
+		5BD22DED10F918C5F17911AE /* SIDAudioOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D30AB40077A95931A797FB0 /* SIDAudioOutput.swift */; };
 		629FAE2EF13B430DDCDB30AD /* Keyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DE024727035BA1DC20CE24 /* Keyboard.swift */; };
 		62D96E6F7720E06AFBAF547B /* C64Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4769B97731BB5103DAF2CF61 /* C64Preferences.swift */; };
 		63A1943C769CD9CC6DB30CD0 /* Bus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BC4533014D9BB87EF27F4D3 /* Bus.swift */; };
@@ -98,7 +102,9 @@
 		76C9714128738A08B2767150 /* DiskImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskImage.swift; sourceTree = "<group>"; };
 		7C7FC9314BC445E26A33A4C2 /* Joystick.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Joystick.swift; sourceTree = "<group>"; };
 		7EA8A4D190AA8B2D7F886CFB /* IECBus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IECBus.swift; sourceTree = "<group>"; };
+		8BC257D299BA0CFF4392C222 /* SIDSoundCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIDSoundCheck.swift; sourceTree = "<group>"; };
 		8C5238177200FD6BB810A221 /* PRGLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRGLoader.swift; sourceTree = "<group>"; };
+		8D30AB40077A95931A797FB0 /* SIDAudioOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIDAudioOutput.swift; sourceTree = "<group>"; };
 		93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIDRegisterTrace.swift; sourceTree = "<group>"; };
 		979027D7F59AB7A5559A257A /* C64Trace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Trace.swift; sourceTree = "<group>"; };
 		A1F02EA636B5026B5622417D /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
@@ -108,9 +114,11 @@
 		B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VIA6522.swift; sourceTree = "<group>"; };
 		B82D4B7A984C0295BAC44565 /* CIA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CIA.swift; sourceTree = "<group>"; };
 		B9DE024727035BA1DC20CE24 /* Keyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keyboard.swift; sourceTree = "<group>"; };
+		C5C85B84EEF594DCC763E080 /* AudioPlaybackValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlaybackValidation.swift; sourceTree = "<group>"; };
 		D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
 		D80192F6E6D4256FB1246016 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskDrive.swift; sourceTree = "<group>"; };
+		DD6694B9ABFBCE58EFBE3A15 /* AudioFramePacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFramePacer.swift; sourceTree = "<group>"; };
 		DE2DF1EFA74DD2855CA6DD0E /* Types.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Types.swift; sourceTree = "<group>"; };
 		E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cartridge.swift; sourceTree = "<group>"; };
 		E872D132D76715546D258507 /* GCRDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GCRDisk.swift; sourceTree = "<group>"; };
@@ -171,6 +179,7 @@
 		C0D872D579C919EBADF015B6 /* C64Core */ = {
 			isa = PBXGroup;
 			children = (
+				DD6694B9ABFBCE58EFBE3A15 /* AudioFramePacer.swift */,
 				2D5E8A112118514B27CCE218 /* C64.swift */,
 				979027D7F59AB7A5559A257A /* C64Trace.swift */,
 				E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */,
@@ -191,7 +200,9 @@
 				0544971F445D40AAACADAB98 /* MemoryMap.swift */,
 				8C5238177200FD6BB810A221 /* PRGLoader.swift */,
 				06CA3D09FA940CA84F595C9C /* SID.swift */,
+				8D30AB40077A95931A797FB0 /* SIDAudioOutput.swift */,
 				93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */,
+				8BC257D299BA0CFF4392C222 /* SIDSoundCheck.swift */,
 				05218A2819F982209E94FD95 /* TapeUnit.swift */,
 				B153E732FCAE2D7DDC2AB2E4 /* VIA6522.swift */,
 				118A9E70995FB663B124F661 /* VIC.swift */,
@@ -215,6 +226,7 @@
 			isa = PBXGroup;
 			children = (
 				AD753AC2B0E696D0CAB1702B /* Assets.xcassets */,
+				C5C85B84EEF594DCC763E080 /* AudioPlaybackValidation.swift */,
 				54132BA620E1EB972F64D612 /* C64App.entitlements */,
 				300DE71EBF779617B43AA9E1 /* C64App.swift */,
 				4769B97731BB5103DAF2CF61 /* C64Preferences.swift */,
@@ -390,6 +402,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2C9EC3AC9377AA1438FEB365 /* AudioPlaybackValidation.swift in Sources */,
 				A88768B30747340D7DBD1486 /* C64App.swift in Sources */,
 				62D96E6F7720E06AFBAF547B /* C64Preferences.swift in Sources */,
 				CD69B15FA2CD5D3256B51A21 /* ContentView.swift in Sources */,
@@ -414,6 +427,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				40C25266B68D9B7AE518FA99 /* AudioFramePacer.swift in Sources */,
 				80BC47C92ED182334E2EDD78 /* C64.swift in Sources */,
 				26A69A079EBA706CEB051566 /* C64Trace.swift in Sources */,
 				061B603B187E83F098A45017 /* CIA.swift in Sources */,
@@ -434,7 +448,9 @@
 				FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */,
 				FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */,
 				12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */,
+				5BD22DED10F918C5F17911AE /* SIDAudioOutput.swift in Sources */,
 				7625FE6D0F4D2D2AA0086F22 /* SIDRegisterTrace.swift in Sources */,
+				575F42D776D835E842561E60 /* SIDSoundCheck.swift in Sources */,
 				952FABD7E385142307C0B270 /* TapeUnit.swift in Sources */,
 				3888A62B48755A2A868CD3B0 /* VIA6522.swift in Sources */,
 				265046B932FB1B4566FBAC25 /* VIC.swift in Sources */,
@@ -487,6 +503,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.Emu6502;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SWIFT_ENFORCE_EXCLUSIVE_ACCESS = "compile-time";
 			};
 			name = Release;
 		};
@@ -526,7 +543,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -539,7 +556,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.4.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -586,7 +603,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -605,7 +622,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.4.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -671,6 +688,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.holgervonameln.C64Core;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SWIFT_ENFORCE_EXCLUSIVE_ACCESS = "compile-time";
 			};
 			name = Release;
 		};

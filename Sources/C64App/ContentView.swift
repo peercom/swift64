@@ -1411,7 +1411,9 @@ final class EmulatorController: ObservableObject {
     let c64 = C64()
     var audioEngine: AVAudioEngine?
     var audioSourceNode: AVAudioSourceNode?
-    var audioUnderrunFrames: UInt64 = 0
+    var audioOutput: SIDAudioOutput?
+    var audioUnderrunFrames: UInt64 { audioOutput?.statistics.underrunFrames ?? 0 }
+    var audioValidation: AudioPlaybackValidation?
     /// Exposed so the debugger bridge can access snapshots.
     var renderer: MetalRenderer?
 
@@ -1541,7 +1543,9 @@ final class EmulatorController: ObservableObject {
         applyDisplayPreferences()
         reloadROMs(reset: false)
         c64.powerOn()
+        audioValidation = AudioPlaybackValidation.fromEnvironment(c64: c64)
         setupAudio()
+        audioValidation?.scheduleReport(controller: self)
         refreshStatus()
     }
 
@@ -2018,63 +2022,19 @@ final class EmulatorController: ObservableObject {
 
         let sampleRate = SID.sampleRate
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        let sid = c64.sid
-        let dcBlockerPole: Float = 0.995
-        let prebufferTarget = min(4096, sid.sampleBuffer.count / 2)
-        let underrunLowWatermark = min(512, prebufferTarget / 4)
-        var dcBlockerLastInput: Float = 0
-        var dcBlockerLastOutput: Float = 0
-        var lastOutput: Float = 0
-        var prebuffering = true
-        var underrunFrames: UInt64 = 0
+        let output = SIDAudioOutput(sid: c64.sid)
+        audioOutput = output
+        let validation = audioValidation
 
-        audioSourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+        audioSourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let bufferList = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in bufferList {
                 let frames = Int(frameCount)
                 let ptr = buffer.mData!.bindMemory(to: Float.self, capacity: frames)
-                let availableSamples = sid.availableAudioSamplesForPlayback()
-                if prebuffering && availableSamples < prebufferTarget {
-                    for i in 0..<frames {
-                        ptr[i] = lastOutput
-                    }
-                    underrunFrames += UInt64(frames)
-                    continue
-                }
-                prebuffering = false
-
-                let output = UnsafeMutableBufferPointer(start: ptr, count: frames)
-                let samplesRead = sid.readAudioSamplesForPlayback(into: output)
-
-                if samplesRead == 0 {
-                    prebuffering = true
-                    for i in 0..<frames {
-                        ptr[i] = lastOutput
-                    }
-                    underrunFrames += UInt64(frames)
-                    continue
-                }
-
-                for i in 0..<samplesRead {
-                    let rawSample = ptr[i]
-                    let coupledSample = rawSample - dcBlockerLastInput + dcBlockerPole * dcBlockerLastOutput
-                    dcBlockerLastInput = rawSample
-                    dcBlockerLastOutput = coupledSample
-                    lastOutput = min(max(coupledSample, -0.95), 0.95)
-                    ptr[i] = lastOutput
-                }
-
-                if samplesRead < frames {
-                    prebuffering = true
-                    for i in samplesRead..<frames {
-                        ptr[i] = lastOutput
-                    }
-                    underrunFrames += UInt64(frames - samplesRead)
-                } else if sid.availableAudioSamplesForPlayback() <= underrunLowWatermark {
-                    prebuffering = true
-                }
+                let samples = UnsafeMutableBufferPointer(start: ptr, count: frames)
+                output.render(into: samples)
+                validation?.record(samples)
             }
-            self?.audioUnderrunFrames = underrunFrames
             return noErr
         }
 
@@ -2115,7 +2075,7 @@ struct MetalView: NSViewRepresentable {
             existingRenderer.configure(for: view)
             renderer = existingRenderer
         } else {
-            renderer = MetalRenderer(mtkView: view, c64: emulator.c64)
+            renderer = MetalRenderer(mtkView: view, c64: emulator.c64, audioOutput: emulator.audioOutput)
             emulator.renderer = renderer
         }
         view.delegate = renderer

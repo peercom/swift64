@@ -18,6 +18,251 @@ Performance benchmarks are also opt-in and should usually be run in Release. The
 SWIFT64_PERF_BENCHMARKS=1 swift test -c release --filter PerformanceBenchmarkTests
 ```
 
+The experimental public SID conformance runner is not yet a certification gate: fixture entry/completion handling still needs independent validation. Programs are opt-in and fetched into `.build`, not committed. The fetch script pins the VICE-testprogs revision. Runs stay sequential and instantiate one C64 at a time; use `SWIFT64_PUBLIC_SID_TEST_IDS` for a focused comma-separated subset:
+
+```sh
+script/fetch_sid_testprogs.sh
+SWIFT64_PUBLIC_SID_TESTPROGS_DIR=.build/vice-testprogs \
+SWIFT64_PUBLIC_SID_TEST_IDS=envrate,envdelay,noisetest \
+swift test -c release --filter PublicSIDConformanceTests
+```
+
+## VIC sprite sequencer
+
+These subsections record successive checkpoints. Later beam, shifter, and graphics-counter work supersedes the corresponding open items in earlier checkpoints; none substitutes for independently validated external demos.
+
+Run the cycle/fetch/lifecycle regressions sequentially:
+
+```sh
+swift test -c release -j 2 --filter 'VICTests|VICSpriteShifterTests|VICBeamTimingTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|VICPriorityTests|C64TimingTests'
+```
+
+`VICSpriteDMALifecycleTests` clocks the actual Y comparisons, DMA, byte-counter transfers, and display latches. It checks all eight sprites under PAL and NTSC, normal and expanded heights, early Y/enable changes, repeated Y matches, frame boundaries, late expansion stretching, and CPU writes around the cycle-15/16 crunch boundary. An original ROM-independent 6510 multiplexer program verifies every visible row and intervening gap for two successive sprites with different pointers, colors, and widths. No external ROM, screenshot, or program binary is needed. Tests that begin at an arbitrary fetch slot explicitly seed already-active DMA; they do not infer hardware state from raster-minus-Y arithmetic.
+
+The timing reference is [Christian Bauer's VIC-II article](https://www.cebix.net/VIC-Article.txt), sections 3.6.3 and 3.8.1, supplemented by the hardware-checked public phi1 probes below. Current zero-based pointer-slot tables are PAL `[57,59,61,0,2,4,6,8]` and NTSC 6567R8 `[58,60,62,64,1,3,5,7]`. The original NTSC transcription was one cycle late and is superseded by the public result. Sprite 2's data burst finishes before line end; PAL sprite 3's BA warning crosses the boundary, while NTSC sprite 3's two-cycle DMA burst crosses it. Expansion crunch writes occur in hardware cycle 15 phi2 and affect the following cycle's MCBASE transfer.
+
+2026-10-15: the combined checked Release slice (CPU, memory, SID quality/core, VIC/timing, CIA, drive, KERNAL traps, and manifest tests) passed 835 tests with 12 opt-in skips and zero failures. These results establish synthetic bus and CPU-driven framebuffer coverage, not full demo compatibility. Physical beam-X alignment, horizontal sprite-shifter behavior, advanced raster effects, and independently calibrated external FLI/open-border/multiplexer fixtures remain open. The local authoritative `compatibility.json` and external VIC fixtures were absent in this checkout; tracked example manifests are not passing corpus evidence. The sustained app-audio results below were recorded before these latest sprite changes and are not a new app-playback run.
+
+`VICPriorityTests` adds 14 ROM-independent regressions for the graphics/sprite priority multiplexer and border output. It exercises both PAL/NTSC and traced/fallback composition: closed borders masking all sprites, side-border graphics collisions, top/bottom-border sprite collisions without graphics collisions, transparent sprite pixels, and every adjacent sprite-priority pair. A foreground-hidden higher-priority sprite must still occlude lower-priority sprites. Collision IRQ acknowledgement must not rearm a nonempty `$D01E/$D01F` latch; only reading the corresponding collision register rearms it. An original 6510 program observes that sequence through mapped registers while two overlapping sprites remain hidden behind the top border.
+
+Additional checks distinguish main-border visibility from graphics output, preserve an opened border across a rasterline boundary, clock border comparisons outside the framebuffer crop, and keep DEN writes from acting as an immediate pixel blank. Existing sprite-color/shifter fixtures explicitly open the border where visibility is intended; closed-border tests retain collision assertions. The timing reference above covers priority and collision logic in section 3.8.2 and border/DEN behavior in sections 3.9-3.10. Physical dot-clock alignment and full horizontal-shifter behavior are separate remaining work, not certified by these tests.
+
+Priority/border validation (2026-10-15): `swift build --build-tests -j 2` succeeded; the focused VIC/timing command above passed all 300 tests in Debug. The combined checked Release slice passed 849 tests, with 12 opt-in skips and no failures:
+
+```sh
+swift test -c release -j 2 --filter 'CPU6502Tests|MemoryMapTests|SIDAudioQualityTests|SIDTests|C64TimingTests|VICTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|VICPriorityTests|CIATests|Drive1541Tests|KernalTrapsTests|CompatibilityManifestTests'
+```
+
+## VIC beam and matrix-fetch timing
+
+`VICBeamTimingTests` adds 12 ROM-independent regressions. Literal chip timing and pixel expectations cover eight-dot color steps, horizontal counter wrap, end-of-cycle light-pen coordinates, BA/AEC boundaries, matrix-before-glyph ordering for every column, late bad-line startup, and collision onset. Original CPU `STA` programs exercise color splits and both successful and missed CSEL border-comparison windows under PAL and NTSC. PAL sprite wrap and unreachable X positions are tested in both traced and fallback rendering; nine-bit wrap fixtures explicitly select NTSC.
+
+The reference is [Christian Bauer's VIC-II article](https://www.cebix.net/VIC-Article.txt), sections 3.6.1-3.6.3, 3.7.2, and 3.11. Zero-based matrix-fetch indices are 14-53, preceded by BA warning indices 11-13; glyph fetches remain at indices 15-54. Capturing pixels after the low-phase fetch prevents collision logic from reading stale graphics data. Existing beam-write tests were retimed without relaxing their pixel/priority/collision assertions.
+
+The framebuffer retains its existing dimensions and logical sprite-X coordinates. Common analog output delay, exact signal crop, and sub-dot NTSC counter-hold behavior are not calibrated here. CPU register writes still take effect on the next whole-cycle sample. Full horizontal sprite-shifter consumption, VC/RC/VMLI sequencing and idle graphics, and independently calibrated FLI/open-border/multiplexer demo captures remain required. In particular, correcting the matrix-fetch window does not certify the entire late-bad-line display-state machine.
+
+Beam validation (2026-10-15): all 312 focused VIC/timing tests passed in Debug, including the original CPU-driven sprite multiplexer and border/priority fixtures. The checked Release integration slice below passed 504 tests with zero skips and zero failures, sequentially:
+
+```sh
+swift test -c release -j 2 --filter 'CPU6502Tests|MemoryMapTests|VICTests|VICBeamTimingTests|VICPriorityTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|C64TimingTests|CIATests'
+```
+
+## VIC horizontal sprite shifters
+
+Beam output now consumes live 24-bit sprite registers, filled byte by byte by DMA. An X comparison starts shifting without reloading the diagnostic row snapshot. Writes to X or its high bit cannot move an active row or resurrect consumed data; expansion changes the rate of subsequent consumption. Monochrome and multicolor output share the underlying bit stream. Shifter state survives rasterline boundaries, and cropping no longer suppresses horizontal clocks or sprite-sprite collisions.
+
+`VICSpriteShifterTests` adds 11 DMA-backed PAL/NTSC checks: fixed-width monochrome/multicolor rows and next-line reloads, expansion on/off mid-row, expansion after consumption, X changes before/during/after output, moving an unstarted sprite behind the beam, hidden tails across rasterline boundaries, collisions outside both framebuffer axes, and an original CPU store that attempts to replay a consumed row. The existing phased-fetch tests also assert the live shift-register contents after each DMA stage. Older component fixtures that bypass DMA explicitly seed both the diagnostic row and live register. Snapshot composition remains an unclocked helper, not the normal beam path.
+
+Reference: [Christian Bauer's VIC-II article](https://www.cebix.net/VIC-Article.txt), section 3.8.1, describes bytewise loading, pixel shifting, and why a second X comparison cannot replay an emptied row. The two old X-write tests that expected horizontal replay now require the original tail to continue and the second position to remain empty. Whole-cycle register visibility, precise mixed-mode/expansion sub-dot phase changes, and fetch/output overlap still need independent hardware calibration; this does not certify all sprite tricks.
+
+Shifter validation (2026-10-15): `swift build --build-tests -j 2` succeeded, and all 323 focused VIC/timing Debug tests passed, including the existing CPU-driven multiplexer, border, collision, and priority tests. The following sequential Release integration slice passed 533 tests with zero failures; no SID playback or audio test suite was run:
+
+```sh
+swift test -c release -j 2 --filter 'CPU6502Tests|MemoryMapTests|VICTests|VICSpriteShifterTests|VICBeamTimingTests|VICPriorityTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|C64TimingTests|C64InterruptTests|CIATests'
+```
+
+## Public VIC programs and shared data bus
+
+The opt-in runner uses public test programs from the [VICE test-program collection](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII), pinned by `script/fetch_vic_testprogs.sh`. Programs and reference source remain under ignored `.build`; no emulator implementation, ROMs, or fixture binaries are incorporated into the project. The phi1 fixture's README describes its real PAL/NTSC hardware checks.
+
+```sh
+sh script/fetch_vic_testprogs.sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+`SWIFT64_PUBLIC_VIC_TEST_IDS` selects a comma-separated subset. IDs are `phi1-pal`, `phi1-ntsc`, `sprite-collision-pal`, `graphics-collision-pal`; `fld-20-pal`, `fld-21-pal`, `fld-22-pal`, `fld-29-pal`, `fld-2a-pal`, `fld-2b-pal`; `sprite-dma-54-pal`, `sprite-dma-54-ntsc`, `sprite-dma-57-pal`, `sprite-dma-57-ntsc`; and the twelve PAL border IDs in the table below. The default runs all 26. Local ROMs default to `Sources/C64App/ROMS`; `SWIFT64_PUBLIC_VIC_ROM_DIR` can select another directory containing the same named BASIC, Kernal, and character files. Boot is bounded at 300 frames and must display READY; each original BASIC stub is then started with RUN and has a three-million-cycle limit. KERNAL traps are disabled. Completion requires the program's actual CPU write to `$D7FF`, not a normalized SID mirror, patched instruction, direct PC entry, or scan for a result instruction. The four bus/collision programs self-check; the 22 visual programs additionally require exact color-index comparison, since their `$D7FF` write only requests capture. Instances run sequentially and are released between fixtures.
+
+Measured Release results (2026-10-15), repeated with identical observables after the IRQ/NTSC/collision fixes:
+
+| Fixture | `$D7FF` | Cycles after RUN injection | Final PC | Raster (zero-based cycle) |
+| --- | --- | --- | --- | --- |
+| `phi1-pal` | `$00` | 47,288 | `$08E1` | 126:38 |
+| `phi1-ntsc` | `$00` | 42,563 | `$08E4` | 128:53 |
+| `sprite-collision-pal` | `$00` | 141,065 | `$0928` | 55:8 |
+| `graphics-collision-pal` | `$00` | 809,369 | `$0929` | 55:8 |
+
+Before these corrections all four reported `$FF`: PAL bus samples began two cycles early, and the sprite collision test sampled raster 53 alternately at cycles 22/23, producing `03 00 03 00 03 00 00`. Correct CPU IRQ polling makes the read stable at cycle 24. The collision pipeline then yields the fixture's unchanged `03 03 00 00 00 00 00` expectation. Correcting the NTSC pointer slots resolves its remaining bus mismatch. No program instructions, reference data, or completion rules were changed.
+
+`CPUInterruptPollingTests` covers penultimate-cycle IRQ eligibility for read/write/RMW/indexed instructions, late arrivals, retained short pulses, branch polling, and RDY stalls. CLI/SEI/PLP masking follows the sampled I bit; RTI restores it early. Four old tests now assert IRQ before a valid polling point rather than demanding retroactive recognition. Reference: the [Visual6502 interrupt timing observations and simulation links](https://tinymachines.ai/6502/archive/wiki/6502_Timing_of_Interrupt_Handling.html).
+
+`VICCollisionPipelineTests` covers CPU reads around the public fixture's cutoff, preservation of pending coincidences across read-clear and rasterline boundaries, delayed IRQ assertion, and reset. The three four-dot stages model register visibility relative to the logical sprite-X counter; they are not a claim about physical silicon stage topology or analog video delay. PAL timing is externally calibrated here; NTSC collision subphases still need independent fixtures. Snapshot-only composition remains unclocked. Existing clocked collision fixtures now wait for the pipeline without relaxing pixel, priority, latch, or IRQ assertions.
+
+These programs exposed two corrected bus defects: floating `$DE00/$DF00` reads previously returned the CPU's operand byte, and ECM incorrectly redirected i-accesses. VIC reads now drive the shared data bus, while true i-accesses always read `$3FFF`. Idle-state g-accesses retain ECM's `$39FF` behavior. `VICDataBusTests` checks every PAL and NTSC slot through actual 6510 reads, character-ROM/RAM bank selection, color-RAM high bits, and exclusion from CPU read hooks. A running VIC refreshes floating bus data even when the CPU is jammed. Reference: [Bauer's VIC-II article](https://www.cebix.net/VIC-Article.txt), sections 3.6.2, 3.7.1 and 4.
+
+At the bus/collision checkpoint, `swift build --build-tests -j 2` passed, the focused Debug VIC/timing slice passed all 344 tests, and the following Release integration slice executed 725 tests: 714 passed, 11 opt-in slow-drive tests skipped, and no failures. That run's public-runner test included the four programs above. No SID test suite or audio playback was run. The later FLD work below adds visual proof and closes the demonstrated late-BA startup-color defects; broader sub-cycle and demo certification remains open.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+  swift test -c release -j 2 --filter 'CPU6502Tests|CPUInterruptPollingTests|MemoryMapTests|VICTests|VICCollisionPipelineTests|VICDataBusTests|VICGraphicsSequencerTests|VICSpriteShifterTests|VICBeamTimingTests|VICPriorityTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|PublicVICConformanceTests|C64TimingTests|C64InterruptTests|CIATests|Drive1541Tests|VIA6522Tests|IECBusTests'
+```
+
+## Public FLD, line-crunch and FLI visual proof
+
+The pinned public `VICII/fldscroll` programs reproduce the scroller used in Cataball+3/Decibel. All six fixed timing variants run unchanged through BASIC. At the program's capture write, the runner compares every color index in the physical 320x200 display area against its upstream `references/*.png`. The source Makefile generates those references with VICE and the `pepto-pal` palette. They are independent emulator reference outputs, not new hardware measurements. The comparison uses fixed PAL crop origins (reference x=32/y=35, Swift64 x=24/y=37), with no image alignment search, tolerances, or locally generated expected hashes. Palette indices avoid conflating different RGB palettes with emulation errors; raw PNG samples avoid host color-management conversion.
+
+Measured Release results (2026-10-15):
+
+| Fixture | Cycles after RUN | Final PC | Raster (zero-based cycle) | Differing pixels |
+| --- | --- | --- | --- | --- |
+| `fld-20-pal` | 105,868 | `$0C21` | 120:28 | 0 / 64,000 |
+| `fld-21-pal` | 105,869 | `$0C21` | 120:29 | 0 / 64,000 |
+| `fld-22-pal` | 105,870 | `$0C21` | 120:30 | 0 / 64,000 |
+| `fld-29-pal` | 105,877 | `$0C21` | 120:37 | 0 / 64,000 |
+| `fld-2a-pal` | 105,923 | `$0C21` | 121:20 | 0 / 64,000 |
+| `fld-2b-pal` | 105,923 | `$0C21` | 121:20 | 0 / 64,000 |
+
+Before correction, every variant differed by 20,326-34,813 pixels despite writing `$D7FF=$00`. Connecting CIA1 PB4 to VIC light-pen capture fixed variants 20/22/29. Deferring CPU-phase `$D011` sequencer effects to the next VIC cycle fixed 21's erroneous line crunching and the extra corrupted column in 2A/2B. Sampling the actual RDY-held CPU data bus during the three-cycle AEC startup delay fixed the remaining FLI colors. Source: [Bauer's VIC-II observations](https://www.cebix.net/VIC-Article.txt), sections 3.11 and 3.14.6. Register readback and raster-compare writes remain immediate; only bad-line sequencer effects are deferred.
+
+`VICLightPenWiringTests` covers real CPU stores, DDR-triggered edges, CIA2 isolation, keyboard row selection, joystick fire, and same-frame IRQ acknowledgement. `VICDMABusTests` verifies PAL/NTSC DMA-startup colors from three different following opcodes, AEC bus ownership, and a held operand read rather than a guessed PC peek. `CPUHeldReadTests` checks held versus unstalled bus addresses for all 256 opcodes under both branch-flag/index settings, plus interrupt/reset microcycles, and ensures CPU state is retained while AEC suppresses reads. Existing late-DMA tests now explicitly distinguish the CPU-write cycle from the following VIC fetch cycle; their pixel, address, counter, and clean-fetch assertions remain enabled.
+
+The Release integration slice below executed 747 tests: 736 passed, 11 opt-in slow-drive tests skipped, and no failures. All ten public programs passed; a separate Release repeat produced identical cycle/PC/raster results and zero pixel differences for all six visual fixtures. Final `swift build --build-tests -j 2` and a 583-test checked Debug CPU/memory/VIC/CIA/keyboard/reset/timing slice passed without failures. No SID tests, audio playback, commercial media, or unbounded corpus runs were used. Optional `SWIFT64_PUBLIC_VIC_CAPTURE_DIR=.build/vic-fld-captures` writes local PPM diagnostics; `SWIFT64_PUBLIC_VIC_TRACE_RASTER=1` prints at most 100 `$D011`/`$D016` writes per fixture. Downloads, reference PNGs, and generated captures remain ignored and untracked.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+  swift test -c release -j 2 --filter 'CPU6502Tests|CPUInterruptPollingTests|CPUHeldReadTests|MemoryMapTests|VICTests|VICLightPenWiringTests|VICDMABusTests|VICCollisionPipelineTests|VICDataBusTests|VICGraphicsSequencerTests|VICSpriteShifterTests|VICBeamTimingTests|VICPriorityTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|PublicVICConformanceTests|C64TimingTests|C64InterruptTests|C64ResetTests|CIATests|KeyboardTests|Drive1541Tests|VIA6522Tests|IECBusTests'
+```
+
+This proves these six PAL effects within the normal display area, not full open-border or sprite-multiplexer demos, NTSC FLD/FLI, analog output, or arbitrary DMA contention.
+
+## Public sprite expansion and border proof
+
+The same pinned runner now includes `VICII/spritedma/d017-54` and `d017-57` for PAL and NTSC, plus twelve `VICII/border` programs. No test instructions or expected pixels are patched. Sprite references compare the 320x200 picture (PAL reference x=32/y=35, NTSC x=32/y=23). Border references compare 376x272 pixels: reference x=8/y=0 through x=383/y=271, corresponding to Swift64 logical x=0/y=2. This is the shared crop, including side/top/bottom borders; the eight reference pixels left of Swift64's crop are explicitly excluded. No alignment search or mismatch tolerance is used.
+
+Measured Release public-fixture results (2026-10-15):
+
+| Fixture ID | Cycles after RUN | Final PC | Raster (zero-based cycle) | Differing pixels |
+| --- | --- | --- | --- | --- |
+| `sprite-dma-54-pal` | 103,348 | `$08FB` | 80:28 | 0 / 64,000 |
+| `sprite-dma-54-ntsc` | 90,704 | `$08FC` | 80:29 | 0 / 64,000 |
+| `sprite-dma-57-pal` | 103,344 | `$08FA` | 80:24 | 0 / 64,000 |
+| `sprite-dma-57-ntsc` | 90,700 | `$08FB` | 80:25 | 0 / 64,000 |
+| `vborder-32-08-pal` | 74,856 | `$093F` | 252:12 | 0 / 102,272 |
+| `vborder-32-09-pal` | 74,857 | `$093F` | 252:13 | 0 / 102,272 |
+| `vborder-33-08-pal` | 74,857 | `$093F` | 252:13 | 0 / 102,272 |
+| `vborder-33-09-pal` | 74,858 | `$093F` | 252:14 | 0 / 102,272 |
+| `vborder2-21-pal` | 74,757 | `$094F` | 250:39 | 0 / 102,272 |
+| `vborder2-22-pal` | 74,758 | `$094F` | 250:40 | 0 / 102,272 |
+| `vborder2-35-pal` | 74,777 | `$094F` | 250:59 | 0 / 102,272 |
+| `vborder2-36-pal` | 74,778 | `$094F` | 250:60 | 0 / 102,272 |
+| `vborder2-63-pal` | 74,823 | `$094F` | 251:42 | 0 / 102,272 |
+| `vborder2-64-pal` | 74,824 | `$094F` | 251:43 | 0 / 102,272 |
+| `hvborder1-pal` | 135,439 | `$094A` | 277:52 | 0 / 102,272 |
+| `hvborder2-pal` | 135,118 | `$093C` | 272:46 | 0 / 102,272 |
+
+The initial baseline passed the four expansion fixtures and three vertical-border cases, but failed nine border images with 960-12,800 differing pixels. The fixes are in the emulator, not its reference data:
+
+- Keep a pending vertical-close latch separate from visible graphics gating. Brief RSEL pulses survive until the next line or the left-border sample, rather than disappearing between two sparse comparisons.
+- Preserve vertical-border state across frame wrap; only hardware comparisons or reset close it.
+- Sample side-border control in hardware cycles 17/18 and 56/57, while retaining logical pixel edges 24/31 and 335/344. Existing CPU-store tests moved their timing windows by one cycle, without changing expected colors, edge pixels, or open/closed outcomes.
+- Clearing a sprite's display latch prevents new X matches but does not truncate a row already in the shifter. The combined border tests exposed four missing pixels in the final byte of an expanded sprite's last row.
+
+`VICBorderTimingTests` adds five ROM-independent regressions: six real-6510 four-cycle RSEL pulse boundaries; delayed close without mid-line blanking; PAL/NTSC frame-wrap persistence/reset; DMA-backed expanded final rows with collision tails; and inactive sprites not starting after the display latch closes. Snapshot fixtures that skip earlier scanlines now seed both vertical latches explicitly. All 588 focused checked Debug CPU/memory/VIC/CIA/keyboard/reset/timing tests pass.
+
+The final sequential Release integration slice (the FLD command above with `VICBorderTimingTests` added) executed 752 tests: 741 passed, 11 opt-in slow-drive tests skipped, zero failures. All 26 public fixtures repeated with identical cycle/PC/raster results and zero visual differences. `swift build --build-tests -j 2` also passed. The earlier integration attempt caught a new inactive-sprite fixture positioned before NTSC's display-disable sample; its corrected X=368 position tests the intended after-latch case on both standards without changing emulator behavior or the public reference comparisons.
+
+Behavior references are [Bauer's border/hyperscreen description](https://www.cebix.net/VIC-Article.txt), the [public border fixture observations](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/border/readme.txt), and VICE's cycle-exact border sampling behavior as an implementation reference. Swift64's line-trace/latch implementation is its own; no VICE implementation code is incorporated. Reference screenshots are independent emulator outputs, not new physical-chip measurements.
+
+This expands proof to these PAL open-border effects and PAL/NTSC expansion cases. Full external sprite-multiplexer demos, NTSC open-border/FLI effects, border-edge collision subphases, bitmap idle-color changes, and analog output remain uncertified. The framebuffer uses logical sprite-X coordinates; NTSC's skipped/repeated counter positions outside the normal picture still need physical-output mapping proof. All 26 public programs are bounded and sequential; downloaded PRGs, PNGs, local ROMs and generated PPMs stay ignored/untracked. No SID/audio testing is part of this VIC run.
+
+## VIC graphics counters and raster effects
+
+The graphics sequencer now reloads VC/VMLI in hardware cycle 14 phi1 and updates RC/VCBASE in cycle 58 phi1. Bad-line conditions enter display state independently of matrix-DMA scheduling. Matrix and color data are retained in the internal line buffer; g-accesses never obtain missing matrix data through an extra RAM read. Idle g-accesses still read memory and produce graphics with zero matrix/color bits. Framebuffer composition has no counter side effects.
+
+`VICGraphicsSequencerTests` covers PAL and NTSC with 15 bounded, ROM-independent tests. Checks include all 1000 screen/color fetches and 200 pixel rows of a text frame, FLD-delayed rows, 16 FLI rasterlines with changing matrices, late-start DMA with a non-aligned VCBASE, line-crunch wrapping, idle reads/pixels, closed-border counter progress, and original 6510 `STA $D011` instructions before/after the RC-reset comparison. Old beam fixtures now arm actual matrix DMA or explicitly seed the skipped row; their pixel assertions remain intact. Snapshot composition tests no longer expect rendering to advance the machine clock.
+
+Reference: [Christian Bauer's VIC-II article](https://www.cebix.net/VIC-Article.txt), sections 3.7.1-3.7.3 and 3.14.2-3.14.6. VMLI is modeled as a buffer index, not an analog multi-selected-cell network. Precise late-BA/AEC takeover, startup color-bus values, sub-dot register visibility, and external demo captures remain uncalibrated. These synthetic checks establish the implemented counter behavior, not complete FLI/VSP compatibility.
+
+Graphics-sequencer validation (2026-10-15): `swift build --build-tests -j 2` passed; the focused checked Debug VIC/timing slice passed all 338 tests with zero failures. The following sequential Release integration command passed 548 tests with zero failures or skips. No SID suite or audio playback was run:
+
+```sh
+swift test -c release -j 2 --filter 'CPU6502Tests|MemoryMapTests|VICTests|VICGraphicsSequencerTests|VICSpriteShifterTests|VICBeamTimingTests|VICPriorityTests|VICSlotTimingTests|VICSpriteFetchTests|VICSpriteDMALifecycleTests|C64TimingTests|C64InterruptTests|CIATests'
+```
+
+## Audible SID and Release playback
+
+`SIDAudioQualityTests` covers known pitches (110/440/1760 Hz), triangle/saw/pulse headroom in both models and modes, fast-filter response versus cycle integration, an original three-voice 6510 program, speaker-buffer overrun accounting, and underrun/recovery without a false DC transient. Run sequentially:
+
+```sh
+swift test -c release -j 2 --filter 'CPU6502Tests|MemoryMapTests|SIDAudioQualityTests|SIDTests|C64TimingTests|VICTests|VICSlotTimingTests|VICSpriteFetchTests|CIATests|Drive1541Tests|KernalTrapsTests'
+```
+
+The Release app has an opt-in ROM-independent sound check. It uses the normal CPU/VIC/SID emulation thread and AVAudioEngine output path, changes no saved preferences, and exits after reporting. The tone is a 440 Hz pulse; music is an original repeating 16-note, three-voice program with a pulse lead, triangle bass, and filtered saw accompaniment. The drive is deliberately disabled, so this is not a true-drive throughput benchmark. Run one instance at a time, without a simultaneous build or test job:
+
+```sh
+SWIFT64_AUDIO_CHECK_SECONDS=12 SWIFT64_AUDIO_CHECK_KIND=tone \
+SWIFT64_AUDIO_CHECK_MODEL=mos6581 SWIFT64_AUDIO_CHECK_MODE=compatibility \
+DerivedData/Swift64/Build/Products/Release/Swift64.app/Contents/MacOS/Swift64
+
+SWIFT64_AUDIO_CHECK_SECONDS=120 SWIFT64_AUDIO_CHECK_KIND=music \
+SWIFT64_AUDIO_CHECK_MODEL=mos6581 SWIFT64_AUDIO_CHECK_MODE=compatibility \
+DerivedData/Swift64/Build/Products/Release/Swift64.app/Contents/MacOS/Swift64
+```
+
+Repeat with `mos8580`, `fast`, and `SWIFT64_AUDIO_CHECK_STANDARD=ntsc`. Set `SWIFT64_AUDIO_CHECK_HZ=110` or `1760` for low/high tone checks (default 440 Hz; bounded to 20-10000 Hz). Duration is bounded to 3-300 seconds. Two fixed buffers retain the first and last 12 seconds, about 4.1 MiB total regardless of run length. The printed `AUDIO_VALIDATION` path points to the opening WAV; a `-tail.wav` and version-2 JSON sit alongside it in the app's sandbox cache (`Swift64/AudioValidation`). Names include video standard, model, mode, and tone frequency, so PAL/NTSC and different tones cannot overwrite one another. Repeating the same configuration replaces its prior capture.
+
+WAVs capture the actual Core Audio source samples after DC removal, clipping protection, and recovery fades, not an unrelated offline synthesizer. Reports include requested/elapsed/audio/captured durations, tail position, sample and frame rates, RMS, peak, first-signal time, longest silence before/after onset, invalid samples, and startup/underrun/overrun/clipping counts. Low Power Mode and thermal state are recorded at the start and end. Overruns count unread samples overwritten by the SID producer since SID reset. This measures the app's source output, not the physical DAC or speakers.
+
+Check the actual PCM with the standard-library-only analyzer, between playback runs:
+
+```sh
+python3 script/analyze_sid_capture.py --min-seconds 119 \
+  "$HOME/Library/Containers/com.holgervonameln.swift64/Data/Library/Caches/Swift64/AudioValidation/music-pal-mos6581-compatibility.json"
+```
+
+The checker exits nonzero for queue loss, clipping, silence, missing/short capture, inconsistent timing/frame accounting, wrong tone pitch, or wrong music. For the original music fixture it identifies all 16 opening lead notes, then independently checks a full 16-note cycle at the expected tempo in the final capture; only the tail's starting phase is fitted. This is a fixture-specific musical regression, not a general music-quality or hardware-fidelity metric. Use `--min-seconds 11` for twelve-second tone captures. Do not include older version-1 reports in a new gate.
+
+Acceptance: low/mid/high tones at the requested pitch after startup; the expected three-voice melody at both the beginning and end; no non-finite samples or clipped frames; and zero post-startup underruns or producer overruns in a sustained run on a machine able to maintain real time. An overloaded host is a performance failure to investigate, not evidence of an oscillator error. Preserve local results for listening comparisons; never commit WAVs or other generated media. These original fixtures establish usable playback, not calibrated analog SID hardware fidelity or general game compatibility.
+
+The shared speaker path buffers 4096 samples (about 93 ms) once at startup, removes DC, and uses short recovery fades instead of holding a stale sample or restarting a long prebuffer after each gap. The DC filter retains its source history across underruns: reseeding at an arbitrary waveform phase produced false DC steps and recovery clipping. A regression compares recovered output to uninterrupted reference samples after the fade.
+
+Frame pacing uses a monotonic deadline and replenishes a depleted queue with normal emulated cycles, never a retuned SID clock. While running, the app holds a [user-initiated activity that allows idle system sleep](https://developer.apple.com/documentation/foundation/processinfo/activityoptions/userinitiatedallowingidlesystemsleep), adding [latency-critical timer/I/O precision](https://developer.apple.com/documentation/foundation/processinfo/activityoptions/latencycritical) when an audio output is attached. It releases the activity on debugger pause or loop exit. The precision request is a power/performance tradeoff confined to active playback, not an exclusive CPU reservation or a guarantee under arbitrary host load. The app does not change the user's power settings.
+
+Xcode Release builds select compile-time exclusivity enforcement for `Emu6502` and `C64Core` only. Debug builds and the Swift Package regression builds retain runtime checks; the app target also retains its default checks. This is a measured playback-performance tradeoff, not permission to introduce overlapping accesses: [Swift's exclusivity guidance](https://www.swift.org/blog/swift-5-exclusivity/) warns that unchecked violations remain undefined behavior. Keep checked SID/VIC/CPU/timing tests as a release gate, particularly when changing core callbacks or `inout` accesses. Bounds checks and normal `-O` optimization remain enabled; do not substitute `-Ounchecked`.
+
+### Recorded playback gate: 2026-10-15
+
+Native ARM64 Xcode Release, drive off, Mac14,2 with 8 GB RAM, AC power, Low Power Mode disabled. Eight sequential 120-second music runs cover PAL/NTSC, 6581/8580, and fast/compatibility. All eight passed the independent PCM checker: zero underrun frames/events, producer overruns, clipped frames, or invalid samples; all 16 expected lead notes matched in both opening and tail captures. Reports recorded nominal thermal state at both endpoints. No simultaneous build/test job or second emulator was running. These results supersede the narrower 2026-10-14 PAL-only check.
+
+| Standard / model / mode | Rendered seconds | Music RMS | Music peak |
+| --- | ---: | ---: | ---: |
+| PAL / 6581 / fast | 120.021 | 0.23637 | 0.76719 |
+| PAL / 6581 / compatibility | 120.597 | 0.29810 | 0.87994 |
+| PAL / 8580 / fast | 120.000 | 0.18997 | 0.65771 |
+| PAL / 8580 / compatibility | 120.587 | 0.19034 | 0.59582 |
+| NTSC / 6581 / fast | 120.075 | 0.23829 | 0.77703 |
+| NTSC / 6581 / compatibility | 119.648 | 0.29923 | 0.87866 |
+| NTSC / 8580 / fast | 120.683 | 0.19189 | 0.66308 |
+| NTSC / 8580 / compatibility | 120.128 | 0.19191 | 0.60590 |
+
+All 24 low/mid/high tone configurations were captured through the same Release speaker path. PAL measured approximately 109.993 / 440.029 / 1759.999 Hz; NTSC approximately 109.971 / 440.004 / 1760.017 Hz. All had zero queue loss, clipping, and invalid samples. Twenty-three twelve-second runs passed directly. The first PAL 6581 fast 110 Hz run had correct pitch but failed the unchanged clock-consistency gate (11.595 rendered seconds versus 12.076 callback-wall seconds). Its report was retained locally; a 30-second repeat passed, including timing and both pitch windows. The short-run timing discrepancy was not isolated to a particular callback and is not proof of an oscillator fault or a physical-output pass.
+
+RMS/peak above are whole-run source-buffer statistics, including startup silence, not hardware-reference measurements. Captures retain the first and last 12 seconds; counters cover all 961.739 seconds of music playback. The focused checked regression command above passed 801 tests, 12 opt-in skips, zero failures. The Release bundle passed `codesign --verify --deep --strict`.
+
+Earlier battery/Low Power Mode stress runs, before the final DC-recovery change and latency-critical activity, failed all eight sustained configurations: 2941-333212 missing samples per run, with recovery clipping in two runs. Their JSON reports remain in `/tmp/swift64-audio-low-power/`. Power state, code, and host load changed between the stress and final runs, so these results do not isolate one cause or certify sustained low-power playback. Timing-preserving optimizations removed idle drive diagnostic hashing, reduced VIC raster-buffer access overhead, and simplified the common single-wave SID path; no emulated cycles were skipped. Re-run the gate after audio, pacing, or hot-path changes.
+
+Captures remain local at `~/Library/Containers/com.holgervonameln.swift64/Data/Library/Caches/Swift64/AudioValidation/`. This closes the bounded PAL/NTSC known-tone/original-music playback gate under the stated conditions. It does not certify long game/true-drive sessions, physical DAC output, low-power operation, or calibrated analog SID accuracy. Public SID conformance fixture handling remains experimental as noted above.
+
 Local public CPU functional-test binaries are also opt-in and run as a single bounded emulator instance. Keep those binaries untracked and provide the success self-loop address for the specific fixture you are running. Set `SWIFT64_CPU_FUNCTIONAL_RESULT_JSON` when you want a machine-readable result artifact with binary metadata, final CPU registers, final PC, cycle counts, and pass/jam/timeout reason:
 
 ```sh

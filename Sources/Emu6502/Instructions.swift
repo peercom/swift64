@@ -306,6 +306,62 @@ extension CPU6502 {
         }
     }
 
+    /// Address driven by a held read, without advancing any CPU state.
+    func currentReadAddress() -> UInt16 {
+        if cycle == 0 { return pc }
+        if servicingInterrupt {
+            switch cycle {
+            case 2...4: return 0x0100 | UInt16(sp)
+            case 5: return interruptType == .irq && nmiPending ? Vector.nmi : interruptVectorAddress
+            case 6: return interruptVectorAddress &+ 1
+            default: return pc
+            }
+        }
+        switch CPU6502.templateTable[Int(opcode)] {
+        case .implied, .accumulator, .immediate, .jmpAbs, .push:
+            return pc
+        case .zpRead, .zpWrite, .zpRMW:
+            return cycle == 1 ? pc : addr
+        case .zpxRead, .zpxWrite, .zpxRMW, .zpyRead, .zpyWrite:
+            return cycle == 1 ? pc : (cycle == 2 ? UInt16(pointer) : addr)
+        case .absRead, .absWrite, .absRMW:
+            return cycle <= 2 ? pc : addr
+        case .absxRead, .absxWrite, .absxRMW, .absyRead, .absyWrite, .absyRMW:
+            if cycle <= 2 { return pc }
+            return cycle == 3 ? (baseAddr & 0xFF00) | (addr & 0xFF) : addr
+        case .indxRead, .indxWrite, .indxRMW:
+            if cycle == 1 { return pc }
+            if cycle == 2 || cycle == 3 { return UInt16(pointer) }
+            return cycle == 4 ? UInt16(pointer &+ 1) : addr
+        case .indyRead, .indyWrite, .indyRMW:
+            switch cycle {
+            case 1: return pc
+            case 2: return UInt16(pointer)
+            case 3: return UInt16(pointer &+ 1)
+            case 4: return (baseAddr & 0xFF00) | (addr & 0xFF)
+            default: return addr
+            }
+        case .branch:
+            return cycle == 3 ? (baseAddr & 0xFF00) | (pc & 0xFF) : pc
+        case .jmpInd:
+            if cycle <= 2 { return pc }
+            return cycle == 3 ? addr : (addr & 0xFF00) | ((addr &+ 1) & 0xFF)
+        case .jsr:
+            return cycle == 2 ? 0x0100 | UInt16(sp) : pc
+        case .rts:
+            if cycle == 1 { return pc }
+            return cycle == 5 ? addr &+ 1 : 0x0100 | UInt16(sp)
+        case .rti, .pull:
+            return cycle == 1 ? pc : 0x0100 | UInt16(sp)
+        case .brk:
+            if cycle == 5 { return nmiPending ? Vector.nmi : Vector.irq }
+            return cycle == 6 ? interruptVectorAddress &+ 1 : pc
+        case .kill:
+            if cycle == 1 { return pc }
+            return cycle == 3 || cycle == 4 ? 0xFFFE : 0xFFFF
+        }
+    }
+
     func executeCycle() {
         let template = CPU6502.templateTable[Int(opcode)]
         switch template {
@@ -533,10 +589,8 @@ extension CPU6502 {
         case 0x18: setFlag(Flags.carry, false)      // CLC
         case 0x38: setFlag(Flags.carry, true)       // SEC
         case 0x58:  // CLI
-            irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
             setFlag(Flags.interrupt, false)
         case 0x78:  // SEI
-            irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
             setFlag(Flags.interrupt, true)
         case 0xB8: setFlag(Flags.overflow, false)   // CLV
         case 0xD8: setFlag(Flags.decimal, false)    // CLD
@@ -1413,7 +1467,6 @@ extension CPU6502 {
             switch opcode {
             case 0x68: a = value; setZN(a)                            // PLA
             case 0x28:
-                irqMaskOverrideForNextBoundary = getFlag(Flags.interrupt)
                 p = (value & ~Flags.brk) | Flags.unused              // PLP
             default: break
             }

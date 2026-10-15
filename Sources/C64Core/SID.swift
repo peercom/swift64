@@ -229,7 +229,7 @@ public final class SID {
         let normalized = Double(normalizedFilterCutoffValue(filterCutoff)) / 2047.0
         switch model {
         case .mos6581:
-            return 0.003 + pow(normalized, 1.7) * 0.18
+            return Self.filterCutoff6581[Int(normalizedFilterCutoffValue(filterCutoff))]
         case .mos8580:
             return 0.004 + normalized * 0.28
         }
@@ -292,23 +292,23 @@ public final class SID {
     public var sampleWritePos: Int = 0
     public var sampleReadPos: Int = 0
     var sampleBufferedCount: Int = 0
+    private var sampleOverrunCount: UInt64 = 0
     public var onSampleGenerated: ((Float) -> Void)?
     private let sampleBufferLock = NSLock()
 
     // MARK: - ADSR rate table (cycles per increment)
 
     // Measured SID envelope rate-counter comparison periods at a 1 MHz PHI2
-    // reference clock. The programmed ADSR times describe a full 256-step
-    // sweep, so the per-step comparison periods are the rounded cycle counts
-    // below rather than the previously used off-by-one periods.
+    // reference clock. These are the values observed by the public reSID/VICE
+    // envrate program on both 6581 and 8580 hardware.
     static let attackRates: [UInt16] = [
-        8, 31, 62, 94, 148, 219, 266, 312,
-        391, 976, 1953, 3125, 3906, 11719, 19531, 31250
+        9, 32, 63, 95, 149, 220, 267, 313,
+        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
     ]
 
     static let decayReleaseRates: [UInt16] = [
-        8, 31, 62, 94, 148, 219, 266, 312,
-        391, 976, 1953, 3125, 3906, 11719, 19531, 31250
+        9, 32, 63, 95, 149, 220, 267, 313,
+        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
     ]
 
     static let dataBusLatchHoldCycles = 0x2000
@@ -317,6 +317,7 @@ public final class SID {
     static let waveformDACHoldCycles = 128
     static let waveformDACLeakStepCycles = 32
     static let paddleScanCycles = 512
+    static let voiceMixDivisor: Int32 = 4
 
     static func loadedExponentialPeriod(at envelopeLevel: UInt8) -> UInt16? {
         switch envelopeLevel {
@@ -349,16 +350,22 @@ public final class SID {
         166, 188, 210, 232, 253, 274, 294, 314
     ]
 
+    // Exact tabulation of the existing approximation, not a new chip model.
+    // These curves depend only on register values, never on elapsed cycles.
+    private static let filterCutoff6581 = (0...2047).map {
+        0.003 + pow(Double($0) / 2047, 1.7) * 0.18
+    }
+    private static let envelopeDAC6581 = (0...255).map {
+        UInt16((pow(Double($0) / 255, 0.92) * 255).rounded())
+    }
+
     func envelopeDACLevel(_ level: UInt8) -> UInt16 {
         switch model {
         case .mos6581:
-            guard level != 0 else { return 0 }
-            guard level != 0xFF else { return 0xFF }
             // The 6581 envelope DAC is not a perfectly terminated linear DAC.
             // This bounded curve is a deterministic approximation until we
             // replace it with measured chip tables.
-            let normalized = Double(level) / 255.0
-            return UInt16((pow(normalized, 0.92) * 255.0).rounded().clamped(to: 0...255))
+            return Self.envelopeDAC6581[Int(level)]
         case .mos8580:
             return UInt16(level)
         }
@@ -422,6 +429,7 @@ public final class SID {
         sampleWritePos = 0
         sampleReadPos = 0
         sampleBufferedCount = 0
+        sampleOverrunCount = 0
         for index in sampleBuffer.indices {
             sampleBuffer[index] = 0
         }
@@ -644,32 +652,34 @@ public final class SID {
     }
 
     func clockOscillator(_ v: Int) {
-        let prevMSB = voices[v].accumulator & 0x800000
-        let prevNoiseClock = voices[v].accumulator & 0x080000
-        let wasNoiseCombined = voices[v].waveNoise &&
-            (voices[v].waveTriangle || voices[v].waveSawtooth || voices[v].wavePulse)
+        var voice = voices[v]
+        let prevMSB = voice.accumulator & 0x800000
+        let prevNoiseClock = voice.accumulator & 0x080000
+        let wasNoiseCombined = voice.waveNoise &&
+            (voice.waveTriangle || voice.waveSawtooth || voice.wavePulse)
 
-        if voices[v].testBit {
-            voices[v].accumulator = 0
-            voices[v].shiftRegister = 0
+        if voice.testBit {
+            voice.accumulator = 0
+            voice.shiftRegister = 0
         } else {
-            voices[v].accumulator = (voices[v].accumulator + UInt32(voices[v].frequency)) & 0xFFFFFF
+            voice.accumulator = (voice.accumulator + UInt32(voice.frequency)) & 0xFFFFFF
         }
 
-        let newMSB = voices[v].accumulator & 0x800000
+        let newMSB = voice.accumulator & 0x800000
         oscillatorMSBRose[v] = prevMSB == 0 && newMSB != 0
 
         // Noise shift register clock on accumulator bit 19 rising edge.
-        let newNoiseClock = voices[v].accumulator & 0x080000
+        let newNoiseClock = voice.accumulator & 0x080000
         noiseClockRose[v] = prevNoiseClock == 0 && newNoiseClock != 0
         if noiseClockRose[v] {
-            let bit22 = (voices[v].shiftRegister >> 22) & 1
-            let bit17 = (voices[v].shiftRegister >> 17) & 1
+            let bit22 = (voice.shiftRegister >> 22) & 1
+            let bit17 = (voice.shiftRegister >> 17) & 1
             let newBit = bit22 ^ bit17
-            voices[v].shiftRegister = ((voices[v].shiftRegister << 1) | newBit) & 0x7FFFFF
-            if wasNoiseCombined && model == .mos6581 {
-                age6581CombinedNoiseRegister(v)
-            }
+            voice.shiftRegister = ((voice.shiftRegister << 1) | newBit) & 0x7FFFFF
+        }
+        voices[v] = voice
+        if noiseClockRose[v] && wasNoiseCombined && model == .mos6581 {
+            age6581CombinedNoiseRegister(v)
         }
 
         updateWaveformDACLatch(v)
@@ -700,8 +710,11 @@ public final class SID {
     }
 
     func refreshWaveformDACLatch(_ v: Int) {
-        voices[v].waveformDACOutput = oscillatorOutput(v)
-        voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACHoldCycles
+        let output = oscillatorOutput(v)
+        voices.withUnsafeMutableBufferPointer { buffer in
+            buffer[v].waveformDACOutput = output
+            buffer[v].waveformDACHoldCyclesRemaining = Self.waveformDACHoldCycles
+        }
     }
 
     func leakedWaveformDACOutput(_ output: UInt16) -> UInt16 {
@@ -861,50 +874,60 @@ public final class SID {
     }
 
     func nonNoiseWaveformOutput(_ v: Int) -> UInt16? {
+        let voice = voices[v]
+        // Single-wave voices are common in music; combined-wave chip-model
+        // shaping is irrelevant for these selections.
+        switch voice.control & 0x70 {
+        case 0: return nil
+        case 0x10: return triangleWaveformOutput(v)
+        case 0x20: return sawtoothWaveformOutput(v)
+        case 0x40: return pulseWaveformOutput(v)
+        default: break
+        }
         if model == .mos6581 &&
-            voices[v].waveTriangle &&
-            voices[v].waveSawtooth &&
-            voices[v].wavePulse {
+            voice.waveTriangle &&
+            voice.waveSawtooth &&
+            voice.wavePulse {
             return combined6581TriangleSawtoothPulseOutput(v)
         }
 
         if model == .mos6581 &&
-            voices[v].waveSawtooth &&
-            voices[v].wavePulse &&
-            !voices[v].waveTriangle {
+            voice.waveSawtooth &&
+            voice.wavePulse &&
+            !voice.waveTriangle {
             return combined6581SawtoothPulseOutput(v)
         }
 
         if model == .mos6581 &&
-            voices[v].waveTriangle &&
-            voices[v].waveSawtooth &&
-            !voices[v].wavePulse {
+            voice.waveTriangle &&
+            voice.waveSawtooth &&
+            !voice.wavePulse {
             return combined6581TriangleSawtoothOutput(v)
         }
 
         if model == .mos6581 &&
-            voices[v].waveTriangle &&
-            voices[v].wavePulse &&
-            !voices[v].waveSawtooth {
+            voice.waveTriangle &&
+            voice.wavePulse &&
+            !voice.waveSawtooth {
             return combined6581TrianglePulseOutput(v)
         }
 
         var output: UInt16 = 0
         var hasOutput = false
 
-        if voices[v].waveTriangle {
+        if voice.waveTriangle {
             let triangle = triangleWaveformOutput(v)
             output = triangle
             hasOutput = true
         }
 
-        if voices[v].waveSawtooth {
+        if voice.waveSawtooth {
             let sawtooth = sawtoothWaveformOutput(v)
             output = hasOutput ? output & sawtooth : sawtooth
             hasOutput = true
         }
 
-        if voices[v].wavePulse {
+        if voice.wavePulse {
             let pulse = pulseWaveformOutput(v)
             output = hasOutput ? output & pulse : pulse
             hasOutput = true
@@ -1029,12 +1052,15 @@ public final class SID {
         return Int16(clamping: mixed)
     }
 
-    func mixedAudioOutput() -> Int32 {
+    func mixedAudioOutput(filterElapsedCycles: Double = 1) -> Int32 {
         var directOutput: Int32 = 0
         var filterInput: Int32 = 0
 
         for v in 0..<3 {
-            let voiceOut = Int32(waveformOutput(v))
+            // Preserve enough headroom for all three voices and the filter.
+            // Saturating a single voice near full scale masks quieter melody
+            // voices whenever a bass or noise voice is also active.
+            let voiceOut = Int32(waveformOutput(v)) / Self.voiceMixDivisor
             let filtered = filterControl & (1 << v) != 0
 
             if filtered {
@@ -1051,7 +1077,7 @@ public final class SID {
             directOutput += externalInput
         }
 
-        let filterOutput = applyFilter(input: filterInput)
+        let filterOutput = applyFilter(input: filterInput, elapsedCycles: filterElapsedCycles)
         var output = directOutput + filterOutput
         output = Int32(Double(output) * voiceOutputScale)
 
@@ -1069,7 +1095,10 @@ public final class SID {
     }
 
     func generateSample() {
-        writeSample(mixedAudioOutput())
+        // Fast mode evaluates the mixer once per host sample. Advance the
+        // filter by the SID cycles represented by that sample so its cutoff
+        // does not collapse by clockRate/sampleRate.
+        writeSample(mixedAudioOutput(filterElapsedCycles: cyclesPerSample))
     }
 
     func accumulateAudioOutput() {
@@ -1102,6 +1131,7 @@ public final class SID {
         sampleWritePos = (sampleWritePos + 1) % sampleBuffer.count
         if sampleBufferedCount == sampleBuffer.count {
             sampleReadPos = sampleWritePos
+            sampleOverrunCount += 1
         } else {
             sampleBufferedCount += 1
         }
@@ -1114,6 +1144,13 @@ public final class SID {
         defer { sampleBufferLock.unlock() }
 
         return sampleBufferedCount
+    }
+
+    /// Samples overwritten before the speaker consumed them, since SID reset.
+    public var audioOverrunFrames: UInt64 {
+        sampleBufferLock.lock()
+        defer { sampleBufferLock.unlock() }
+        return sampleOverrunCount
     }
 
     public func readAudioSampleForPlayback() -> Float? {
@@ -1187,20 +1224,29 @@ public final class SID {
         return Int32((shaped * 32768.0).clamped(to: -32768...32767))
     }
 
-    func applyFilter(input: Int32) -> Int32 {
+    func applyFilter(input: Int32, elapsedCycles: Double = 1) -> Int32 {
         guard filterInputEnabled || filterModeSelected else { return input }
 
         let inputDouble = filterInputDrive(input)
         let cutoff = normalizedFilterCutoff
         let damping = filterDamping
 
-        filterLow += cutoff * filterBand
-        filterHigh = inputDouble - filterLow - damping * filterBand
-        filterBand += cutoff * filterHigh
+        let boundedElapsedCycles = max(1, elapsedCycles)
+        // A resonant two-integrator filter cannot use the exponential shortcut
+        // for a one-pole RC filter. Keep each integration step <= one SID cycle.
+        let substepCount = Int(ceil(boundedElapsedCycles))
+        let cyclesPerSubstep = boundedElapsedCycles / Double(substepCount)
+        let substepCutoff = cutoff * cyclesPerSubstep
 
-        filterLow = filterLow.clamped(to: -32768...32767)
-        filterBand = filterBand.clamped(to: -32768...32767)
-        filterHigh = filterHigh.clamped(to: -32768...32767)
+        for _ in 0..<substepCount {
+            filterLow += substepCutoff * filterBand
+            filterHigh = inputDouble - filterLow - damping * filterBand
+            filterBand += substepCutoff * filterHigh
+
+            filterLow = filterLow.clamped(to: -32768...32767)
+            filterBand = filterBand.clamped(to: -32768...32767)
+            filterHigh = filterHigh.clamped(to: -32768...32767)
+        }
 
         var output = 0.0
         if filterLP { output += filterLow }

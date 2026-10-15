@@ -1789,6 +1789,18 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].envelopeLevel, 1)
     }
 
+    func testEnvelopeRatePeriodsMatchHardwareVerifiedSIDProgram() {
+        let expected: [UInt16] = [
+            0x0009, 0x0020, 0x003F, 0x005F,
+            0x0095, 0x00DC, 0x010B, 0x0139,
+            0x0188, 0x03D1, 0x07A2, 0x0C36,
+            0x0F43, 0x2DC8, 0x4C4C, 0x7A13,
+        ]
+
+        XCTAssertEqual(SID.attackRates, expected)
+        XCTAssertEqual(SID.decayReleaseRates, expected)
+    }
+
     func testAttackStepToMaximumImmediatelyEntersDecayState() {
         let sid = SID()
         sid.voices[0].control = 0x01
@@ -2518,9 +2530,53 @@ final class SIDTests: XCTestCase {
         direct.generateSample()
         filtered.generateSample()
 
-        XCTAssertGreaterThan(direct.sampleBuffer[0], 0.9)
-        XCTAssertLessThan(filtered.sampleBuffer[0], direct.sampleBuffer[0] * 0.25)
+        XCTAssertGreaterThan(direct.sampleBuffer[0], 0.25)
+        XCTAssertLessThan(filtered.sampleBuffer[0], direct.sampleBuffer[0] * 0.5)
         XCTAssertNotEqual(filtered.filterBand, 0)
+    }
+
+    func testThreeFullScaleVoicesRetainMixerHeadroom() {
+        let sid = SID()
+        sid.model = .mos8580
+        sid.writeRegister(0x18, value: 0x0F)
+        for voice in 0..<3 {
+            sid.voices[voice].control = 0x20
+            sid.voices[voice].accumulator = 0xFFFFFF
+            sid.voices[voice].envelopeLevel = 0xFF
+        }
+
+        sid.generateSample()
+
+        XCTAssertGreaterThan(sid.lastDirectOutput, 20_000)
+        XCTAssertLessThan(sid.lastDirectOutput, 32_767)
+        XCTAssertGreaterThan(sid.sampleBuffer[0], 0.5)
+        XCTAssertLessThan(sid.sampleBuffer[0], 0.8)
+    }
+
+    func testFastSampleAdvancesFilterAcrossRepresentedSIDCycles() {
+        let oneCycle = SID()
+        oneCycle.model = .mos8580
+        oneCycle.writeRegister(0x15, value: 0x07)
+        oneCycle.writeRegister(0x16, value: 0xFF)
+        oneCycle.writeRegister(0x17, value: 0x01)
+        oneCycle.writeRegister(0x18, value: 0x1F)
+
+        let oneSample = SID()
+        oneSample.model = .mos8580
+        oneSample.writeRegister(0x15, value: 0x07)
+        oneSample.writeRegister(0x16, value: 0xFF)
+        oneSample.writeRegister(0x17, value: 0x01)
+        oneSample.writeRegister(0x18, value: 0x1F)
+
+        let cycleOutput = oneCycle.applyFilter(input: 8_000)
+        let sampleOutput = oneSample.applyFilter(
+            input: 8_000,
+            elapsedCycles: oneSample.cyclesPerSample
+        )
+
+        XCTAssertEqual(cycleOutput, 0)
+        XCTAssertGreaterThan(sampleOutput, 1_000)
+        XCTAssertGreaterThan(oneSample.filterLow, oneCycle.filterLow)
     }
 
     func testFilterCutoffResponseDiffersBySIDModel() {
@@ -2640,7 +2696,7 @@ final class SIDTests: XCTestCase {
         filteredVoice3.generateSample()
 
         XCTAssertLessThan(mutedDirect.sampleBuffer[0], 0.02)
-        XCTAssertGreaterThan(filteredVoice3.sampleBuffer[0], 0.8)
+        XCTAssertGreaterThan(filteredVoice3.sampleBuffer[0], 0.15)
     }
 
     func testExternalAudioInputMixesDirectWhenNotFiltered() {

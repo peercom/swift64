@@ -89,9 +89,10 @@ public final class CPU6502 {
     }
     var interruptType: InterruptKind = .none
 
-    /// One-boundary IRQ mask override for instructions that update I too late
-    /// for the immediately following IRQ decision, such as CLI, SEI, and PLP.
-    var irqMaskOverrideForNextBoundary: Bool?
+    /// IRQ eligibility at the preceding clock, and the instruction's committed
+    /// poll result. Most instructions poll the pin at their penultimate cycle.
+    private var irqSample = false
+    private var irqPending = false
 
     /// Vector selected for the current BRK/IRQ/NMI/RESET sequence.
     var interruptVectorAddress: UInt16 = Vector.irq
@@ -115,7 +116,8 @@ public final class CPU6502 {
         jammed = false
         servicingInterrupt = false
         interruptType = .none
-        irqMaskOverrideForNextBoundary = nil
+        irqSample = false
+        irqPending = false
         interruptVectorAddress = Vector.irq
         deferNMIUntilAfterNextInstruction = false
         cycle = 0
@@ -161,11 +163,15 @@ public final class CPU6502 {
 
     /// Execute exactly one clock cycle.
     @discardableResult
-    public func tick() -> Bool {
+    public func tick(busAvailable: Bool = true) -> Bool {
         guard !jammed else { return false }
         totalCycles += 1
+        defer { irqSample = irqLine && !getFlag(Flags.interrupt) }
 
         if !rdyLine && currentCycleIsRead() {
+            // RDY holds the microcycle, not the memory pins. The C64 may also
+            // tri-state those pins with AEC while the VIC owns the shared bus.
+            if busAvailable { _ = bus.read(currentReadAddress()) }
             return true
         }
 
@@ -177,8 +183,8 @@ public final class CPU6502 {
         if cycle == 0 {
             // Check for pending interrupts at instruction boundary
             detectNMIEdge()
-            let irqMasked = irqMaskOverrideForNextBoundary ?? getFlag(Flags.interrupt)
-            irqMaskOverrideForNextBoundary = nil
+            let takeIRQ = irqPending
+            irqPending = false
 
             if resetPending {
                 resetPending = false
@@ -194,7 +200,7 @@ public final class CPU6502 {
                 acknowledgePendingNMI()
                 beginInterrupt(.nmi)
                 return true
-            } else if irqLine && !irqMasked {
+            } else if takeIRQ {
                 beginInterrupt(.irq)
                 return true
             }
@@ -204,7 +210,16 @@ public final class CPU6502 {
             pc &+= 1
             cycle = 1
         } else {
+            let previousCycle = cycle
             executeCycle()
+            if CPU6502.templateTable[Int(opcode)] == .branch {
+                // Branches poll on their offset cycle, not the final dummy
+                // cycle of a same-page taken branch. A page fixup polls again.
+                if previousCycle == 1 { irqPending = irqSample }
+                if previousCycle == 3 { irqPending = irqPending || irqSample }
+            } else if cycle == 0 {
+                irqPending = irqSample
+            }
         }
 
         return true
@@ -230,7 +245,8 @@ public final class CPU6502 {
         jammed = false
         servicingInterrupt = false
         interruptType = .none
-        irqMaskOverrideForNextBoundary = nil
+        irqSample = false
+        irqPending = false
         interruptVectorAddress = Vector.irq
         deferNMIUntilAfterNextInstruction = false
         rdyLine = true

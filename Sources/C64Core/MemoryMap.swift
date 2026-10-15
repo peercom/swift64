@@ -84,7 +84,7 @@ public final class MemoryMap: Bus {
     /// Called when the CPU writes to the SID address window while RAM/ROM is banked in.
     public var onBankedOutSIDAddressWrite: ((UInt16, UInt8) -> Void)?
 
-    /// Last value driven on the CPU data bus, used for simple open-bus reads.
+    /// Last value driven on the shared VIC/CPU data bus, used for floating reads.
     var cpuDataBus: UInt8 = 0xFF
 
     /// Number of C64 cycles that a recently driven CPU data-bus value remains
@@ -419,17 +419,27 @@ public final class MemoryMap: Bus {
 
     // MARK: - VIC memory access
 
-    /// VIC-II reads memory through its own bus (no ROM banking, sees char ROM at $1000/$9000)
+    /// VIC-II address mapping bypasses CPU banking, but drives the shared data bus.
     public func vicRead(_ address: UInt16) -> UInt8 {
+        vicRead(address, portA: cia2?.portAOut ?? 0x03)
+    }
+
+    func vicRead(_ address: UInt16, portA: UInt8) -> UInt8 {
         let addr = Int(address & 0x3FFF)  // VIC sees 16K bank
-        let bank = vicBank()
+        let bank = Int(~portA & 0x03) * 0x4000
         let physAddr = bank + addr
 
+        let value: UInt8
         // Character ROM is visible to VIC at $1000-$1FFF and $9000-$9FFF
         if (physAddr >= 0x1000 && physAddr < 0x2000) || (physAddr >= 0x9000 && physAddr < 0xA000) {
-            return charROM[physAddr & 0x0FFF]
+            value = charROM[physAddr & 0x0FFF]
+        } else {
+            value = ram[physAddr]
         }
-        return ram[physAddr]
+        // A floating CPU read in phi2 observes the preceding VIC phi1 fetch,
+        // not the CPU's previous operand byte. Do not emit CPU watchpoints.
+        driveCPUDataBus(value)
+        return value
     }
 
     /// VIC bank base address (set by CIA2 port A bits 0-1, inverted)

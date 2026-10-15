@@ -102,14 +102,20 @@ public final class CIA {
 
     /// 8×8 keyboard matrix. Each byte represents a row.
     /// Bit = 0 means key pressed.
-    public var keyboardMatrix = [UInt8](repeating: 0xFF, count: 8)
+    public var keyboardMatrix = [UInt8](repeating: 0xFF, count: 8) {
+        didSet { if keyboardMatrix != oldValue { notifyPortBPinsChanged() } }
+    }
 
     /// Joystick port 1 (CIA1 port B, $DC01)
     /// Bits: 0=Up, 1=Down, 2=Left, 3=Right, 4=Fire (active low)
-    public var joystickPort1: UInt8 = 0xFF
+    public var joystickPort1: UInt8 = 0xFF {
+        didSet { if joystickPort1 != oldValue { notifyPortBPinsChanged() } }
+    }
 
     /// Joystick port 2 (CIA1 port A, $DC00)
-    public var joystickPort2: UInt8 = 0xFF
+    public var joystickPort2: UInt8 = 0xFF {
+        didSet { if joystickPort2 != oldValue { notifyPortBPinsChanged() } }
+    }
 
     /// Is this CIA1 (true) or CIA2 (false)?
     public let isCIA1: Bool
@@ -123,6 +129,9 @@ public final class CIA {
 
     /// Callback when port A is written (used by CIA2 for IEC bus).
     public var onPortAWrite: ((UInt8) -> Void)?
+    /// Resolved old/new pin levels, including keyboard/joystick pulls on CIA1.
+    public var onPortBPinsChange: ((UInt8, UInt8) -> Void)?
+    private var lastReportedPortBPins: UInt8 = 0xFF
     /// Callback fired for each bit shifted out through the serial SP line.
     public var onSerialOutputBit: ((Bool) -> Void)?
     /// Callback fired when Timer A clocks a serial output bit on CNT.
@@ -205,6 +214,7 @@ public final class CIA {
         serialOutputPending = false
 
         onPortAWrite?(portA)
+        notifyPortBPinsChanged()
     }
 
     public func configureTOD(
@@ -372,6 +382,7 @@ public final class CIA {
         } else {
             timerAPulseCyclesRemaining = 1
         }
+        if timerAControl & 0x02 != 0 { notifyPortBPinsChanged() }
     }
 
     func updateTimerBOutput() {
@@ -380,14 +391,17 @@ public final class CIA {
         } else {
             timerBPulseCyclesRemaining = 1
         }
+        if timerBControl & 0x02 != 0 { notifyPortBPinsChanged() }
     }
 
     func expireTimerOutputPulses() {
         if timerAPulseCyclesRemaining > 0 {
             timerAPulseCyclesRemaining -= 1
+            if timerAControl & 0x02 != 0 { notifyPortBPinsChanged() }
         }
         if timerBPulseCyclesRemaining > 0 {
             timerBPulseCyclesRemaining -= 1
+            if timerBControl & 0x02 != 0 { notifyPortBPinsChanged() }
         }
     }
 
@@ -627,6 +641,9 @@ public final class CIA {
     }
 
     public func writeRegister(_ reg: UInt16, value: UInt8) {
+        defer {
+            if reg <= 3 || reg == 0x0E || reg == 0x0F { notifyPortBPinsChanged() }
+        }
         switch reg {
         case 0x00:
             portA = value
@@ -729,6 +746,15 @@ public final class CIA {
     }
 
     // MARK: - Keyboard matrix scanning
+
+    private func notifyPortBPinsChanged() {
+        guard let onPortBPinsChange else { return }
+        let pins = isCIA1 ? readKeyboardPortB() : portBOut
+        guard pins != lastReportedPortBPins else { return }
+        let previous = lastReportedPortBPins
+        lastReportedPortBPins = pins
+        onPortBPinsChange(previous, pins)
+    }
 
     /// Read keyboard from Port A. This supports the less common reverse scan:
     /// Port B drives columns, Port A reads rows.

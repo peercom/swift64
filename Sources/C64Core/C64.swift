@@ -172,7 +172,7 @@ public final class C64 {
     private var pcFFFFVectorBounceCycleCount: UInt64 = 0
     private var pcFFFFVectorBounceMask: UInt8 = 0
     private var loadNoProgressCycleCount: UInt64 = 0
-    private var lastProgressSignature: UInt64 = 0
+    private var lastProgressSignature: UInt64?
     private var lastFailureWasClearedAtCycle: UInt64 = 0
     private var pendingTypedText: [Character] = []
     private var sidTraceWriteCount = 0
@@ -240,19 +240,29 @@ public final class C64 {
             self.traceSIDRegisterWrite(register: register, value: value, reachedChip: false)
         }
 
-        // VIC memory access through the memory map
-        vic.readMemory = { [weak self] address in
-            self?.memory.vicRead(address) ?? 0
+        // MemoryMap holds weak chip references, so retaining it here creates
+        // no cycle and avoids a weak C64 lookup on every VIC bus read.
+        vic.readMemory = { [memory, cia2] address in
+            memory.vicRead(address, portA: cia2.portAOut)
         }
 
         // VIC color RAM access
-        vic.readColorRAM = { [weak self] address in
-            self?.memory.colorRAM[Int(address & 0x03FF)] ?? 0
+        vic.readColorRAM = { [memory] address in
+            memory.colorRAM[Int(address & 0x03FF)]
         }
+        vic.readCPUDataBus = { [memory] in memory.cpuDataBus }
 
         // CIA1 → CPU IRQ
         cia1.onInterrupt = { [weak self] active in
             self?.updateIRQ()
+        }
+
+        // CIA1 PB4, joystick-1 fire and the keyboard column share VIC /LP.
+        // Software raster synchronizers drive this pin through $DC01/$DC03.
+        cia1.onPortBPinsChange = { [weak vic] previous, current in
+            if previous & 0x10 != 0 && current & 0x10 == 0 {
+                vic?.triggerLightPenAtCurrentBeam()
+            }
         }
 
         // CIA2 → CPU NMI
@@ -880,7 +890,9 @@ public final class C64 {
             break
         }
 
-        let cpuStalledByVIC = vic.isStealingCPU
+        // BA drives the 6510's RDY input: reads stop during the warning
+        // interval, while pending writes may finish before AEC goes low.
+        let cpuStalledByVIC = vic.baLineLow
         cpu.setRDYLine(high: !cpuStalledByVIC)
 
         // At instruction boundaries: trace, check traps and breakpoints
@@ -897,10 +909,10 @@ public final class C64 {
         monitorCPUFailureState()
         feedKeyboardBufferIfPossible()
 
-        cpu.tick()
-
-        // VIC tick
-        vic.tick()
+        vic.beginCycle()
+        cpu.setRDYLine(high: !vic.baLineLow)
+        cpu.tick(busAvailable: !vic.aecLineLow)
+        vic.endCycle()
 
         // CIA ticks
         cia1.tick()
@@ -988,7 +1000,7 @@ public final class C64 {
         pcFFFFVectorBounceCycleCount = 0
         pcFFFFVectorBounceMask = 0
         loadNoProgressCycleCount = 0
-        lastProgressSignature = progressSignature
+        lastProgressSignature = nil
         lastFailureWasClearedAtCycle = cpu.totalCycles
     }
 
@@ -996,7 +1008,10 @@ public final class C64 {
         guard trueDriveEmulationMode != .off, drive1541.enabled, isLoadActivityLikely else {
             loadNoProgressCycleCount = 0
             drive1541.noProgressCycleCount = 0
-            lastProgressSignature = progressSignature
+            // No diagnostic snapshot is needed while no load is active.
+            // Seed the comparison on entry instead of hashing idle drive/IEC
+            // state roughly a million times per second during music playback.
+            lastProgressSignature = nil
             return
         }
 

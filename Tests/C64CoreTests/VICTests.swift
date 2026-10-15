@@ -2,6 +2,22 @@ import XCTest
 @testable import C64Core
 
 final class VICTests: XCTestCase {
+    private func openBorderForSpriteTrace(_ vic: VIC) {
+        // Isolate sprite output with an already-open border. Blank background
+        // matches the border color so transparent-pixel assertions stay explicit.
+        vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
+        vic.horizontalBorderActive = false
+        vic.backgroundColor[0] = vic.borderColor
+    }
+
+    private func fetchCompleteRow(_ vic: VIC, sprite: Int) {
+        vic.fetchSpriteData(sprite: sprite)
+        vic.rasterCycle = (vic.rasterCycle + 1) % vic.rasterCyclesPerLine
+        vic.fetchSpriteMiddleByte(sprite: sprite, recordTrace: vic.recordsBusAccessTraces)
+        vic.fetchSpriteLastByte(sprite: sprite)
+    }
+
     func testDebugRegisterValueReportsEffectiveVICStateWithoutReadSideEffects() {
         let vic = VIC()
         vic.writeRegister(0x00, value: 0x34)
@@ -265,7 +281,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.videoCounterBase, 80)
     }
 
-    func testRenderRasterlineAdvancesDisplayRowWhenBeamTraceOpenedDisplay() {
+    func testRenderRasterlineDoesNotAdvanceCountersEvenWithAnOpenBeamTrace() {
         let vic = VIC()
         let line = UInt16(VIC.displayTop)
 
@@ -278,14 +294,16 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = line
         vic.rasterTraceHasSamples = true
         vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceHasGraphicsOutput = true
         vic.rasterTraceValid[VIC.displayLeft] = true
         vic.rasterTraceDisplayOpen[VIC.displayLeft] = true
+        vic.rasterTraceGraphicsOutput[VIC.displayLeft] = true
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x07 }
 
         vic.renderRasterline()
 
-        XCTAssertEqual(vic.rowCounter, 4)
+        XCTAssertEqual(vic.rowCounter, 3)
     }
 
     func testMidlineBorderColorWriteIsLatchedAtRasterPosition() {
@@ -304,7 +322,7 @@ final class VICTests: XCTestCase {
             vic.tick()
         }
 
-        let splitPixel = splitCycle * VIC.screenWidth / VIC.palCyclesPerLine
+        let splitPixel = splitCycle * 8 - 100
         XCTAssertEqual(vic.framebuffer[splitPixel - 1], ColorPalette.rgba[2])
         XCTAssertEqual(vic.framebuffer[splitPixel + 1], ColorPalette.rgba[5])
     }
@@ -335,6 +353,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineBackgroundColorWriteDoesNotOverrideBitmapScreenBackground() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -396,6 +415,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineBackgroundColorWriteDoesNotOverrideECMAlternateBackground() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -427,6 +447,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineBackgroundColorOneWriteIsLatchedForMulticolorText() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -457,6 +478,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineBackgroundColorTwoWriteIsLatchedForMulticolorText() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -487,6 +509,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineBackgroundColorThreeWriteIsLatchedForECMBackground() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -579,6 +602,7 @@ final class VICTests: XCTestCase {
 
     func testMidlineColumnModeWriteKeepsAlreadyScannedLeftEdgeOpen() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -594,7 +618,7 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 8 {
+        while vic.rasterCycle < 18 {
             vic.tick()
         }
         vic.writeRegister(0x16, value: 0xC0)
@@ -608,8 +632,9 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 7], ColorPalette.rgba[7])
     }
 
-    func testMidlineDisplayDisableKeepsAlreadyScannedGraphicsVisible() {
+    func testMidlineDENClearingDoesNotBlankCurrentGraphics() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -617,14 +642,14 @@ final class VICTests: XCTestCase {
         vic.borderColor = 0x02
         vic.readMemory = { address in
             switch address {
-            case 0x0400: return 0x01
+            case 0x0400...0x0427: return 0x01
             case 0x1008: return 0xFF
             default: return 0x00
             }
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 8 {
+        while vic.rasterCycle < 18 {
             vic.tick()
         }
         vic.writeRegister(0x11, value: 0x0B)
@@ -635,10 +660,10 @@ final class VICTests: XCTestCase {
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 4], ColorPalette.rgba[7])
-        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 20], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 20], ColorPalette.rgba[7])
     }
 
-    func testMidlineDisplayEnableOpensOnlyLaterGraphicsPixels() {
+    func testMidlineDENSettingAfterLeftComparisonDoesNotOpenCurrentBorder() {
         let vic = VIC()
         let line = UInt16(VIC.displayTop)
 
@@ -666,11 +691,12 @@ final class VICTests: XCTestCase {
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 20], ColorPalette.rgba[2])
-        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 20], ColorPalette.rgba[7])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 20], ColorPalette.rgba[2])
     }
 
     func testMidlineTwentyFourRowModeWriteKeepsAlreadyScannedTopLineVisible() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -687,7 +713,7 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 8 {
+        while vic.rasterCycle < 18 {
             vic.tick()
         }
         vic.writeRegister(0x11, value: 0x13)
@@ -713,7 +739,7 @@ final class VICTests: XCTestCase {
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x07 }
 
-        vic.tick()
+        while vic.rasterCycle < 18 { vic.tick() }
         vic.writeRegister(0x11, value: 0x1B)
         while vic.rasterLine == line {
             vic.tick()
@@ -732,6 +758,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = startLine
         vic.displayActive = true
         vic.verticalBorderActive = true
+        vic.verticalBorderClosePending = true
         vic.controlReg1 = 0x1B
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -753,12 +780,14 @@ final class VICTests: XCTestCase {
 
     func testTwentyFiveRowTopBorderOpensOnExactComparisonLine() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let startLine = UInt16(VIC.displayTop - 1)
         let openLine = UInt16(VIC.displayTop)
 
         vic.rasterLine = startLine
         vic.displayActive = false
         vic.verticalBorderActive = true
+        vic.verticalBorderClosePending = true
         vic.controlReg1 = 0x1B
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -785,6 +814,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = closedLine
         vic.displayActive = true
         vic.verticalBorderActive = true
+        vic.verticalBorderClosePending = true
         vic.controlReg1 = 0x13
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -792,6 +822,10 @@ final class VICTests: XCTestCase {
             address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
         }
         vic.readColorRAM = { _ in 0x07 }
+
+        // This border fixture starts after the matrix row's bad line.
+        vic.lineBuffer = [UInt8](repeating: 1, count: 40)
+        vic.colorBuffer = [UInt8](repeating: 7, count: 40)
 
         while vic.rasterLine <= openLine {
             vic.tick()
@@ -815,7 +849,7 @@ final class VICTests: XCTestCase {
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 53 {
+        while vic.rasterCycle < 56 {
             vic.tick()
         }
         vic.writeRegister(0x16, value: 0xC0)
@@ -841,8 +875,10 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = line
         vic.rasterTraceHasSamples = true
         vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceHasGraphicsOutput = true
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.readMemory = { address in
             switch address {
             case 0x0427: return 0x01
@@ -871,7 +907,7 @@ final class VICTests: XCTestCase {
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 53 {
+        while vic.rasterCycle < 55 {
             vic.tick()
         }
         vic.writeRegister(0x16, value: 0xC8)
@@ -896,7 +932,7 @@ final class VICTests: XCTestCase {
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 4 {
+        while vic.rasterCycle < 17 {
             vic.tick()
         }
         vic.writeRegister(0x16, value: 0xC8)
@@ -911,11 +947,13 @@ final class VICTests: XCTestCase {
 
     func testRasterTraceOpensLeftBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = true
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -944,12 +982,14 @@ final class VICTests: XCTestCase {
 
     func testRasterTraceOpensThirtyEightColumnLeftBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
         let leftBorder = VIC.displayLeft + 7
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = true
         vic.controlReg2 = 0xC0
         vic.backgroundColor[0] = 0x01
@@ -979,12 +1019,14 @@ final class VICTests: XCTestCase {
 
     func testNTSCRasterTraceOpensLeftBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         vic.videoStandard = .ntsc
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = true
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1013,6 +1055,7 @@ final class VICTests: XCTestCase {
 
     func testNTSCRasterTraceOpensThirtyEightColumnLeftBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         vic.videoStandard = .ntsc
         let line = UInt16(VIC.displayTop)
         let leftBorder = VIC.displayLeft + 7
@@ -1020,6 +1063,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = true
         vic.controlReg2 = 0xC0
         vic.backgroundColor[0] = 0x01
@@ -1049,11 +1093,13 @@ final class VICTests: XCTestCase {
 
     func testBehindPrioritySpriteStartsCollidingAtExactLeftBorderOpenPixel() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = true
         vic.borderColor = 0x02
         vic.spriteEnabled = 0x01
@@ -1062,7 +1108,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(VIC.displayLeft - 1)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xC0, 0x00, 0x00])
         vic.readMemory = { address in
             switch address {
             case 0x0400: return 0x01
@@ -1078,7 +1124,7 @@ final class VICTests: XCTestCase {
 
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
-        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft - 1], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft - 1], ColorPalette.rgba[2])
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft], ColorPalette.rgba[7])
         XCTAssertEqual(vic.readRegister(0x1F), 0x01)
     }
@@ -1090,6 +1136,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1112,12 +1159,14 @@ final class VICTests: XCTestCase {
 
     func testRasterTraceClosesThirtyEightColumnRightBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
         let rightBorder = VIC.displayRight - 9
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.controlReg2 = 0xC0
         vic.backgroundColor[0] = 0x01
@@ -1153,6 +1202,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1175,6 +1225,7 @@ final class VICTests: XCTestCase {
 
     func testNTSCRasterTraceClosesThirtyEightColumnRightBorderAtExactComparisonPixelWithinCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         vic.videoStandard = .ntsc
         let line = UInt16(VIC.displayTop)
         let rightBorder = VIC.displayRight - 9
@@ -1182,6 +1233,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.controlReg2 = 0xC0
         vic.backgroundColor[0] = 0x01
@@ -1209,13 +1261,15 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + rightBorder], ColorPalette.rgba[2])
     }
 
-    func testBehindPrioritySpriteStopsCollidingAfterExactRightBorderClosePixel() {
+    func testBehindPrioritySpriteIsMaskedAtExactRightBorderClosePixel() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.borderColor = 0x02
         vic.spriteEnabled = 0x01
@@ -1224,7 +1278,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(VIC.displayRight - 1)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xC0, 0x00, 0x00])
         vic.readMemory = { address in
             switch address {
             case 0x0427: return 0x01
@@ -1241,7 +1295,7 @@ final class VICTests: XCTestCase {
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let rowOffset = fbY * VIC.screenWidth
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight - 1], ColorPalette.rgba[7])
-        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayRight], ColorPalette.rgba[2])
         XCTAssertEqual(vic.readRegister(0x1F), 0x01)
     }
 
@@ -1252,6 +1306,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
         vic.readMemory = { _ in 0x00 }
@@ -1274,6 +1329,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = openLine
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.controlReg1 = 0x1B
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1281,6 +1337,10 @@ final class VICTests: XCTestCase {
             address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
         }
         vic.readColorRAM = { _ in 0x07 }
+
+        // This border fixture starts after the matrix row's bad line.
+        vic.lineBuffer = [UInt8](repeating: 1, count: 40)
+        vic.colorBuffer = [UInt8](repeating: 7, count: 40)
 
         while vic.rasterLine <= closedLine {
             vic.tick()
@@ -1300,6 +1360,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = openLine
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.controlReg1 = 0x13
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1307,6 +1368,10 @@ final class VICTests: XCTestCase {
             address >= 0x1000 && address < 0x1800 ? 0xFF : 0x01
         }
         vic.readColorRAM = { _ in 0x07 }
+
+        // This border fixture starts after the matrix row's bad line.
+        vic.lineBuffer = [UInt8](repeating: 1, count: 40)
+        vic.colorBuffer = [UInt8](repeating: 7, count: 40)
 
         while vic.rasterLine <= closedLine {
             vic.tick()
@@ -1326,6 +1391,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = startLine
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.controlReg1 = 0x1B
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1359,6 +1425,7 @@ final class VICTests: XCTestCase {
         vic.rasterLine = startLine
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.controlReg1 = 0x13
         vic.backgroundColor[0] = 0x01
         vic.borderColor = 0x02
@@ -1386,6 +1453,7 @@ final class VICTests: XCTestCase {
         vic.rasterCycle = 15
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.readMemory = { address in
             reads.append(address)
             switch address {
@@ -1396,17 +1464,23 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
+        vic.videoCounterBase = 1000
+        vic.videoCounter = 1000
+        vic.rowCounter = 1
+        vic.lineBuffer[0] = 1
+        vic.colorBuffer[0] = 7
         vic.performLowPhaseAccess()
 
         XCTAssertEqual(vic.graphicsBuffer[0], 0x80)
         XCTAssertEqual(vic.graphicsBufferBase, 1000)
         XCTAssertEqual(vic.graphicsBufferPixelRow, 1)
-        XCTAssertTrue(reads.contains(0x07E8))
+        XCTAssertFalse(reads.contains(0x07E8))
         XCTAssertTrue(reads.contains(0x1009))
     }
 
     func testLowPhaseGraphicsModeLatchesPerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -1443,6 +1517,7 @@ final class VICTests: XCTestCase {
 
     func testLowPhaseHorizontalScrollLatchesPerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -1476,6 +1551,7 @@ final class VICTests: XCTestCase {
 
     func testLowPhaseMemoryPointerLatchesCharacterBasePerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
         var reads: [UInt16] = []
 
@@ -1513,6 +1589,7 @@ final class VICTests: XCTestCase {
 
     func testLowPhaseControlReg1LatchesBitmapModePerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -1547,6 +1624,7 @@ final class VICTests: XCTestCase {
 
     func testLowPhaseControlReg1LatchesExtendedBackgroundModePerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
         var reads: [UInt16] = []
 
@@ -1585,6 +1663,7 @@ final class VICTests: XCTestCase {
 
     func testLowPhaseMemoryPointerLatchesBitmapBasePerColumnDuringRasterSplit() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
         var reads: [UInt16] = []
 
@@ -1621,7 +1700,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 2 * 8 + 1], ColorPalette.rgba[7])
     }
 
-    func testLowPhaseDisplayDataUsesCurrentScreenBaseForUnlatchedMatrixColumn() {
+    func testLowPhaseDisplayDataDoesNotInventAMatrixReadForAnUnfetchedColumn() {
         let vic = VIC()
         vic.rasterLine = UInt16(VIC.displayTop)
         vic.rasterCycle = 15
@@ -1639,10 +1718,10 @@ final class VICTests: XCTestCase {
 
         vic.performLowPhaseAccess()
 
-        XCTAssertEqual(vic.graphicsBuffer[0], 0x80)
+        XCTAssertEqual(vic.graphicsBuffer[0], 0)
         XCTAssertEqual(vic.graphicsBufferMemoryPointers[0], 0x24)
-        XCTAssertEqual(reads, [0x0800, 0x1018])
-        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0800, 0x1018])
+        XCTAssertEqual(reads, [0x1000])
+        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x1000])
     }
 
     func testPALTimingUsesSixtyThreeCyclesAndThreeHundredTwelveLines() {
@@ -1679,9 +1758,8 @@ final class VICTests: XCTestCase {
         XCTAssertTrue(vic.frameReady)
     }
 
-    func testSpritesRenderOverVisibleBorderArea() {
+    func testClosedBorderMasksSpritePixels() {
         let vic = VIC()
-        let spriteColor = ColorPalette.rgba[1]
         let borderColor = ColorPalette.rgba[2]
 
         vic.rasterLine = UInt16(VIC.firstVisibleLine)
@@ -1690,11 +1768,11 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 10
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderRasterline()
 
-        XCTAssertEqual(vic.framebuffer[10], spriteColor)
+        XCTAssertEqual(vic.framebuffer[10], borderColor)
         XCTAssertEqual(vic.framebuffer[9], borderColor)
     }
 
@@ -1750,9 +1828,8 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + firstVisible38ColumnPixel], fgColor)
     }
 
-    func testPrioritySpriteInBorderIgnoresHiddenDisplayForegroundMask() {
+    func testPrioritySpriteInClosedBorderStillCollidesWithHiddenGraphics() {
         let vic = VIC()
-        let spriteColor = ColorPalette.rgba[1]
         let borderColor = ColorPalette.rgba[2]
         let fbY = VIC.displayTop - VIC.firstVisibleLine
         let borderX = VIC.displayRight
@@ -1766,7 +1843,7 @@ final class VICTests: XCTestCase {
         vic.spritePriority = 0x01
         vic.spriteX[0] = UInt16(borderX)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { address in
             if address == 0x0427 { return 0x01 }
             if address == 0x1008 { return 0xFF }
@@ -1776,9 +1853,9 @@ final class VICTests: XCTestCase {
 
         vic.renderRasterline()
 
-        XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + borderX], spriteColor)
+        XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + borderX], borderColor)
         XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + borderX + 1], borderColor)
-        XCTAssertEqual(vic.readRegister(0x1F), 0x00)
+        XCTAssertEqual(vic.readRegister(0x1F), 0x01)
     }
 
     func testExtendedBackgroundModeMasksCharacterCodeForGlyphFetch() {
@@ -2214,7 +2291,7 @@ final class VICTests: XCTestCase {
         vic.writeRegister(0x1A, value: 0x08)
         vic.triggerLightPenAtCurrentBeam()
 
-        let expectedBeamX = 31 * 512 / VIC.palCyclesPerLine
+        let expectedBeamX = 156
         XCTAssertEqual(vic.readRegister(0x13), UInt8((expectedBeamX >> 1) & 0xFF))
         XCTAssertEqual(vic.readRegister(0x14), 251)
         XCTAssertEqual(vic.readRegister(0x19), 0xF8)
@@ -2229,7 +2306,7 @@ final class VICTests: XCTestCase {
 
         vic.triggerLightPenAtCurrentBeam()
 
-        let expectedBeamX = 64 * 512 / VIC.ntscCyclesPerLine
+        let expectedBeamX = 412
         XCTAssertEqual(vic.readRegister(0x13), UInt8((expectedBeamX >> 1) & 0xFF))
         XCTAssertEqual(vic.readRegister(0x14), 250)
     }
@@ -2498,7 +2575,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2508,6 +2585,7 @@ final class VICTests: XCTestCase {
 
     func testSpritePixelsWrapAroundNineBitHorizontalCounter() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         let spriteColor = ColorPalette.rgba[1]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
@@ -2516,7 +2594,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2528,6 +2606,7 @@ final class VICTests: XCTestCase {
 
     func testExpandedSpritePixelsWrapAroundNineBitHorizontalCounter() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         let spriteColor = ColorPalette.rgba[1]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
@@ -2537,7 +2616,7 @@ final class VICTests: XCTestCase {
         vic.spriteExpandX = 0x01
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xF0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xF0, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2549,6 +2628,7 @@ final class VICTests: XCTestCase {
 
     func testMulticolorSpritePixelsWrapAroundNineBitHorizontalCounter() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2559,7 +2639,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x02
         vic.spriteColors[0] = 0x03
         vic.spriteMulticolor1 = 0x04
-        vic.spriteLineData[0] = [0b01101100, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01101100, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2572,6 +2652,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedSpriteStopsAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2579,7 +2660,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2591,6 +2672,7 @@ final class VICTests: XCTestCase {
 
     func testExpandedWrappedSpriteStopsAfterExpandedWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2599,7 +2681,7 @@ final class VICTests: XCTestCase {
         vic.spriteExpandX = 0x01
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2611,6 +2693,7 @@ final class VICTests: XCTestCase {
 
     func testMulticolorWrappedSpriteStopsAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2621,7 +2704,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x05
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2633,6 +2716,7 @@ final class VICTests: XCTestCase {
 
     func testExpandedMulticolorWrappedSpriteStopsAfterExpandedWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2644,7 +2728,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x05
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2656,6 +2740,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedSpriteDoesNotCollideWithForegroundAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
@@ -2665,7 +2750,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -2676,6 +2761,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedSpritesDoNotCollideAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2686,8 +2772,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 20
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2706,14 +2792,14 @@ final class VICTests: XCTestCase {
         foregroundMask[0] = true
 
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteX[0] = 0
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         XCTAssertEqual(vic.activeVisibleSpriteMask(), 0x02)
 
@@ -2733,15 +2819,15 @@ final class VICTests: XCTestCase {
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
 
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteExpandX = 0x03
         vic.spriteX[0] = 0
         vic.spriteX[1] = 1
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2759,7 +2845,7 @@ final class VICTests: XCTestCase {
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
 
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteMulticolor = 0x03
         vic.spriteX[0] = 0
@@ -2767,8 +2853,8 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0b01000000, 0x00, 0x00]
-        vic.spriteLineData[1] = [0b01000000, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01000000, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0b01000000, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2783,14 +2869,14 @@ final class VICTests: XCTestCase {
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
 
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteX[0] = 0
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2800,6 +2886,7 @@ final class VICTests: XCTestCase {
 
     func testSpriteLocalXRejectsPixelsAfterNormalWrappedWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         vic.spriteX[0] = 508
 
         XCTAssertEqual(vic.spriteLocalX(sprite: 0, visibleX: 0), 4)
@@ -2810,6 +2897,7 @@ final class VICTests: XCTestCase {
 
     func testSpriteLocalXRejectsPixelsAfterExpandedWrappedWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         vic.spriteExpandX = 0x01
         vic.spriteX[0] = 508
 
@@ -2821,6 +2909,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedSpritePixelsCollideWithVisibleSpriteAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2831,8 +2920,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
-        vic.spriteLineData[1] = [0xF0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0xF0, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2843,6 +2932,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedMulticolorSpritePixelsCollideWithVisibleSpriteAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
 
@@ -2855,8 +2945,8 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0b01010101, 0b00000000, 0b00000000]
-        vic.spriteLineData[1] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b00000000, 0b00000000])
+        vic.seedSpriteRow(1, bytes: [0xC0, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2867,6 +2957,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedSpriteDataCollisionUsesForegroundMaskAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
@@ -2876,7 +2967,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x08, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x08, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -2886,6 +2977,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedMulticolorSpriteDataCollisionUsesForegroundMaskAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
@@ -2898,7 +2990,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x05
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -2908,6 +3000,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedPrioritySpriteStaysBehindForegroundAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
@@ -2918,7 +3011,7 @@ final class VICTests: XCTestCase {
         vic.spritePriority = 0x01
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x08, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x08, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -2928,6 +3021,7 @@ final class VICTests: XCTestCase {
 
     func testWrappedMulticolorPrioritySpriteStaysBehindForegroundAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let background = ColorPalette.rgba[0]
         var line = [UInt32](repeating: background, count: VIC.screenWidth)
         var foregroundMask = [Bool](repeating: false, count: VIC.screenWidth)
@@ -2941,7 +3035,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x05
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -2962,7 +3056,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x02
         vic.spriteColors[0] = 0x03
         vic.spriteMulticolor1 = 0x04
-        vic.spriteLineData[0] = [0b00011011, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b00011011, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -2978,13 +3072,14 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x27, value: 0x05)
@@ -2998,14 +3093,16 @@ final class VICTests: XCTestCase {
 
     func testBeamSpriteTraceWrapsAroundNineBitHorizontalCounter() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0x00, 0x00])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3018,14 +3115,16 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedSpriteStopsAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 508
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3039,9 +3138,11 @@ final class VICTests: XCTestCase {
 
     func testBeamMulticolorWrappedSpriteStopsAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteMulticolor = 0x01
@@ -3049,7 +3150,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x05
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3063,9 +3164,11 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedSpritesDoNotCollideAfterVisibleWidth() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x03
         vic.spriteDisplay[0] = true
         vic.spriteDisplay[1] = true
@@ -3073,8 +3176,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 20
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3087,9 +3190,11 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedSpritesCollideAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x03
         vic.spriteDisplay[0] = true
         vic.spriteDisplay[1] = true
@@ -3097,8 +3202,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
-        vic.spriteLineData[1] = [0xF0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0xF0, 0x00, 0x00])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3111,9 +3216,11 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedMulticolorSpritesCollideAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x03
         vic.spriteDisplay[0] = true
         vic.spriteDisplay[1] = true
@@ -3123,8 +3230,8 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0b01010101, 0b00000000, 0b00000000]
-        vic.spriteLineData[1] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b00000000, 0b00000000])
+        vic.seedSpriteRow(1, bytes: [0xC0, 0x00, 0x00])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3137,6 +3244,7 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedMulticolorSpriteDataCollisionUsesForegroundAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
 
@@ -3145,6 +3253,7 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[VIC.displayLeft] = true
         vic.rasterTraceDisplayOpen[VIC.displayLeft] = true
+        vic.rasterTraceGraphicsOutput[VIC.displayLeft] = true
         vic.spriteTraceLine = vic.rasterLine
         vic.writeRegister(0x1A, value: 0x02)
 
@@ -3167,7 +3276,7 @@ final class VICTests: XCTestCase {
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3182,12 +3291,14 @@ final class VICTests: XCTestCase {
 
     func testBeamWrappedMulticolorPrioritySpriteStaysBehindForegroundAtLeftEdge() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
 
         vic.rasterLine = UInt16(VIC.displayTop)
         vic.displayActive = true
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[VIC.displayLeft] = true
         vic.rasterTraceDisplayOpen[VIC.displayLeft] = true
+        vic.rasterTraceGraphicsOutput[VIC.displayLeft] = true
         vic.spriteTraceLine = vic.rasterLine
 
         vic.graphicsBufferBase = 0
@@ -3210,7 +3321,7 @@ final class VICTests: XCTestCase {
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3228,6 +3339,7 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteMulticolor = 0x01
@@ -3235,9 +3347,9 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x02
         vic.spriteColors[0] = 0x03
         vic.spriteMulticolor1 = 0x04
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x25, value: 0x05)
@@ -3254,6 +3366,7 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteMulticolor = 0x01
@@ -3261,9 +3374,9 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x02
         vic.spriteColors[0] = 0x03
         vic.spriteMulticolor1 = 0x04
-        vic.spriteLineData[0] = [0b11111111, 0b11111111, 0b11111111]
+        vic.seedSpriteRow(0, bytes: [0b11111111, 0b11111111, 0b11111111])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x26, value: 0x06)
@@ -3280,15 +3393,16 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteMulticolor0 = 0x02
         vic.spriteColors[0] = 0x03
         vic.spriteMulticolor1 = 0x04
-        vic.spriteLineData[0] = [0b01010101, 0b01010101, 0b01010101]
+        vic.seedSpriteRow(0, bytes: [0b01010101, 0b01010101, 0b01010101])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x1C, value: 0x01)
@@ -3305,13 +3419,14 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0x00, 0x00])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x1D, value: 0x01)
@@ -3320,7 +3435,8 @@ final class VICTests: XCTestCase {
         }
 
         XCTAssertEqual(vic.framebuffer[7], ColorPalette.rgba[1])
-        XCTAssertEqual(vic.framebuffer[15], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
+        XCTAssertEqual(vic.framebuffer[15], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
         XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
     }
 
@@ -3329,13 +3445,14 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x10, value: 0x01)
@@ -3345,7 +3462,9 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[1])
         XCTAssertEqual(vic.framebuffer[32], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
-        XCTAssertEqual(vic.framebuffer[256], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[23], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[256], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
     }
 
     func testBeamSpriteTraceRaisesSpriteCollisionDuringRasterCycle() {
@@ -3361,11 +3480,15 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
+        for _ in 0..<13 { vic.tick() }
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
         vic.tick()
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF4)
         XCTAssertEqual(irqStates, [true])
@@ -3379,14 +3502,14 @@ final class VICTests: XCTestCase {
 
         vic.rasterLine = UInt16(VIC.firstVisibleLine)
         vic.spriteEnabled = 0x03
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteX[0] = 20
         vic.spriteX[1] = 20
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
         vic.tick()
@@ -3403,15 +3526,15 @@ final class VICTests: XCTestCase {
 
         vic.rasterLine = UInt16(VIC.firstVisibleLine)
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteExpandX = 0x03
         vic.spriteX[0] = 0
         vic.spriteX[1] = 1
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
         vic.tick()
@@ -3428,7 +3551,7 @@ final class VICTests: XCTestCase {
 
         vic.rasterLine = UInt16(VIC.firstVisibleLine)
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteMulticolor = 0x03
         vic.spriteX[0] = 0
@@ -3436,8 +3559,8 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0b01000000, 0x00, 0x00]
-        vic.spriteLineData[1] = [0b01000000, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01000000, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0b01000000, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
         vic.tick()
@@ -3452,15 +3575,16 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteX[0] = 0
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         while vic.rasterLine == line {
             vic.tick()
@@ -3470,7 +3594,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.readRegister(0x1E), 0x00)
     }
 
-    func testBeamMidlineEnableSetStartsLaterSpriteCollision() {
+    func testBeamEnableSetAloneDoesNotActivateSpriteOrCollision() {
         let vic = VIC()
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
@@ -3478,14 +3602,14 @@ final class VICTests: XCTestCase {
         vic.rasterLine = UInt16(VIC.firstVisibleLine)
         vic.spriteTraceLine = vic.rasterLine
         vic.spriteEnabled = 0x02
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteDisplay[1] = true
         vic.spriteX[0] = 20
         vic.spriteX[1] = 20
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
-        vic.spriteLineData[1] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
+        vic.seedSpriteRow(1, bytes: [0xFF, 0xFF, 0xFF])
         vic.writeRegister(0x1A, value: 0x04)
 
         vic.captureSpriteTrace(startPixel: 20, endPixel: 21)
@@ -3494,9 +3618,9 @@ final class VICTests: XCTestCase {
         vic.writeRegister(0x15, value: 0x03)
         vic.captureSpriteTrace(startPixel: 21, endPixel: 22)
 
-        XCTAssertEqual(vic.readRegister(0x1E), 0x03)
-        XCTAssertEqual(vic.readRegister(0x19), 0xF4)
-        XCTAssertEqual(irqStates, [true])
+        XCTAssertEqual(vic.readRegister(0x1E), 0x00)
+        XCTAssertEqual(vic.readRegister(0x19), 0x70)
+        XCTAssertEqual(irqStates, [])
     }
 
     func testBeamSpriteTraceRaisesExpandedSpriteCollisionDuringRasterCycle() {
@@ -3513,11 +3637,15 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 1
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
+        for _ in 0..<13 { vic.tick() }
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
         vic.tick()
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF4)
         XCTAssertEqual(irqStates, [true])
@@ -3539,11 +3667,15 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0b01000000, 0x00, 0x00]
-        vic.spriteLineData[1] = [0b01000000, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01000000, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0b01000000, 0x00, 0x00])
         vic.writeRegister(0x1A, value: 0x04)
 
+        for _ in 0..<13 { vic.tick() }
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
         vic.tick()
+        XCTAssertEqual(vic.readRegister(0x1E), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF4)
         XCTAssertEqual(irqStates, [true])
@@ -3561,8 +3693,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = 0
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
-        vic.spriteLineData[1] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xC0, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0xC0, 0x00, 0x00])
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[0] = true
         vic.rasterTraceValid[1] = true
@@ -3580,6 +3712,7 @@ final class VICTests: XCTestCase {
 
     func testBeamSpriteTraceRaisesSpriteDataCollisionDuringRasterCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
 
@@ -3591,7 +3724,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { address in
             switch address {
             case 0x0400: return 0x01
@@ -3601,12 +3734,16 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 3 {
+        while vic.rasterCycle < 15 {
             vic.tick()
         }
         XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x00)
 
         vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x01)
         XCTAssertEqual(vic.readRegister(0x19), 0xF2)
@@ -3623,6 +3760,7 @@ final class VICTests: XCTestCase {
 
     func testBeamSpriteTraceRaisesExpandedSpriteDataCollisionDuringRasterCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
 
@@ -3635,7 +3773,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(VIC.displayLeft - 1)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { address in
             switch address {
             case 0x0400: return 0x01
@@ -3645,12 +3783,16 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 3 {
+        while vic.rasterCycle < 15 {
             vic.tick()
         }
         XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x00)
 
         vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF2)
         XCTAssertEqual(irqStates, [true])
@@ -3659,6 +3801,7 @@ final class VICTests: XCTestCase {
 
     func testBeamSpriteTraceRaisesMulticolorSpriteDataCollisionDuringRasterCycle() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         var irqStates: [Bool] = []
         vic.onIRQ = { irqStates.append($0) }
 
@@ -3673,7 +3816,7 @@ final class VICTests: XCTestCase {
         vic.spriteMulticolor0 = 0x04
         vic.spriteColors[0] = 0x01
         vic.spriteMulticolor1 = 0x02
-        vic.spriteLineData[0] = [0b01000000, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0b01000000, 0x00, 0x00])
         vic.readMemory = { address in
             switch address {
             case 0x0400: return 0x01
@@ -3683,12 +3826,16 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 3 {
+        while vic.rasterCycle < 15 {
             vic.tick()
         }
         XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x00)
 
         vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick()
+        XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0)
+        vic.tick() // Twelve-dot coincidence-to-register latency.
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF2)
         XCTAssertEqual(irqStates, [true])
@@ -3706,6 +3853,7 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.spriteTraceLine = vic.rasterLine
         vic.writeRegister(0x1A, value: 0x02)
 
@@ -3725,7 +3873,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3745,6 +3893,7 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.spriteTraceLine = vic.rasterLine
 
         vic.graphicsBufferBase = 0
@@ -3764,7 +3913,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3786,6 +3935,7 @@ final class VICTests: XCTestCase {
         vic.rasterTraceLine = vic.rasterLine
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.spriteTraceLine = vic.rasterLine
 
         vic.graphicsBufferBase = 0
@@ -3805,7 +3955,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3853,7 +4003,7 @@ final class VICTests: XCTestCase {
         vic.spritePriority = 0x01
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -3896,7 +4046,7 @@ final class VICTests: XCTestCase {
         vic.spritePriority = 0x01
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -3914,7 +4064,9 @@ final class VICTests: XCTestCase {
         vic.rasterTraceValid[x] = true
         vic.rasterTraceValid[x + 1] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.rasterTraceDisplayOpen[x + 1] = true
+        vic.rasterTraceGraphicsOutput[x + 1] = true
         vic.spriteTraceLine = vic.rasterLine
 
         vic.graphicsBufferBase = 0
@@ -3933,7 +4085,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xC0, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -3945,16 +4097,17 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.debugRegisterValue(0xD01F), 0x01)
     }
 
-    func testBeamSpriteTraceHonorsMidlineEnableChangesByRasterPosition() {
+    func testBeamEnableClearDoesNotMaskActiveSpritePixels() {
         let vic = VIC()
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         while vic.rasterCycle < 2 {
             vic.tick()
@@ -3965,20 +4118,20 @@ final class VICTests: XCTestCase {
         }
 
         XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[1])
-        XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
+        XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[1])
     }
 
-    func testBeamSpriteTraceHonorsMidlineEnableSetByRasterPosition() {
+    func testBeamEnableSetDoesNotBypassDisplayLatch() {
         let vic = VIC()
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
         vic.spriteTraceLine = line
         vic.spriteEnabled = 0x00
-        vic.spriteDisplay[0] = true
+        vic.spriteDisplay[0] = false
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
         vic.captureSpriteTrace(startPixel: 8, endPixel: 9)
         vic.writeRegister(0x15, value: 0x01)
@@ -3986,8 +4139,8 @@ final class VICTests: XCTestCase {
 
         XCTAssertFalse(vic.spriteTraceValid[8])
         XCTAssertEqual(vic.spriteTraceColor[8], 0)
-        XCTAssertTrue(vic.spriteTraceValid[16])
-        XCTAssertEqual(vic.spriteTraceColor[16], ColorPalette.rgba[1])
+        XCTAssertFalse(vic.spriteTraceValid[16])
+        XCTAssertEqual(vic.spriteTraceColor[16], 0)
     }
 
     func testBeamSpriteTraceHonorsMidlineXPositionChangesByRasterPosition() {
@@ -3995,13 +4148,14 @@ final class VICTests: XCTestCase {
         let line = UInt16(VIC.firstVisibleLine)
 
         vic.rasterLine = line
+        openBorderForSpriteTrace(vic)
         vic.spriteEnabled = 0x01
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = 0
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
 
-        while vic.rasterCycle < 2 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
         vic.writeRegister(0x00, value: 40)
@@ -4011,11 +4165,14 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.framebuffer[8], ColorPalette.rgba[1])
         XCTAssertEqual(vic.framebuffer[32], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
-        XCTAssertEqual(vic.framebuffer[40], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[16], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[23], ColorPalette.rgba[1])
+        XCTAssertEqual(vic.framebuffer[40], ColorPalette.rgba[Int(vic.borderColor & 0x0F)])
     }
 
     func testBeamSpriteTraceHonorsMidlinePriorityChangesByRasterPosition() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -4025,7 +4182,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
         vic.readMemory = { address in
             switch address {
             case 0x0400...0x0427: return 0x01
@@ -4035,7 +4192,7 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x07 }
 
-        while vic.rasterCycle < 5 {
+        while vic.rasterCycle < 17 {
             vic.tick()
         }
         vic.writeRegister(0x1B, value: 0x01)
@@ -4056,12 +4213,15 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.rasterTraceLine = line
         vic.rasterTraceHasSamples = true
         vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceHasGraphicsOutput = true
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.spriteTraceLine = line
 
         vic.graphicsBufferBase = 0
@@ -4081,7 +4241,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -4101,12 +4261,15 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.rasterTraceLine = line
         vic.rasterTraceHasSamples = true
         vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceHasGraphicsOutput = true
         vic.rasterTraceValid[x] = true
         vic.rasterTraceDisplayOpen[x] = true
+        vic.rasterTraceGraphicsOutput[x] = true
         vic.spriteTraceLine = line
 
         vic.graphicsBufferBase = 0
@@ -4126,7 +4289,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(x)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -4147,12 +4310,15 @@ final class VICTests: XCTestCase {
         vic.rasterLine = line
         vic.displayActive = true
         vic.verticalBorderActive = false
+        vic.verticalBorderClosePending = false
         vic.horizontalBorderActive = false
         vic.rasterTraceLine = line
         vic.rasterTraceHasSamples = true
         vic.rasterTraceHasDisplayOpen = true
+        vic.rasterTraceHasGraphicsOutput = true
         vic.rasterTraceValid[capturedX] = true
         vic.rasterTraceDisplayOpen[capturedX] = true
+        vic.rasterTraceGraphicsOutput[capturedX] = true
         vic.spriteTraceLine = line
 
         vic.spriteTraceValid[staleX] = true
@@ -4163,7 +4329,7 @@ final class VICTests: XCTestCase {
         vic.spriteX[0] = UInt16(capturedX)
         vic.spriteY[0] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
         vic.readMemory = { _ in 0x00 }
         vic.readColorRAM = { _ in 0x00 }
 
@@ -4175,8 +4341,9 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[rowOffset + capturedX], ColorPalette.rgba[1])
     }
 
-    func testBeamSpriteTraceKeepsLowerSpriteVisibleWhenTopSpriteIsBehindForeground() {
+    func testBeamSpriteTraceHiddenTopSpriteOccludesLowerPrioritySprite() {
         let vic = VIC()
+        vic.badLineDENLatched = true // DEN was sampled on raster $30 before this fixture.
         let line = UInt16(VIC.displayTop)
 
         vic.rasterLine = line
@@ -4191,8 +4358,8 @@ final class VICTests: XCTestCase {
         vic.spriteY[1] = UInt8(VIC.displayTop)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
-        vic.spriteLineData[1] = [0xFF, 0xFF, 0xFF]
+        vic.seedSpriteRow(0, bytes: [0xFF, 0xFF, 0xFF])
+        vic.seedSpriteRow(1, bytes: [0xFF, 0xFF, 0xFF])
         vic.readMemory = { address in
             switch address {
             case 0x0400...0x0427: return 0x01
@@ -4207,45 +4374,21 @@ final class VICTests: XCTestCase {
         }
 
         let rowOffset = (VIC.displayTop - VIC.firstVisibleLine) * VIC.screenWidth
-        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 1], ColorPalette.rgba[2])
+        XCTAssertEqual(vic.framebuffer[rowOffset + VIC.displayLeft + 1], ColorPalette.rgba[7])
         XCTAssertEqual(vic.readRegister(0x1E), 0x03)
         XCTAssertEqual(vic.readRegister(0x1F), 0x03)
     }
 
-    func testSpriteDataFetchRunsDuringEarlyRasterCycles() {
-        let vic = VIC()
-        vic.rasterLine = 0
-        vic.rasterCycle = 58
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 0
-        vic.spritePointers[0] = 0x02
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x07FB: return 0x05
-            case 0x0080: return 0xAA
-            case 0x0081: return 0xBB
-            case 0x0082: return 0xCC
-            default: return 0
-            }
-        }
-
-        vic.tick()
-
-        XCTAssertTrue(vic.spriteDisplay[0])
-        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082])
-        XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0080, 0x0081, 0x0082])
-        XCTAssertEqual(vic.lastHighPhaseColorRAMReads, [])
-    }
 
     func testSpriteDMABusPhaseUsesPerSpriteSlots() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 58
+        vic.rasterCycle = 57
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
+        vic.spriteDMACheckMask = 1
+        vic.spriteMC[0] = 0
+        vic.spriteMCBase[0] = 0
 
         XCTAssertEqual(vic.activeSpriteDMASlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
@@ -4255,7 +4398,7 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 59)
+        XCTAssertEqual(vic.rasterCycle, 58)
         XCTAssertEqual(vic.activeSpriteDMASlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(vic.baLineLow)
@@ -4263,86 +4406,75 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 60)
+        XCTAssertEqual(vic.rasterCycle, 59)
         XCTAssertNil(vic.activeSpriteDMASlot)
         XCTAssertEqual(vic.busPhase, .cpu)
         XCTAssertFalse(vic.baLineLow)
         XCTAssertFalse(vic.aecLineLow)
     }
 
-    func testSpriteDMABusPhaseWrapsAcrossRasterlineForSpriteTwo() {
+    func testPALSpriteTwoDMAFinishesBeforeRasterlineBoundary() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 62
+        vic.rasterCycle = 61
         vic.spriteEnabled = 0x04
         vic.spriteY[2] = 7
-
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
+        vic.spriteDMACheckMask = 4
+        vic.spriteMC[2] = 0
+        vic.spriteMCBase[2] = 0
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
-        XCTAssertTrue(vic.baLineLow)
-        XCTAssertTrue(vic.aecLineLow)
-
         vic.tick()
-
+        XCTAssertEqual(vic.rasterLine, 7)
+        XCTAssertEqual(vic.rasterCycle, 62)
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
+        vic.tick()
         XCTAssertEqual(vic.rasterLine, 8)
         XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
-        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
-        XCTAssertTrue(vic.baLineLow)
-        XCTAssertTrue(vic.aecLineLow)
-
-        vic.tick()
-
-        XCTAssertEqual(vic.rasterCycle, 1)
-        XCTAssertNil(vic.activeSpriteDMASlot)
         XCTAssertEqual(vic.busPhase, .cpu)
-        XCTAssertFalse(vic.baLineLow)
         XCTAssertFalse(vic.aecLineLow)
     }
 
-    func testSpriteTwoDMAWrapKeepsSecondCycleActiveAfterFinalSpriteRow() {
+    func testNTSCSpriteTwoFinalRowEndsBeforeLineBoundary() {
         let vic = VIC()
+        vic.videoStandard = .ntsc
         vic.rasterLine = 27
         vic.rasterCycle = 62
-        vic.spriteEnabled = 0x04
-        vic.spriteY[2] = 7
-
+        vic.spriteDMACheckMask = 4
+        vic.spriteMC[2] = 60
+        vic.spriteMCBase[2] = 60
         XCTAssertEqual(vic.spriteLineRow(for: 2), 20)
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
-        XCTAssertTrue(vic.baLineLow)
-        XCTAssertTrue(vic.aecLineLow)
-
         vic.tick()
-
+        XCTAssertEqual(vic.rasterLine, 27)
+        XCTAssertEqual(vic.rasterCycle, 63)
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
+        vic.tick()
+        XCTAssertEqual(vic.rasterLine, 27)
+        XCTAssertEqual(vic.rasterCycle, 64)
+        XCTAssertEqual(vic.spriteMC[2], 63)
+        XCTAssertEqual(vic.busPhase, .cpu)
+        XCTAssertFalse(vic.aecLineLow)
+        vic.tick()
         XCTAssertEqual(vic.rasterLine, 28)
         XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertNil(vic.spriteLineRow(for: 2))
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
-        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
-        XCTAssertTrue(vic.baLineLow)
-        XCTAssertTrue(vic.aecLineLow)
-
-        vic.tick()
-
-        XCTAssertEqual(vic.rasterCycle, 1)
-        XCTAssertNil(vic.activeSpriteDMASlot)
-        XCTAssertEqual(vic.busPhase, .cpu)
-        XCTAssertFalse(vic.baLineLow)
-        XCTAssertFalse(vic.aecLineLow)
     }
 
-    func testWrappedSpriteDMAMiddleByteUsesFetchedByteOffset() {
+    func testNTSCSpriteThreeMiddleByteUsesStartedBurst() {
         let vic = VIC()
-        vic.rasterLine = 7
-        vic.rasterCycle = 62
-        vic.spriteEnabled = 0x04
-        vic.spriteY[2] = 7
-        vic.spritePointers[2] = 0x02
+        vic.videoStandard = .ntsc
+        vic.rasterLine = 6
+        vic.rasterCycle = 64
+        vic.spriteEnabled = 0x08
+        vic.spriteY[3] = 7
+        vic.spriteDMACheckMask = 8
+        vic.spriteMC[3] = 0
+        vic.spriteMCBase[3] = 0
+        vic.spritePointers[3] = 0x02
         var reads: [UInt16] = []
         vic.readMemory = { address in
             reads.append(address)
             switch address {
+            case 0x07FB: return 0x02
             case 0x0080: return 0x11
             case 0x0081: return 0x22
             case 0x0082: return 0x33
@@ -4352,31 +4484,38 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterLine, 8)
+        XCTAssertEqual(vic.rasterLine, 7)
         XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
-        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 2))
-        XCTAssertEqual(vic.spriteLastFetchedByteOffset[2], 0)
+        XCTAssertEqual(vic.activeSpriteDMASlot, 3)
+        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
+        XCTAssertEqual(vic.spriteLastFetchedByteOffset[3], 0)
 
         reads.removeAll()
         vic.performLowPhaseAccess()
 
         XCTAssertEqual(reads, [0x0081])
         XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0081])
-        XCTAssertEqual(vic.spriteLineData[2], [0x11, 0x22, 0x33])
+        XCTAssertEqual(vic.spriteLineData[3], [0x11, 0x22, 0])
+        vic.fetchSpriteLastByte(sprite: 3)
+        XCTAssertEqual(vic.spriteLineData[3], [0x11, 0x22, 0x33])
     }
 
-    func testWrappedFinalSpriteRowMiddleByteDoesNotFallBackToNewRasterLineRange() {
+    func testFinalSpriteRowMiddleByteKeepsItsFetchOffset() {
         let vic = VIC()
-        vic.rasterLine = 27
-        vic.rasterCycle = 62
-        vic.spriteEnabled = 0x04
-        vic.spriteY[2] = 7
-        vic.spritePointers[2] = 0x02
+        vic.videoStandard = .ntsc
+        vic.rasterLine = 26
+        vic.rasterCycle = 64
+        vic.spriteEnabled = 0x08
+        vic.spriteY[3] = 7
+        vic.spriteDMACheckMask = 8
+        vic.spriteMC[3] = 60
+        vic.spriteMCBase[3] = 60
+        vic.spritePointers[3] = 0x02
         var reads: [UInt16] = []
         vic.readMemory = { address in
             reads.append(address)
             switch address {
+            case 0x07FB: return 0x02
             case 0x0080 + 60: return 0x11
             case 0x0080 + 61: return 0x22
             case 0x0080 + 62: return 0x33
@@ -4384,32 +4523,37 @@ final class VICTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(vic.spriteLineRow(for: 2), 20)
+        XCTAssertEqual(vic.spriteLineRow(for: 3), 20)
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterLine, 28)
+        XCTAssertEqual(vic.rasterLine, 27)
         XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertNil(vic.spriteLineRow(for: 2))
-        XCTAssertEqual(vic.activeSpriteDMASlot, 2)
-        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 2))
-        XCTAssertEqual(vic.spriteLastFetchedByteOffset[2], 60)
+        XCTAssertEqual(vic.spriteLineRow(for: 3), 20)
+        XCTAssertEqual(vic.activeSpriteDMASlot, 3)
+        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
+        XCTAssertEqual(vic.spriteLastFetchedByteOffset[3], 60)
 
         reads.removeAll()
         vic.performLowPhaseAccess()
 
         XCTAssertEqual(reads, [0x0080 + 61])
         XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0080 + 61])
-        XCTAssertEqual(vic.spriteLineData[2], [0x11, 0x22, 0x33])
+        XCTAssertEqual(vic.spriteLineData[3], [0x11, 0x22, 0])
+        vic.fetchSpriteLastByte(sprite: 3)
+        XCTAssertEqual(vic.spriteLineData[3], [0x11, 0x22, 0x33])
     }
 
-    func testNTSCSpriteTwoDMAUsesCycleSixtyThreeInsteadOfRasterWrap() {
+    func testNTSCSpriteTwoDMAUsesCyclesSixtyThreeAndSixtyFour() {
         let vic = VIC()
         vic.videoStandard = .ntsc
         vic.rasterLine = 7
         vic.rasterCycle = 62
         vic.spriteEnabled = 0x04
         vic.spriteY[2] = 7
+        vic.spriteDMACheckMask = 4
+        vic.spriteMC[2] = 0
+        vic.spriteMCBase[2] = 0
 
         XCTAssertEqual(vic.activeSpriteDMASlot, 2)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 2))
@@ -4429,39 +4573,37 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.busPhase, .cpu)
     }
 
-    func testNTSCSpriteThreeDMAWrapsFromCycleSixtyFourToNextRasterline() {
+    func testNTSCSpriteThreeDMAFollowsBAWarningAndCrossesLineBoundary() {
         let vic = VIC()
         vic.videoStandard = .ntsc
         vic.rasterLine = 7
-        vic.rasterCycle = 64
-        vic.spriteEnabled = 0x08
-        vic.spriteY[3] = 7
-
-        XCTAssertEqual(vic.activeSpriteDMASlot, 3)
-        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 3))
-        XCTAssertTrue(vic.aecLineLow)
-
-        vic.tick()
-
-        XCTAssertEqual(vic.rasterLine, 8)
-        XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertEqual(vic.activeSpriteDMASlot, 3)
-        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 3))
-        XCTAssertTrue(vic.aecLineLow)
-
-        vic.tick()
-
+        vic.rasterCycle = 61
+        vic.spriteDMACheckMask = 8
+        for _ in 0..<3 {
+            XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+            XCTAssertTrue(vic.baLineLow)
+            XCTAssertFalse(vic.aecLineLow)
+            vic.tick()
+        }
+        XCTAssertEqual(vic.rasterLine, 7)
+        XCTAssertEqual(vic.rasterCycle, 64)
+        for _ in 0..<2 {
+            XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 3))
+            XCTAssertTrue(vic.aecLineLow)
+            vic.tick()
+        }
         XCTAssertEqual(vic.rasterCycle, 1)
-        XCTAssertNil(vic.activeSpriteDMASlot)
+        XCTAssertEqual(vic.rasterLine, 8)
         XCTAssertEqual(vic.busPhase, .cpu)
     }
 
     func testSpriteBAWarningDropsBeforeDMASlotWithoutAEC() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
+        vic.latchSpriteDMAEligibilityForCurrentLine()
 
         XCTAssertEqual(vic.activeSpriteBAWarningSlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
@@ -4471,15 +4613,15 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.busOwner, .cpu)
 
         vic.tick()
+        XCTAssertEqual(vic.rasterCycle, 55)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
+
+        vic.tick()
         XCTAssertEqual(vic.rasterCycle, 56)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
 
         vic.tick()
         XCTAssertEqual(vic.rasterCycle, 57)
-        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
-
-        vic.tick()
-        XCTAssertEqual(vic.rasterCycle, 58)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(vic.aecLineLow)
         XCTAssertEqual(vic.busOwner, .vicSpriteDMA)
@@ -4488,14 +4630,14 @@ final class VICTests: XCTestCase {
     func testLatchedSpriteBAWarningSurvivesEnableClearBeforeDMASlot() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
 
         vic.tick()
         vic.spriteEnabled = 0x00
 
-        XCTAssertEqual(vic.rasterCycle, 56)
+        XCTAssertEqual(vic.rasterCycle, 55)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0x01)
         XCTAssertEqual(vic.activeSpriteBAWarningSlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
@@ -4504,7 +4646,7 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 57)
+        XCTAssertEqual(vic.rasterCycle, 56)
         XCTAssertEqual(vic.activeSpriteBAWarningSlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
         XCTAssertTrue(vic.baLineLow)
@@ -4512,7 +4654,7 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 58)
+        XCTAssertEqual(vic.rasterCycle, 57)
         XCTAssertEqual(vic.activeSpriteDMASlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
         XCTAssertTrue(vic.aecLineLow)
@@ -4521,14 +4663,14 @@ final class VICTests: XCTestCase {
     func testSpriteEnableBeforeSecondDMACheckStillAssertsBAWarning() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x00
         vic.spriteY[0] = 7
 
         vic.tick()
         vic.spriteEnabled = 0x01
 
-        XCTAssertEqual(vic.rasterCycle, 56)
+        XCTAssertEqual(vic.rasterCycle, 55)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0)
         XCTAssertNil(vic.activeSpriteBAWarningSlot)
         XCTAssertEqual(vic.busPhase, .cpu)
@@ -4536,7 +4678,7 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 57)
+        XCTAssertEqual(vic.rasterCycle, 56)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0x01)
         XCTAssertEqual(vic.activeSpriteBAWarningSlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 0))
@@ -4546,9 +4688,10 @@ final class VICTests: XCTestCase {
     func testSpriteBAWarningCanTargetSpriteOnNextRasterline() {
         let vic = VIC()
         vic.rasterLine = 10
-        vic.rasterCycle = 61
+        vic.rasterCycle = 60
         vic.spriteEnabled = 0x08
-        vic.spriteY[3] = 11
+        vic.spriteY[3] = 10
+        vic.spriteDMACheckMask = 8
 
         XCTAssertEqual(vic.activeSpriteBAWarningSlot, 3)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
@@ -4556,19 +4699,23 @@ final class VICTests: XCTestCase {
         XCTAssertFalse(vic.aecLineLow)
 
         vic.tick()
-        XCTAssertEqual(vic.rasterCycle, 62)
+        XCTAssertEqual(vic.rasterCycle, 61)
         XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
 
         vic.tick()
+        XCTAssertEqual(vic.rasterLine, 10)
+        XCTAssertEqual(vic.rasterCycle, 62)
+        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+        vic.tick()
         XCTAssertEqual(vic.rasterLine, 11)
         XCTAssertEqual(vic.rasterCycle, 0)
-        XCTAssertEqual(vic.busPhase, .spriteBAWarning(sprite: 3))
+        XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 3))
     }
 
     func testSpriteDMASlotIgnoresInactiveVerticalRange() {
         let vic = VIC()
         vic.rasterLine = 10
-        vic.rasterCycle = 58
+        vic.rasterCycle = 57
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 42
 
@@ -4581,7 +4728,7 @@ final class VICTests: XCTestCase {
     func testSpriteBAWarningIgnoresInactiveVerticalRange() {
         let vic = VIC()
         vic.rasterLine = 10
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 42
 
@@ -4594,7 +4741,7 @@ final class VICTests: XCTestCase {
     func testSpriteDMAEligibilityLatchesAtCycleFiftyFive() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
 
@@ -4602,10 +4749,10 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.spriteDMACheckLine, 7)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0x01)
-        XCTAssertEqual(vic.spriteExpansionLine[0], 7)
+        XCTAssertTrue(vic.spriteYExpFF[0])
         XCTAssertEqual(vic.spriteMCBase[0], 0)
 
-        vic.rasterCycle = 58
+        vic.rasterCycle = 57
         XCTAssertEqual(vic.activeSpriteDMASlot, 0)
         XCTAssertEqual(vic.busPhase, .spriteDMA(sprite: 0))
     }
@@ -4613,7 +4760,7 @@ final class VICTests: XCTestCase {
     func testEnablingSpriteAfterCycleFiftySixDoesNotStartCurrentLineDMA() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x00
         vic.spriteY[0] = 7
 
@@ -4622,7 +4769,7 @@ final class VICTests: XCTestCase {
         vic.spriteEnabled = 0x01
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 58)
+        XCTAssertEqual(vic.rasterCycle, 57)
         XCTAssertEqual(vic.spriteDMACheckLine, 7)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0)
         XCTAssertNil(vic.activeSpriteDMASlot)
@@ -4632,7 +4779,7 @@ final class VICTests: XCTestCase {
     func testChangingSpriteYAfterCycleFiftySixDoesNotStartCurrentLineDMA() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 8
 
@@ -4641,7 +4788,7 @@ final class VICTests: XCTestCase {
         vic.spriteY[0] = 7
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 58)
+        XCTAssertEqual(vic.rasterCycle, 57)
         XCTAssertEqual(vic.spriteDMACheckLine, 7)
         XCTAssertEqual(vic.spriteDMACheckMask & 0x01, 0)
         XCTAssertNil(vic.activeSpriteDMASlot)
@@ -4651,7 +4798,7 @@ final class VICTests: XCTestCase {
     func testLatchedSpriteDMARunsAfterSpriteEnableIsCleared() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
         vic.readMemory = { address in
@@ -4669,7 +4816,7 @@ final class VICTests: XCTestCase {
         vic.spriteEnabled = 0x00
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 58)
+        XCTAssertEqual(vic.rasterCycle, 57)
         XCTAssertEqual(vic.activeSpriteDMASlot, 0)
 
         var reads: [UInt16] = []
@@ -4683,7 +4830,8 @@ final class VICTests: XCTestCase {
             }
         }
 
-        vic.fetchSpriteData(sprite: 0)
+        vic.spritePointers[0] = 0x02
+        fetchCompleteRow(vic, sprite: 0)
 
         XCTAssertEqual(reads, [0x0080, 0x0081, 0x0082])
         XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
@@ -4692,7 +4840,7 @@ final class VICTests: XCTestCase {
     func testSpriteDisplayLatchesAtCycleFiftyEightAfterDMACheck() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
         vic.spritePointers[0] = 0x02
@@ -4709,7 +4857,7 @@ final class VICTests: XCTestCase {
             }
         }
 
-        while vic.rasterCycle < 58 {
+        while vic.rasterCycle < 57 {
             vic.tick()
         }
 
@@ -4718,6 +4866,9 @@ final class VICTests: XCTestCase {
         vic.tick()
 
         XCTAssertTrue(vic.spriteDisplay[0])
+        XCTAssertEqual(vic.spriteMC[0], 1)
+        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0, 0])
+        vic.tick()
         XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
         XCTAssertEqual(vic.spriteMC[0], 3)
     }
@@ -4725,7 +4876,7 @@ final class VICTests: XCTestCase {
     func testSpriteDMAContinuesOnSecondSpriteRowAfterInitialYCompare() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
         vic.spritePointers[0] = 0x02
@@ -4742,7 +4893,7 @@ final class VICTests: XCTestCase {
             }
         }
 
-        while !(vic.rasterLine == 8 && vic.rasterCycle == 58) {
+        while !(vic.rasterLine == 8 && vic.rasterCycle == 57) {
             vic.tick()
         }
 
@@ -4753,15 +4904,17 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
+        XCTAssertEqual(vic.spriteMC[0], 4)
+        vic.tick()
         XCTAssertEqual(vic.spriteLineData[0], [0xDD, 0xEE, 0xFF])
         XCTAssertEqual(vic.spriteMC[0], 6)
-        XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0083, 0x0084, 0x0085])
+        XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0085])
     }
 
     func testSpriteYChangeAfterDMACheckPreventsCycleFiftyEightDisplayButKeepsDMA() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
         vic.spritePointers[0] = 0x02
@@ -4780,7 +4933,7 @@ final class VICTests: XCTestCase {
             }
         }
 
-        while vic.rasterCycle < 58 {
+        while vic.rasterCycle < 57 {
             vic.tick()
         }
         vic.spriteY[0] = 8
@@ -4790,14 +4943,15 @@ final class VICTests: XCTestCase {
         vic.tick()
 
         XCTAssertFalse(vic.spriteDisplay[0])
+        vic.tick()
         XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA, 0x07FB, 0x0080, 0x0081, 0x0082])
+        XCTAssertEqual(reads, [0x3FFF, 0x3FFF, 0x3FFF, 0x07F8, 0x0080, 0x0081, 0x0082])
     }
 
     func testSpriteEnableClearAfterDMACheckStillAllowsCycleFiftyEightDisplay() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x01
         vic.spriteY[0] = 7
         vic.spriteColors[0] = 0x02
@@ -4815,7 +4969,7 @@ final class VICTests: XCTestCase {
             }
         }
 
-        while vic.rasterCycle < 58 {
+        while vic.rasterCycle < 57 {
             vic.tick()
         }
         vic.spriteEnabled = 0x00
@@ -4828,7 +4982,7 @@ final class VICTests: XCTestCase {
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
         vic.renderSprites(&line, fbY: 0)
 
-        XCTAssertEqual(line[0], ColorPalette.rgba[0])
+        XCTAssertEqual(line[0], ColorPalette.rgba[2])
 
         vic.spriteEnabled = 0x01
         vic.renderSprites(&line, fbY: 0)
@@ -4839,13 +4993,13 @@ final class VICTests: XCTestCase {
     func testLateSpriteEnableBeforeCycleFiftyEightDoesNotTurnOnDisplayWithoutDMACheck() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 55
+        vic.rasterCycle = 54
         vic.spriteEnabled = 0x00
         vic.spriteY[0] = 7
 
-        while vic.rasterCycle < 58 {
+        while vic.rasterCycle < 57 {
             vic.tick()
-            if vic.rasterCycle == 57 {
+            if vic.rasterCycle == 56 {
                 vic.spriteEnabled = 0x01
             }
         }
@@ -4858,461 +5012,39 @@ final class VICTests: XCTestCase {
         XCTAssertNil(vic.activeSpriteDMASlot)
     }
 
-    func testSpriteDMAFetchesOnlyAtStartOfTwoCycleSlot() {
-        let vic = VIC()
-        vic.rasterLine = 0
-        vic.rasterCycle = 58
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 0
-        vic.spritePointers[0] = 0x02
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x07FB: return 0x05
-            case 0x0080: return 0xAA
-            case 0x0081: return 0xBB
-            case 0x0082: return 0xCC
-            default: return 0
-            }
-        }
-
-        vic.tick()
-        XCTAssertEqual(vic.rasterCycle, 59)
-        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082])
-        XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0080, 0x0081, 0x0082])
-
-        vic.tick()
-        XCTAssertEqual(vic.rasterCycle, 60)
-        XCTAssertEqual(reads, [0x07FB, 0x0080, 0x0081, 0x0082, 0x07FC])
-        XCTAssertEqual(vic.lastHighPhaseMemoryReads, [])
-    }
 
     func testHighPhaseReadTraceClearsOnCPUCycleAfterBadLineFetch() {
         let vic = VIC()
         vic.rasterLine = UInt16(VIC.displayTop)
-        vic.rasterCycle = 54
+        vic.rasterCycle = 53
         vic.badLine = true
+        vic.displayActive = true
+        vic.videoCounter = 38
+        vic.videoMatrixLineIndex = 38
         vic.readMemory = { _ in 0x41 }
         vic.readColorRAM = { _ in 0x07 }
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 55)
+        XCTAssertEqual(vic.rasterCycle, 54)
         XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0427])
         XCTAssertEqual(vic.lastHighPhaseColorRAMReads, [0x0027])
 
         vic.tick()
 
-        XCTAssertEqual(vic.rasterCycle, 56)
+        XCTAssertEqual(vic.rasterCycle, 55)
         XCTAssertEqual(vic.lastHighPhaseMemoryReads, [])
         XCTAssertEqual(vic.lastHighPhaseColorRAMReads, [])
     }
 
-    func testSpriteExpansionStateInitializesUnexpandedRowsEachRasterLine() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
+    // Full sprite lifetimes, expansion, and crunch are exercised by the
+    // cycle-driven VICSpriteDMALifecycleTests, not Y-derived row setup.
 
-        vic.rasterLine = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 8
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 3)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
-    }
-
-    func testLowSpriteYCoordinateRepeatsAfterRasterCounterWrap() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 263
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 264
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertEqual(vic.spriteMC[0], 3)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
-    }
-
-    func testLowSpriteYCoordinateSecondCompareEndsAfterSpriteHeight() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 284
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertFalse(vic.spriteDisplay[0])
-        XCTAssertNil(vic.spriteLineRow(for: 0))
-        XCTAssertNil(vic.activeSpriteDMASlot)
-    }
-
-    func testSpriteDMAFetchesFromRepeatedYCompareAfterRasterCounterWrap() {
-        let vic = VIC()
-        vic.rasterLine = 263
-        vic.rasterCycle = 58
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
-        vic.spritePointers[0] = 0x02
-        vic.updateSpriteExpansionStateForCurrentLine()
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x0080: return 0xAA
-            case 0x0081: return 0xBB
-            case 0x0082: return 0xCC
-            default: return 0
-            }
-        }
-
-        vic.latchSpriteDisplayForCurrentLine()
-        vic.fetchSpriteData(sprite: 0)
-
-        XCTAssertTrue(vic.spriteDisplay[0])
-        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(reads, [0x0080, 0x0081, 0x0082])
-    }
-
-    func testExpandedSpriteYCoordinateRepeatsWithDoubledRowsAfterRasterCounterWrap() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 263
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 264
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 265
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 3)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
-    }
-
-    func testNTSCDoesNotRepeatLowSpriteYCoordinatePastFrameEnd() {
-        let vic = VIC()
-        vic.videoStandard = .ntsc
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 262
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertNil(vic.spriteLineRow(for: 0))
-        XCTAssertNil(vic.activeSpriteDMASlot)
-    }
-
-    func testLineStartDisabledSpriteClearsStaleDisplayState() {
-        let vic = VIC()
-
-        vic.rasterLine = 7
-        vic.spriteEnabled = 0x00
-        vic.spriteY[0] = 7
-        vic.spriteDisplay[0] = true
-        vic.spriteLineData[0] = [0xFF, 0xFF, 0xFF]
-
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        XCTAssertFalse(vic.spriteDisplay[0])
-
-        vic.spriteEnabled = 0x01
-        var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
-        vic.renderSprites(&line, fbY: 0)
-
-        XCTAssertEqual(line[0], ColorPalette.rgba[0])
-    }
-
-    func testSpriteExpansionStateRepeatsRowsForExpandedSprites() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 8
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 0)
-
-        vic.rasterLine = 9
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 3)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 1)
-    }
-
-    func testClearingYExpansionDuringActiveRepeatedLineAdvancesSpriteCounter() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-
-        vic.writeRegister(0x17, value: 0x00)
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 3)
-        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 3)
-    }
-
-    func testClearingYExpansionAtCycleFifteenAppliesSpriteCrunchCounterFormula() {
-        let vic = VIC()
-        vic.rasterLine = 7
-        vic.rasterCycle = 15
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-        vic.spriteMCBase[0] = 0
-        vic.spriteLastFetchedMC[0] = 3
-
-        vic.writeRegister(0x17, value: 0x00)
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMCBase[0], 1)
-        XCTAssertEqual(vic.spriteMC[0], 1)
-        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 1)
-    }
-
-    func testCycleFifteenYExpansionClearCrunchesOnlySelectedSprites() {
-        let vic = VIC()
-        vic.rasterLine = 7
-        vic.rasterCycle = 15
-        vic.spriteEnabled = 0x03
-        vic.spriteExpandY = 0x03
-        vic.spriteY[0] = 7
-        vic.spriteY[1] = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-        vic.spriteMCBase[0] = 0
-        vic.spriteMC[0] = 0
-        vic.spriteLastFetchedMC[0] = 3
-        vic.spriteMCBase[1] = 6
-        vic.spriteMC[1] = 6
-        vic.spriteLastFetchedMC[1] = 9
-
-        vic.writeRegister(0x17, value: 0x02)
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMCBase[0], 1)
-        XCTAssertEqual(vic.spriteMC[0], 1)
-        XCTAssertFalse(vic.spriteYExpFF[1])
-        XCTAssertEqual(vic.spriteMCBase[1], 6)
-        XCTAssertEqual(vic.spriteMC[1], 6)
-    }
-
-    func testSettingYExpansionDuringCounterWindowDoesNotCrunchUnexpandedSprite() {
-        let vic = VIC()
-        vic.rasterLine = 7
-        vic.rasterCycle = 15
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x00
-        vic.spriteY[0] = 7
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        vic.writeRegister(0x17, value: 0x01)
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMCBase[0], 0)
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 0)
-    }
-
-    func testClearingYExpansionAtCycleFifteenChangesSpriteDMAFetchToCrunchedBytes() {
-        let vic = VIC()
-        vic.rasterLine = 7
-        vic.rasterCycle = 15
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-        vic.spritePointers[0] = 0x02
-        vic.updateSpriteExpansionStateForCurrentLine()
-        vic.spriteLastFetchedMC[0] = 3
-        vic.writeRegister(0x17, value: 0x00)
-        vic.rasterCycle = 58
-
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x0081: return 0x11
-            case 0x0082: return 0x22
-            case 0x0083: return 0x33
-            default: return 0
-            }
-        }
-
-        vic.fetchSpriteData(sprite: 0)
-
-        XCTAssertEqual(reads, [0x0081, 0x0082, 0x0083])
-        XCTAssertEqual(vic.spriteLineData[0], [0x11, 0x22, 0x33])
-        XCTAssertEqual(vic.spriteMC[0], 4)
-        XCTAssertEqual(vic.spriteLastFetchedMC[0], 4)
-    }
-
-    func testClearingYExpansionWhenExpansionFlipFlopAlreadySetDoesNotDoubleAdvanceCounter() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-
-        vic.rasterLine = 8
-        vic.updateSpriteExpansionStateForCurrentLine()
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-
-        vic.writeRegister(0x17, value: 0x00)
-
-        XCTAssertTrue(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 0)
-    }
-
-    func testLateYExpansionClearAfterCounterWindowDoesNotCrunchActiveSpriteLine() {
-        let vic = VIC()
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-        vic.rasterLine = 7
-        vic.rasterCycle = 17
-        vic.updateSpriteExpansionStateForCurrentLine()
-
-        vic.writeRegister(0x17, value: 0x00)
-
-        XCTAssertFalse(vic.spriteYExpFF[0])
-        XCTAssertEqual(vic.spriteMC[0], 0)
-        XCTAssertEqual(vic.spriteLineByteOffset(for: 0), 0)
-    }
-
-    func testExpandedSpriteDMAUsesInitializedSpriteCounter() {
-        let vic = VIC()
-        vic.rasterLine = 10
-        vic.rasterCycle = 58
-        vic.spriteEnabled = 0x01
-        vic.spriteExpandY = 0x01
-        vic.spriteY[0] = 7
-        vic.spritePointers[0] = 0x02
-        vic.updateSpriteExpansionStateForCurrentLine()
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x0080 + 3: return 0xAA
-            case 0x0080 + 4: return 0xBB
-            case 0x0080 + 5: return 0xCC
-            default: return 0
-            }
-        }
-
-        vic.fetchSpriteData(sprite: 0)
-
-        XCTAssertEqual(vic.spriteMC[0], 6)
-        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(reads, [0x0083, 0x0084, 0x0085])
-    }
-
-    func testSpriteDMAAdvancesUnexpandedSpriteCounterByThreeBytes() {
-        let vic = VIC()
-        vic.rasterLine = 9
-        vic.rasterCycle = 58
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 7
-        vic.spritePointers[0] = 0x02
-        vic.updateSpriteExpansionStateForCurrentLine()
-        vic.readMemory = { address in
-            switch address {
-            case 0x0086: return 0xAA
-            case 0x0087: return 0xBB
-            case 0x0088: return 0xCC
-            default: return 0
-            }
-        }
-
-        XCTAssertEqual(vic.spriteMC[0], 6)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 2)
-
-        vic.fetchSpriteData(sprite: 0)
-
-        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(vic.spriteMC[0], 9)
-        XCTAssertEqual(vic.spriteLineRow(for: 0), 3)
-    }
-
-    func testSpritePointerLatchesDuringLowPhaseBeforeDMASlot() {
-        let vic = VIC()
-        vic.rasterLine = 0
-        vic.rasterCycle = 55
-        vic.spriteEnabled = 0x01
-        vic.spriteY[0] = 0
-        var reads: [UInt16] = []
-        vic.readMemory = { address in
-            reads.append(address)
-            switch address {
-            case 0x07F8: return 0x02
-            case 0x07F9: return 0x09
-            case 0x07FA: return 0x0A
-            case 0x07FB: return 0x0B
-            case 0x0080: return 0xAA
-            case 0x0081: return 0xBB
-            case 0x0082: return 0xCC
-            default: return 0
-            }
-        }
-
-        while vic.rasterCycle < 58 {
-            vic.tick()
-        }
-
-        XCTAssertEqual(vic.spritePointers[0], 0x02)
-        XCTAssertEqual(vic.spritePointers[1], 0x09)
-        XCTAssertEqual(vic.spritePointers[2], 0x0A)
-        XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA])
-
-        vic.tick()
-
-        XCTAssertTrue(vic.spriteDisplay[0])
-        XCTAssertEqual(vic.spriteLineData[0], [0xAA, 0xBB, 0xCC])
-        XCTAssertEqual(reads, [0x07F8, 0x07F9, 0x07FA, 0x07FB, 0x0080, 0x0081, 0x0082])
-    }
 
     func testSpritePointerSlotsUseCurrentD018ScreenBasePerSprite() {
         let vic = VIC()
         vic.rasterLine = 0
-        vic.rasterCycle = 55
+        vic.rasterCycle = 57
         vic.memoryPointers = 0x14
         var reads: [UInt16] = []
         vic.readMemory = { address in
@@ -5327,32 +5059,16 @@ final class VICTests: XCTestCase {
         vic.tick()
         vic.memoryPointers = 0x24
         vic.tick()
+        vic.tick()
 
         XCTAssertEqual(vic.spritePointers[0], 0x02)
         XCTAssertEqual(vic.spritePointers[1], 0x09)
-        XCTAssertEqual(reads, [0x07F8, 0x0BF9])
+        XCTAssertEqual(reads, [0x07F8, 0x3FFF, 0x0BF9])
         XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0BF9])
     }
 
-    func testNTSCSpritePointerSlotsUseLastEightRasterCycles() {
-        let vic = VIC()
-        vic.videoStandard = .ntsc
-        vic.rasterLine = 0
 
-        vic.rasterCycle = 55
-        XCTAssertEqual(vic.lowPhaseAccess, .idle)
-
-        vic.rasterCycle = 56
-        XCTAssertEqual(vic.lowPhaseAccess, .idle)
-
-        vic.rasterCycle = 57
-        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 0))
-
-        vic.rasterCycle = 64
-        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 7))
-    }
-
-    func testNTSCSpritePointerLatchesAtCycleSixtyFourDuringSpriteThreeDMAStart() {
+    func testNTSCSpriteThreePointerReadsInLastCycle() {
         let vic = VIC()
         vic.videoStandard = .ntsc
         vic.rasterLine = 7
@@ -5362,31 +5078,37 @@ final class VICTests: XCTestCase {
         var reads: [UInt16] = []
         vic.readMemory = { address in
             reads.append(address)
-            return address == 0x07FF ? 0x0B : 0
+            return address == 0x07FB ? 0x0B : 0
         }
 
         vic.performLowPhaseAccess()
 
-        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 7))
-        XCTAssertEqual(vic.spritePointers[7], 0x0B)
-        XCTAssertEqual(reads, [0x07FF])
-        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x07FF])
+        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 3))
+        XCTAssertEqual(vic.spritePointers[3], 0x0B)
+        XCTAssertEqual(reads, [0x07FB])
+        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x07FB])
     }
 
     func testLowPhaseSpriteMiddleByteFetchesCurrentSpriteRowMiddleByte() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 2
+        vic.rasterCycle = 0
         vic.spriteEnabled = 0x08
         vic.spriteY[3] = 7
+        vic.spriteDMACheckMask = 8
+        vic.spriteMC[3] = 0
+        vic.spriteMCBase[3] = 0
         vic.spritePointers[3] = 0x02
-        vic.spriteLineData[3] = [0x11, 0x00, 0x33]
+        vic.seedSpriteRow(3, bytes: [0x11, 0x00, 0x33])
         var reads: [UInt16] = []
         vic.readMemory = { address in
             reads.append(address)
-            return address == 0x0081 ? 0x22 : 0x00
+            return address == 0x0080 ? 0x11 : 0x22
         }
 
+        vic.fetchSpriteData(sprite: 3)
+        vic.rasterCycle = 1
+        reads.removeAll()
         vic.performLowPhaseAccess()
 
         XCTAssertEqual(reads, [0x0081])
@@ -5407,9 +5129,10 @@ final class VICTests: XCTestCase {
             }
         }
 
+        vic.lineBuffer[0] = 1
         vic.performLowPhaseAccess()
 
-        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0400, 0x1008])
+        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x1008])
 
         vic.rasterCycle = 10
         vic.performLowPhaseAccess()
@@ -5425,7 +5148,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x3FFF])
     }
 
-    func testLowPhaseIdleAccessUsesECMIdleAddress() {
+    func testLowPhaseIdleAccessIgnoresECMAddressMask() {
         let vic = VIC()
         vic.rasterCycle = 9
         vic.writeRegister(0x11, value: 0x5B)
@@ -5438,8 +5161,8 @@ final class VICTests: XCTestCase {
         vic.performLowPhaseAccess()
 
         XCTAssertEqual(vic.lowPhaseAccess, .idle)
-        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x39FF])
-        XCTAssertEqual(reads, [0x39FF])
+        XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x3FFF])
+        XCTAssertEqual(reads, [0x3FFF])
     }
 
     func testLowPhaseAccessReportsRefreshCycles() {
@@ -5508,35 +5231,25 @@ final class VICTests: XCTestCase {
         }
 
         XCTAssertEqual(vic.rasterCycle, 55)
-        XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: 0))
+        XCTAssertEqual(vic.lowPhaseAccess, .idle)
     }
 
-    func testLowPhaseAccessReportsSpritePointersWithoutStealingCPU() {
-        let vic = VIC()
-        vic.rasterLine = 20
-        vic.rasterCycle = 55
 
-        for sprite in 0..<8 {
-            XCTAssertEqual(vic.lowPhaseAccess, .spritePointer(sprite: sprite))
-            XCTAssertEqual(vic.busPhase, .cpu)
-            XCTAssertFalse(vic.baLineLow)
-            XCTAssertFalse(vic.aecLineLow)
-            vic.tick()
-        }
-    }
-
-    func testLowPhaseSpriteMiddleByteRequiresActiveSprite() {
+    func testLowPhaseSpriteMiddleByteRequiresStartedDMA() {
         let vic = VIC()
         vic.rasterLine = 7
-        vic.rasterCycle = 2
+        vic.rasterCycle = 1
         vic.spriteEnabled = 0x08
         vic.spriteY[3] = 7
-
-        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
-
-        vic.spriteY[3] = 42
-
+        vic.spriteDMACheckMask = 8
+        vic.spriteMC[3] = 0
+        vic.spriteMCBase[3] = 0
         XCTAssertEqual(vic.lowPhaseAccess, .idle)
+        vic.rasterCycle = 0
+        vic.tick()
+        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
+        vic.spriteY[3] = 42
+        XCTAssertEqual(vic.lowPhaseAccess, .spriteMiddleByte(sprite: 3))
     }
 
     func testTickReturnsTrueOnlyDuringBadLineBusStealWindow() {
@@ -5548,7 +5261,7 @@ final class VICTests: XCTestCase {
         XCTAssertFalse(vic.tick())
         XCTAssertTrue(vic.badLine)
 
-        while vic.rasterCycle < 15 {
+        while vic.rasterCycle < 14 {
             XCTAssertFalse(vic.tick())
         }
 
@@ -5564,9 +5277,9 @@ final class VICTests: XCTestCase {
 
         vic.tick()
         XCTAssertTrue(vic.badLine)
-        XCTAssertEqual(vic.rowCounter, 0)
+        XCTAssertEqual(vic.rowCounter, 5)
 
-        while vic.rasterCycle < 12 {
+        while vic.rasterCycle < 11 {
             XCTAssertFalse(vic.baLineLow)
             XCTAssertFalse(vic.aecLineLow)
             XCTAssertEqual(vic.busOwner, .cpu)
@@ -5579,17 +5292,18 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.busOwner, .cpu)
         XCTAssertEqual(vic.busPhase, .badLineBAWarning)
 
-        while vic.rasterCycle < 15 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
 
+        XCTAssertEqual(vic.rowCounter, 0) // Reset in hardware cycle 14, not at line start.
         XCTAssertTrue(vic.baLineLow)
         XCTAssertTrue(vic.aecLineLow)
         XCTAssertTrue(vic.isStealingCPU)
         XCTAssertEqual(vic.busOwner, .vicBadLine)
         XCTAssertEqual(vic.busPhase, .badLineCharacterFetch(column: 0))
 
-        while vic.rasterCycle < 55 {
+        while vic.rasterCycle < 54 {
             vic.tick()
         }
 
@@ -5606,7 +5320,7 @@ final class VICTests: XCTestCase {
         vic.rasterCycle = 0
         vic.badLineDENLatched = true
 
-        while vic.rasterCycle < 15 {
+        while vic.rasterCycle < 14 {
             vic.tick()
         }
 
@@ -5615,16 +5329,18 @@ final class VICTests: XCTestCase {
             vic.tick()
         }
 
-        XCTAssertEqual(vic.rasterCycle, 55)
+        XCTAssertEqual(vic.rasterCycle, 54)
         XCTAssertEqual(vic.busPhase, .cpu)
     }
 
     func testBadLineFetchLatchesCharacterAndColorRAM() {
         let vic = VIC()
         vic.rasterLine = UInt16(VIC.displayTop)
-        vic.rasterCycle = 15
+        vic.rasterCycle = 14
         vic.badLine = true
         vic.videoCounterBase = 80
+        vic.videoCounter = 80
+        vic.displayActive = true
         var screenReads: [UInt16] = []
         var colorReads: [UInt16] = []
         vic.readMemory = { address in
@@ -5652,7 +5368,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.colorBuffer[0], 0x0A)
         XCTAssertEqual(vic.colorBuffer[1], 0x07)
         XCTAssertEqual(vic.displayLineBufferBase, 80)
-        XCTAssertEqual(screenReads, [0x0450, 0x0451])
+        XCTAssertEqual(screenReads, [0x3FFF, 0x0450, 0x1208, 0x0451])
         XCTAssertEqual(colorReads, [0x0050, 0x0051])
         XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0451])
         XCTAssertEqual(vic.lastHighPhaseColorRAMReads, [0x0051])
@@ -5661,8 +5377,9 @@ final class VICTests: XCTestCase {
     func testBadLineFetchUsesCurrentScreenBasePerColumn() {
         let vic = VIC()
         vic.rasterLine = UInt16(VIC.displayTop)
-        vic.rasterCycle = 15
+        vic.rasterCycle = 14
         vic.badLine = true
+        vic.displayActive = true
         vic.memoryPointers = 0x14
         var screenReads: [UInt16] = []
         vic.readMemory = { address in
@@ -5681,7 +5398,7 @@ final class VICTests: XCTestCase {
 
         XCTAssertEqual(vic.lineBuffer[0], 0x41)
         XCTAssertEqual(vic.lineBuffer[1], 0x42)
-        XCTAssertEqual(screenReads, [0x0400, 0x0801])
+        XCTAssertEqual(screenReads, [0x3FFF, 0x0400, 0x1208, 0x0801])
     }
 
     func testLateStartedBadLineFirstFetchesUseUnstableStartupData() {
@@ -5694,28 +5411,30 @@ final class VICTests: XCTestCase {
         var colorReads: [UInt16] = []
         vic.readMemory = { address in
             screenReads.append(address)
-            return address == 0x0408 ? 0x42 : 0x41
+            return address == 0x0403 ? 0x42 : 0x41
         }
         vic.readColorRAM = { address in
             colorReads.append(address)
             return 0x07
         }
 
+        vic.beginCycle()
         vic.writeRegister(0x11, value: 0x13)
+        vic.endCycle()
         for _ in 0..<4 {
             vic.tick()
         }
 
-        XCTAssertEqual(vic.badLineStartCycle, 20)
-        XCTAssertEqual(vic.lineBuffer[5], 0xFF)
-        XCTAssertEqual(vic.lineBuffer[6], 0xFF)
-        XCTAssertEqual(vic.lineBuffer[7], 0xFF)
-        XCTAssertEqual(vic.lineBuffer[8], 0x42)
-        XCTAssertEqual(vic.colorBuffer[5], 0x0F)
-        XCTAssertEqual(vic.colorBuffer[6], 0x0F)
-        XCTAssertEqual(vic.colorBuffer[7], 0x0F)
-        XCTAssertEqual(screenReads, [0x0408])
-        XCTAssertEqual(colorReads, [0x0008])
+        XCTAssertEqual(vic.badLineStartCycle, 21)
+        XCTAssertEqual(vic.lineBuffer[2], 0xFF)
+        XCTAssertEqual(vic.lineBuffer[0], 0xFF)
+        XCTAssertEqual(vic.lineBuffer[1], 0xFF)
+        XCTAssertEqual(vic.lineBuffer[3], 0x42)
+        XCTAssertEqual(vic.colorBuffer[2], 0x0F)
+        XCTAssertEqual(vic.colorBuffer[0], 0x0F)
+        XCTAssertEqual(vic.colorBuffer[1], 0x0F)
+        XCTAssertEqual(screenReads.filter { (0x0400..<0x0800).contains($0) }, [0x0403])
+        XCTAssertEqual(colorReads, [0x0003])
     }
 
     func testRenderingUsesCompletedBadLineCharacterAndColorBuffers() {
@@ -5903,6 +5622,7 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in 0x0E }
 
+        vic.fetchCharData(column: 0)
         vic.performLowPhaseAccess()
         screenByte = 0xF2
         bitmapByte = 0x00
@@ -5942,6 +5662,7 @@ final class VICTests: XCTestCase {
         }
         vic.readColorRAM = { _ in colorNibble }
 
+        vic.fetchCharData(column: 0)
         vic.performLowPhaseAccess()
         screenByte = 0x03
         glyphByte = 0x00
@@ -6149,7 +5870,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + VIC.displayLeft], ColorPalette.rgba[2])
         XCTAssertTrue(reads.contains(0x100B))
         XCTAssertFalse(reads.contains(0x1008))
-        XCTAssertEqual(vic.rowCounter, 4)
+        XCTAssertEqual(vic.rowCounter, 3) // Composition does not clock the sequencer.
     }
 
     func testPartiallyFetchedBadLineRowUsesRowCounterForGlyphRow() {
@@ -6177,25 +5898,29 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.framebuffer[fbY * VIC.screenWidth + VIC.displayLeft], ColorPalette.rgba[2])
         XCTAssertTrue(reads.contains(0x100B))
         XCTAssertFalse(reads.contains(0x1008))
-        XCTAssertEqual(vic.rowCounter, 4)
+        XCTAssertEqual(vic.rowCounter, 3) // Composition does not clock the sequencer.
     }
 
-    func testRenderedDisplayLinesAdvanceAndWrapRowCounter() {
+    func testCycleFiftyEightAdvancesRowOrReturnsToIdle() {
         let vic = VIC()
 
         vic.displayActive = true
         vic.rasterLine = UInt16(VIC.displayTop)
         vic.rowCounter = 0
-        vic.renderRasterline()
+        vic.rasterCycle = 57
+        vic.tick()
 
         XCTAssertEqual(vic.rowCounter, 1)
         XCTAssertEqual(vic.videoCounterBase, 0)
 
         vic.rasterLine = UInt16(VIC.displayTop + 7)
         vic.rowCounter = 7
-        vic.renderRasterline()
+        vic.videoCounter = 40
+        vic.rasterCycle = 57
+        vic.tick()
 
-        XCTAssertEqual(vic.rowCounter, 0)
+        XCTAssertEqual(vic.rowCounter, 7)
+        XCTAssertFalse(vic.displayActive)
         XCTAssertEqual(vic.videoCounterBase, 40)
     }
 
@@ -6332,8 +6057,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6355,8 +6080,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6383,7 +6108,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6403,7 +6128,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6437,7 +6162,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -6456,7 +6181,7 @@ final class VICTests: XCTestCase {
         vic.spritePriority = 0x01
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0, foregroundMask: foregroundMask)
 
@@ -6478,8 +6203,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6507,8 +6232,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0xC0, 0x00, 0x00]
-        vic.spriteLineData[1] = [0xC0, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0xC0, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0xC0, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6528,7 +6253,7 @@ final class VICTests: XCTestCase {
         vic.spriteDisplay[0] = true
         vic.spriteX[0] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6554,8 +6279,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
 
         vic.renderSprites(&line, fbY: 0)
 
@@ -6610,8 +6335,8 @@ final class VICTests: XCTestCase {
         vic.spriteX[1] = UInt16(VIC.displayLeft)
         vic.spriteColors[0] = 0x01
         vic.spriteColors[1] = 0x02
-        vic.spriteLineData[0] = [0x80, 0x00, 0x00]
-        vic.spriteLineData[1] = [0x80, 0x00, 0x00]
+        vic.seedSpriteRow(0, bytes: [0x80, 0x00, 0x00])
+        vic.seedSpriteRow(1, bytes: [0x80, 0x00, 0x00])
         vic.renderSprites(&line, fbY: 0)
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF5)

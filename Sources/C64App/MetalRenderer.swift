@@ -19,6 +19,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var crtShaderIntensity: Float = 0.65
 
     weak var c64: C64?
+    private let audioOutput: SIDAudioOutput?
 
     /// Emulation runs on a dedicated thread; these hold the latest completed framebuffer.
     private var frameBuffers: [[UInt32]]
@@ -92,7 +93,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
     """
 
-    init?(mtkView: MTKView, c64: C64) {
+    init?(mtkView: MTKView, c64: C64, audioOutput: SIDAudioOutput? = nil) {
+        self.audioOutput = audioOutput
         guard let device = mtkView.device ?? MTLCreateSystemDefaultDevice() else { return nil }
         self.device = device
         mtkView.device = device
@@ -166,20 +168,37 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     func emulationLoop() {
         var frameCount = 0
+        var pacer = AudioFramePacer(now: ProcessInfo.processInfo.systemUptime)
+        var playbackActivity: NSObjectProtocol?
+        defer {
+            if let playbackActivity { ProcessInfo.processInfo.endActivity(playbackActivity) }
+        }
 
         while running {
             guard let c64 = c64 else { break }
 
             // If debugger is paused, produce snapshots but don't run
             if c64.debugger.paused {
+                if let activity = playbackActivity {
+                    ProcessInfo.processInfo.endActivity(activity)
+                    playbackActivity = nil
+                }
                 snapshotLock.lock()
                 debugSnapshot = c64.debugger.takeSnapshot(memoryStart: debugMemoryPage)
                 snapshotLock.unlock()
                 Thread.sleep(forTimeInterval: 0.05)
+                pacer.reset(now: ProcessInfo.processInfo.systemUptime)
                 continue
             }
 
-            let frameStart = CFAbsoluteTimeGetCurrent()
+            if playbackActivity == nil {
+                var options: ProcessInfo.ActivityOptions = .userInitiatedAllowingIdleSystemSleep
+                if audioOutput != nil { options.insert(.latencyCritical) }
+                playbackActivity = ProcessInfo.processInfo.beginActivity(
+                    options: options,
+                    reason: "Real-time C64 audio and video playback"
+                )
+            }
 
             // Run one C64 frame
             let completed = c64.runFrame()
@@ -209,10 +228,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 snapshotLock.unlock()
             }
 
-            // Sleep for remaining frame time
-            let elapsed = CFAbsoluteTimeGetCurrent() - frameStart
+            // Pace against an absolute deadline. Sleeping relative to the end
+            // of every frame accumulates scheduler overshoot and eventually
+            // starves the audio producer even when emulation itself is fast.
             let frameDuration = 1.0 / c64.machineProfile.displayFrameRateHz
-            let sleepTime = frameDuration - elapsed
+            let now = ProcessInfo.processInfo.systemUptime
+            let sleepTime = pacer.delay(
+                now: now, frameDuration: frameDuration,
+                bufferedSamples: c64.sid.availableAudioSamplesForPlayback(),
+                targetSamples: audioOutput?.startupTarget ?? 0,
+                playbackStarted: (audioOutput?.statistics.sourceFrames ?? 0) > 0
+            )
             if sleepTime > 0 {
                 Thread.sleep(forTimeInterval: sleepTime)
             }
