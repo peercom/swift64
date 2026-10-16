@@ -2334,6 +2334,9 @@ final class VICTests: XCTestCase {
         vic.rasterLine = UInt16(VIC.totalLines - 1)
         vic.endOfLine()
         vic.triggerLightPen(x: 300, y: 316)
+        XCTAssertEqual(vic.readRegister(0x13), 50, "Frame reset follows the first clock, not the X wrap")
+        vic.tick()
+        vic.triggerLightPen(x: 300, y: 316)
 
         XCTAssertEqual(vic.readRegister(0x13), 150)
         XCTAssertEqual(vic.readRegister(0x14), 60)
@@ -2353,6 +2356,9 @@ final class VICTests: XCTestCase {
 
         vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
         vic.endOfLine()
+        vic.triggerLightPen(x: 300, y: 316)
+        XCTAssertEqual(vic.readRegister(0x13), 50)
+        vic.tick()
         vic.triggerLightPen(x: 300, y: 316)
 
         XCTAssertEqual(vic.readRegister(0x13), 150)
@@ -2411,12 +2417,14 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
         XCTAssertEqual(irqStates, [true, false])
 
-        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
-        vic.rasterCycle = vic.rasterCyclesPerLine - 1
-        vic.tick()
+        // Clock away from the match before returning to line zero: the
+        // comparator's low interval, not a manual raster assignment, rearms it.
+        for _ in 0..<(vic.rasterLinesPerFrame * vic.rasterCyclesPerLine) { vic.tick() }
 
         XCTAssertEqual(vic.rasterLine, 0)
         XCTAssertEqual(vic.rasterCycle, 0)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        vic.tick() // Line zero's comparator clocks in hardware cycle 2.
         XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
         XCTAssertEqual(irqStates, [true, false, true])
     }
@@ -2439,13 +2447,13 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
         XCTAssertEqual(irqStates, [true, false])
 
-        vic.rasterLine = UInt16(vic.rasterLinesPerFrame - 1)
-        vic.rasterCycle = vic.rasterCyclesPerLine - 1
-        vic.tick()
+        for _ in 0..<(vic.rasterLinesPerFrame * vic.rasterCyclesPerLine) { vic.tick() }
 
         XCTAssertEqual(vic.rasterLine, 0)
         XCTAssertEqual(vic.rasterCycle, 0)
         XCTAssertEqual(vic.rasterLinesPerFrame, VIC.ntscRasterLinesPerFrame)
+        XCTAssertEqual(vic.debugRegisterValue(0xD019), 0x70)
+        vic.tick()
         XCTAssertEqual(vic.debugRegisterValue(0xD019), 0xF1)
         XCTAssertEqual(irqStates, [true, false, true])
     }
@@ -4952,7 +4960,7 @@ final class VICTests: XCTestCase {
         XCTAssertEqual(reads, [0x3FFF, 0x3FFF, 0x3FFF, 0x07F8, 0x0080, 0x0081, 0x0082])
     }
 
-    func testSpriteEnableClearAfterDMACheckStillAllowsCycleFiftyEightDisplay() {
+    func testSpriteEnableClearAfterDMACheckSuppressesDisplayButKeepsDMA() {
         let vic = VIC()
         vic.rasterLine = 7
         vic.rasterCycle = 54
@@ -4980,18 +4988,23 @@ final class VICTests: XCTestCase {
 
         vic.tick()
 
-        XCTAssertTrue(vic.spriteDisplay[0])
+        XCTAssertFalse(vic.spriteDisplay[0])
+        XCTAssertTrue(vic.spriteDMAEligible(0))
         XCTAssertEqual(vic.spriteLineData[0], [0x80, 0x00, 0x00])
 
         var line = [UInt32](repeating: ColorPalette.rgba[0], count: VIC.screenWidth)
         vic.renderSprites(&line, fbY: 0)
 
-        XCTAssertEqual(line[0], ColorPalette.rgba[2])
+        XCTAssertEqual(line[0], ColorPalette.rgba[0])
 
         vic.spriteEnabled = 0x01
         vic.renderSprites(&line, fbY: 0)
 
-        XCTAssertEqual(line[0], ColorPalette.rgba[2])
+        XCTAssertFalse(vic.spriteDisplay[0], "Re-enabling after the comparison cannot start this row")
+        XCTAssertEqual(line[0], ColorPalette.rgba[0])
+        vic.tick()
+        XCTAssertTrue(vic.spriteDMAEligible(0))
+        XCTAssertEqual(vic.spriteMC[0], 3)
     }
 
     func testLateSpriteEnableBeforeCycleFiftyEightDoesNotTurnOnDisplayWithoutDMACheck() {
@@ -5221,6 +5234,8 @@ final class VICTests: XCTestCase {
         vic.endOfLine()
 
         XCTAssertEqual(vic.rasterLine, 0)
+        XCTAssertEqual(vic.refreshCounter, 0xFE)
+        vic.tick()
         XCTAssertEqual(vic.refreshCounter, 0xFF)
     }
 
@@ -6312,6 +6327,8 @@ final class VICTests: XCTestCase {
         vic.writeRegister(0x12, value: 0x00)
         vic.writeRegister(0x1A, value: 0x01)
         vic.endOfLine()
+        XCTAssertEqual(vic.readRegister(0x19), 0x70)
+        vic.tick()
 
         XCTAssertEqual(vic.readRegister(0x19), 0xF1)
         XCTAssertEqual(irqStates, [true])
@@ -6331,6 +6348,7 @@ final class VICTests: XCTestCase {
 
         vic.writeRegister(0x1A, value: 0x05)
         vic.endOfLine()
+        vic.tick()
 
         vic.spriteEnabled = 0x03
         vic.spriteDisplay[0] = true

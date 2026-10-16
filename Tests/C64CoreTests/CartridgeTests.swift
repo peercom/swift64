@@ -102,6 +102,130 @@ final class CartridgeTests: XCTestCase {
         XCTAssertEqual(memory.read(0xE000), 0xE0)
     }
 
+    func testUltimaxVICMapsUpperROMHAndRAMInEveryCIABank() throws {
+        var romh = [UInt8](repeating: 0xE0, count: 0x2000)
+        for offset in 0..<0x1000 { romh[0x1000 + offset] = UInt8(truncatingIfNeeded: offset ^ 0xA7) }
+        let memory = MemoryMap()
+        let cia = CIA(isCIA1: false)
+        memory.cia2 = cia
+        memory.cartridge = try XCTUnwrap(Cartridge.parseCRT(makeCRT(exrom: 1, game: 0, chips: [
+            (address: 0x8000, data: [UInt8](repeating: 0x80, count: 0x2000)),
+            (address: 0xE000, data: romh)
+        ])))
+        memory.charROM = [UInt8](repeating: 0xCC, count: 0x1000)
+        for bank in 0..<4 {
+            cia.writeRegister(2, value: 3)
+            cia.writeRegister(0, value: UInt8(3 - bank))
+            for local: UInt16 in [0, 0x0FFF, 0x1000, 0x1FFF, 0x2000, 0x2FFF] {
+                let value = UInt8(bank * 16 + Int(local >> 12))
+                memory.ram[bank * 0x4000 + Int(local)] = value
+                XCTAssertEqual(memory.vicRead(local), value, "bank=\(bank), RAM=\(local)")
+            }
+            for local: UInt16 in [0x3000, 0x307F, 0x3800, 0x3FFF] {
+                memory.ram[bank * 0x4000 + Int(local)] = 0x55
+                XCTAssertEqual(memory.vicRead(local), romh[Int(local) - 0x2000])
+                XCTAssertEqual(memory.cpuDataBus, romh[Int(local) - 0x2000])
+            }
+        }
+        memory.cartridge = nil
+        cia.writeRegister(0, value: 3)
+        XCTAssertEqual(memory.vicRead(0x1000), 0xCC)
+        XCTAssertEqual(memory.vicRead(0x3000), 0x55)
+    }
+
+    func testUltimaxVICFollowsEasyFlashModeBankAndResetWithoutCPUReadCallbacks() throws {
+        let memory = MemoryMap()
+        memory.cartridge = try XCTUnwrap(Cartridge.parseCRT(makeCRT(hardwareType: 32, exrom: 1, game: 0, chips: [
+            (bank: 0, address: 0xA000, data: [UInt8](repeating: 0xA0, count: 0x2000)),
+            (bank: 1, address: 0xA000, data: [UInt8](repeating: 0xB1, count: 0x2000))
+        ])))
+        memory.ram[0x1000] = 0x10
+        memory.ram[0x3000] = 0x30
+        memory.charROM[0] = 0xCC
+        var cpuReads = 0
+        memory.onCPURead = { _, _ in cpuReads += 1 }
+        XCTAssertEqual(memory.vicRead(0x3000), 0xA0)
+        memory.write(0xDE00, value: 1)
+        XCTAssertEqual(memory.vicRead(0x3000), 0xB1)
+        for mode: UInt8 in [4, 6, 7] {
+            memory.write(0xDE02, value: mode)
+            XCTAssertEqual(memory.vicRead(0x3000), 0x30)
+            XCTAssertEqual(memory.vicRead(0x1000), 0xCC)
+        }
+        memory.write(0xDE02, value: 5)
+        memory.write(0, value: 7)
+        for port: UInt8 in 0...7 {
+            memory.write(1, value: port)
+            XCTAssertEqual(memory.vicRead(0x3000), 0xB1, "CPU banking must not select VIC memory")
+            XCTAssertEqual(memory.vicRead(0x1000), 0x10)
+        }
+        memory.resetCartridge()
+        XCTAssertEqual(memory.vicRead(0x3000), 0xA0)
+        XCTAssertEqual(cpuReads, 0)
+    }
+
+    func testUltimaxVICMissingROMHFloatsRatherThanExposingHiddenRAM() throws {
+        let memory = MemoryMap()
+        memory.cartridge = try XCTUnwrap(Cartridge.parseCRT(makeCRT(hardwareType: 32, exrom: 1, game: 0, chips: [
+            (address: 0x8000, data: [UInt8](repeating: 0x80, count: 0x2000))
+        ])))
+        memory.ram[0x3FFF] = 0x12
+        memory.driveCPUDataBus(0x69)
+        XCTAssertEqual(memory.vicRead(0x3FFF), 0x69)
+        XCTAssertEqual(memory.cpuDataBus, 0x69)
+    }
+
+    func testUltimaxVICSpriteDMAFetchesROMHWithPointersInRAMOrROM() throws {
+        var romh = [UInt8](repeating: 0xE0, count: 0x2000)
+        romh.replaceSubrange(0x1000..<0x1003, with: [0xA5, 0x3C, 0x81])
+        romh[0x1FF8] = 0xC0
+        let crt = makeCRT(exrom: 1, game: 0, chips: [
+            (address: 0x8000, data: [UInt8](repeating: 0x80, count: 0x2000)),
+            (address: 0xE000, data: romh)
+        ])
+        for profile in [MachineProfile.palC64, .ntscC64] {
+            for bank in 0..<4 {
+                for pointerInROM in [false, true] {
+                    let c64 = C64(machineProfile: profile)
+                    XCTAssertTrue(c64.mountCartridge(crt))
+                    c64.trueDriveEmulationMode = .off
+                    c64.kernalTraps.enabled = false
+                    c64.cia2.writeRegister(2, value: 3)
+                    c64.cia2.writeRegister(0, value: UInt8(3 - bank))
+                    c64.memory.ram[bank * 0x4000 + 0x07F8] = 0xC0
+                    c64.memory.ram[bank * 0x4000 + 0x3FF8] = 0x80
+                    c64.memory.ram[bank * 0x4000 + 0x3000] = 0x12
+                    c64.memory.ram[bank * 0x4000 + 0x3001] = 0x34
+                    c64.memory.ram[bank * 0x4000 + 0x3002] = 0x56
+                    let vic = c64.vic
+                    vic.writeRegister(0x18, value: pointerInROM ? 0xF4 : 0x14)
+                    vic.rasterLine = 100
+                    vic.rasterCycle = profile.videoStandard == .pal ? 57 : 58
+                    vic.spriteEnabled = 1
+                    vic.spriteDMACheckMask = 1
+                    vic.spriteY[0] = 100
+                    vic.seedSpriteRow(0, bytes: [0xEE, 0xEE, 0xEE])
+                    var cpuReads = 0
+                    c64.memory.onCPURead = { _, _ in cpuReads += 1 }
+                    c64.tickOneCycle()
+                    XCTAssertEqual(vic.spritePointers[0], 0xC0)
+                    XCTAssertEqual(vic.lastLowPhaseMemoryReads, [pointerInROM ? 0x3FF8 : 0x07F8])
+                    XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x3000])
+                    XCTAssertEqual(vic.spriteLineData[0], [0xA5, 0xEE, 0xEE])
+                    c64.tickOneCycle()
+                    XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x3001])
+                    XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x3002])
+                    XCTAssertEqual(vic.spriteLineData[0], [0xA5, 0x3C, 0x81])
+                    XCTAssertEqual(vic.spriteShifters[0].data, 0xA53C81)
+                    XCTAssertEqual(vic.spriteMC[0], 3)
+                    XCTAssertEqual(c64.memory.cpuDataBus, 0x81)
+                    XCTAssertEqual(cpuReads, 0, "AEC must keep the CPU off the cartridge bus")
+                    c64.memory.onCPURead = nil
+                }
+            }
+        }
+    }
+
     func testUltimaxMemoryMapLeavesMiddleRangesOpenAndKeepsC000RAM() throws {
         let roml = Array(repeating: UInt8(0x80), count: 0x2000)
         let romh = Array(repeating: UInt8(0xE0), count: 0x2000)

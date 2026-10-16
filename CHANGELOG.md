@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3 - 2026-10-16
+
+- Corrected CIA timer pipelines and CPU interrupt sampling used by VIC raster synchronizers. Blackmail FLI, side-border sprite probes, and the PAL IRQ-acknowledgement program now pass unchanged.
+- Refined graphics mode/color latches, late bad-line display entry, raster-zero IRQ timing, sprite startup/expansion, and inactive sprite fetches. Sprite reload now prevents false collisions during ninth-sprite reuse; the original PAL/NTSC sprite-X and cycle-stealing programs pass.
+- Fixed Ultimax VIC memory mapping, including the cartridge ROMH graphics window. The original EasyFlash Ultimax comparison now matches exactly, with normal 8K/16K cartridge graphics unchanged.
+- Expanded opt-in, sequential validation to 146 public programs: 144 pass, including 135 exact visual comparisons covering 11,343,456 color indices. Two strict visual failures remain: one pixel in PAL `videomode1` and 26 in NTSC `modesplit`; neither is waived.
+- Added bounded original-software regression checks for two PAL/NTSC sprite multiplexers (960 exact display frames), Befana vs Balloons PAL gameplay through level 2, and PAL/NTSC scrolling-game area transitions. Befana's NTSC deadline diagnostic is not counted as a gameplay pass.
+- Checked Debug integration passes 971 tests with 23 opt-in skips. Full Release integration passes 979 tests with 14 skips and one public-runner case failing the two documented visual assertions. Broader software and chip-revision compatibility remain in progress. No SID synthesis changes, emulator-reference implementation code, ROMs, or media are included.
+
 ## 0.4.2 - 2026-10-15
 
 - Fixed standard-bitmap open-border colors by retaining the graphics output matrix byte across cells, rasterlines, and frame wrap, with mode-aware idle colors and vertical-border gating.

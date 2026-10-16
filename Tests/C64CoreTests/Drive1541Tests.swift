@@ -2352,6 +2352,9 @@ final class Drive1541Tests: XCTestCase {
             }
         }
 
+        print(String(format: "True-drive PRG final: PC=$%04X drivePC=$%04X serialStatus=$%02X",
+                     c64.cpu.pc, c64.drive1541.cpu.pc, c64.memory.ram[0x90]))
+        print("True-drive PRG IEC commands: " + hexBytes(c64.drive1541.decodedIECCommandBytes.suffix(16)))
         XCTAssertTrue(sawFilename, "1541 should receive wildcard filename byte for LOAD\"*\"")
         XCTAssertTrue(sawTalk, "C64 should enter TALK after the drive opens the first PRG")
         XCTAssertTrue(sawTalkSecondary, "1541 should receive the TALK secondary address for PRG load")

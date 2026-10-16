@@ -304,6 +304,8 @@ final class VICGraphicsSequencerTests: XCTestCase {
                 let offset = (51 + y - VIC.firstVisibleLine) * VIC.screenWidth + 24
                 XCTAssertEqual(Array(vic.framebuffer[offset..<offset + 320]), expected, "\(standard) row=\(y)")
             }
+            XCTAssertEqual(vic.videoCounterBase, 1000)
+            vic.tick() // Frame reset follows hardware cycle 1 of raster zero.
             XCTAssertEqual(vic.videoCounterBase, 0)
             XCTAssertEqual(vic.rowCounter, 7)
             XCTAssertFalse(vic.displayActive)

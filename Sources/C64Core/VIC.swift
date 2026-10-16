@@ -136,10 +136,19 @@ public final class VIC {
     private var matrixDMAActive = false
     private var cpuPhaseActive = false
     private var badLineUpdatePending = false
+    private var pendingGraphicsAddressBitmapMode: Bool?
+    private var pendingGraphicsAddressECM: Bool?
     /// Whether DEN was observed on raster $30, arming bad lines for this frame.
     var badLineDENLatched: Bool = false
     /// Prevents repeated raster IRQs after multiple compare writes on the same rasterline.
     var rasterIRQTriggeredThisLine: Bool = false
+    private var rasterCompareMatched = false
+    private var frameStartPending = false
+    /// Y resets one clock after X wraps at frame end. Physical scanline
+    /// coordinates still wrap normally for DMA slots and framebuffer geometry.
+    private var rasterCounter: UInt16 {
+        frameStartPending ? UInt16(rasterLinesPerFrame - 1) : rasterLine
+    }
     /// Latched light pen X coordinate ($D013), stored as the upper 8 bits of the 9-bit X counter.
     var lightPenX: UInt8 = 0
     /// Latched light pen Y coordinate ($D014).
@@ -235,8 +244,8 @@ public final class VIC {
         switch busPhase {
         case let .badLineCharacterFetch(column):
             return !badLineFetchUsesUnstableStartupData(column: column)
-        case .spriteDMA:
-            return true
+        case .spriteDMA(let sprite):
+            return !(sprite == 0 && spriteZeroDMAStartedLate && rasterCycle == spriteDMAFirstStartCycle)
         case .cpu, .badLineBAWarning, .spriteBAWarning:
             return false
         }
@@ -355,6 +364,7 @@ public final class VIC {
     /// DMA fills the live register byte by byte. X comparison starts shifting;
     /// it must never reload a consumed row from the diagnostic line buffer.
     var spriteShifters = [SpriteShifter](repeating: SpriteShifter(), count: 8)
+    private var cpuPhaseInternalDataBus: UInt8 = 0xFF
     private var spriteXWriteThisCycle: (register: UInt8, previous: UInt8)?
     private var spriteMulticolorWriteThisCycle: UInt8?
     /// Sprite data pointer bytes latched during the low-phase sprite-pointer slots.
@@ -364,6 +374,9 @@ public final class VIC {
     /// Persistent DMA enable bits. Y/enable writes only start inactive DMA;
     /// an active transfer ends when MCBASE reaches 63, not at a Y-derived height.
     var spriteDMACheckMask: UInt8 = 0
+    /// Starting sprite 0 at the second Y comparison leaves only two BA
+    /// warning clocks before its first high-phase read, rather than three.
+    private var spriteZeroDMAStartedLate = false
 
     /// Per-visible-pixel raster state captured as the beam advances. This keeps
     /// simple raster color bars and mid-line border mode changes observable even
@@ -372,11 +385,13 @@ public final class VIC {
     var rasterTraceHasSamples: Bool = false
     var rasterTraceHasDisplayOpen: Bool = false
     var rasterTraceHasGraphicsOutput: Bool = false
+    private var rasterTraceHasGraphicsModeChanges = false
     var rasterTraceValid = [Bool](repeating: false, count: VIC.screenWidth)
     var rasterTraceDisplayOpen = [Bool](repeating: false, count: VIC.screenWidth)
     var rasterTraceGraphicsOutput = [Bool](repeating: false, count: VIC.screenWidth)
-    // Five colors, held matrix bits, and the idle-output mode share one trace word.
-    private var rasterTraceColors = [UInt32](repeating: 0, count: VIC.screenWidth)
+    // Colors/matrix occupy bits 0-27; color mode 28-30, data MCM 31,
+    // background BMM 32, and invalid-mode release hold 33.
+    private var rasterTraceColors = [UInt64](repeating: 0, count: VIC.screenWidth)
     var spriteTraceLine: UInt16?
     var spriteTraceHasSamples: Bool = false
     var spriteTraceValid = [Bool](repeating: false, count: VIC.screenWidth)
@@ -480,8 +495,12 @@ public final class VIC {
         matrixDMAActive = false
         cpuPhaseActive = false
         badLineUpdatePending = false
+        pendingGraphicsAddressBitmapMode = nil
+        pendingGraphicsAddressECM = nil
         badLineDENLatched = false
         rasterIRQTriggeredThisLine = false
+        rasterCompareMatched = false
+        frameStartPending = false
         lightPenX = 0
         lightPenY = 0
         lightPenLatchedThisFrame = false
@@ -521,11 +540,13 @@ public final class VIC {
         spriteDisplay = [Bool](repeating: false, count: 8)
         spriteLineData = [[UInt8]](repeating: [0, 0, 0], count: 8)
         spriteShifters = [SpriteShifter](repeating: SpriteShifter(), count: 8)
+        cpuPhaseInternalDataBus = 0xFF
         spriteXWriteThisCycle = nil
         spriteMulticolorWriteThisCycle = nil
         spritePointers = [UInt8](repeating: 0, count: 8)
         spriteDMACheckLine = nil
         spriteDMACheckMask = 0
+        spriteZeroDMAStartedLate = false
         lastHighPhaseMemoryReads = []
         lastHighPhaseColorRAMReads = []
         lastLowPhaseMemoryReads = []
@@ -562,6 +583,7 @@ public final class VIC {
     /// Low phase precedes the CPU's bus access. In particular, a CPU write to
     /// D018/DDR/bank pins cannot change a pointer already read in this phase.
     func beginCycle() {
+        cpuPhaseInternalDataBus = 0xFF
         spriteXWriteThisCycle = nil
         spriteMulticolorWriteThisCycle = nil
         if recordsBusAccessTraces {
@@ -601,6 +623,13 @@ public final class VIC {
         if rasterCycle == spriteDMAFirstStartCycle - 3 || rasterCycle == spriteDMAFirstStartCycle - 2 {
             latchSpriteDMAEligibilityForCurrentLine()
         }
+        // The expansion decision precedes this cycle's CPU register write.
+        // A later clear still forces the FF high; a set cannot toggle it back.
+        if rasterCycle == spriteDMAFirstStartCycle - 2 {
+            for sprite in 0..<8 where spriteDMAEligible(sprite) && spriteExpandY & (1 << sprite) != 0 {
+                spriteYExpFF[sprite].toggle()
+            }
+        }
         if rasterCycle == spriteDMAFirstStartCycle {
             latchSpriteDisplayForCurrentLine()
         }
@@ -608,6 +637,8 @@ public final class VIC {
         let delayDisplayEntry = pendingDisplayEntry && !wasDisplayActive && displayActive
         if delayDisplayEntry { displayActive = false }
         performLowPhaseAccess()
+        pendingGraphicsAddressBitmapMode = nil
+        pendingGraphicsAddressECM = nil
         if delayDisplayEntry { displayActive = true }
         captureRasterTraceForCurrentCycle()
         cpuPhaseActive = true
@@ -620,19 +651,14 @@ public final class VIC {
         // writes reach its comparator. The public spritesplit probes exercise
         // both boundaries at each of the eight sprite-X alignments.
         if let previous = spriteMulticolorWriteThisCycle {
-            clockSpritePixels(startX: beamX(atDot: 2), dotCount: 1, collisionStage: 1,
+            clockSpritePixels(startDot: 2, dotCount: 1, collisionStage: 1,
                               oldX: true, multicolorBits: previous)
             applySpriteMulticolorChange(from: previous)
-            clockSpritePixels(startX: beamX(atDot: 3), dotCount: 1, collisionStage: 1, oldX: true)
+            clockSpritePixels(startDot: 3, dotCount: 1, collisionStage: 1, oldX: true)
         } else {
-            clockSpritePixels(startX: beamX(atDot: 2), dotCount: 2, collisionStage: 1, oldX: true)
+            clockSpritePixels(startDot: 2, dotCount: 2, collisionStage: 1, oldX: true)
         }
-        clockSpritePixels(startX: beamX(atDot: 4), dotCount: 4, collisionStage: 2)
-        if rasterCycle == spriteDMAFirstStartCycle - 2 {
-            for sprite in 0..<8 where spriteDMAEligible(sprite) && spriteExpandY & (1 << sprite) != 0 {
-                spriteYExpFF[sprite].toggle()
-            }
-        }
+        clockSpritePixels(startDot: 4, dotCount: 4, collisionStage: 2)
         // Render pixels at specific cycles (raster beam)
         if rasterCycle >= 0 && rasterCycle < rasterCyclesPerLine {
             renderCycle()
@@ -649,6 +675,14 @@ public final class VIC {
         rasterCycle += 1
         if rasterCycle >= rasterCyclesPerLine {
             endOfLine()
+        } else if frameStartPending && rasterCycle == 1 {
+            frameStartPending = false
+            refreshCounter = 0xFF
+            videoCounterBase = 0
+            badLineDENLatched = false
+            lightPenLatchedThisFrame = false
+            rasterIRQTriggeredThisLine = false
+            checkRasterInterrupt()
         }
     }
 
@@ -696,14 +730,12 @@ public final class VIC {
 
         if rasterLine >= UInt16(rasterLinesPerFrame) {
             rasterLine = 0
-            refreshCounter = 0xFF
-            videoCounterBase = 0
-            badLineDENLatched = false
-            lightPenLatchedThisFrame = false
+            frameStartPending = true
             frameReady = true
+        } else {
+            rasterIRQTriggeredThisLine = false
         }
         clearRasterTrace()
-        rasterIRQTriggeredThisLine = false
         checkRasterInterrupt()
     }
 
@@ -752,6 +784,7 @@ public final class VIC {
     }
 
     func clearRasterTrace() {
+        rasterTraceHasGraphicsModeChanges = false
         if !rasterTraceHasSamples && !spriteTraceHasSamples {
             rasterTraceLine = nil
             rasterTraceHasDisplayOpen = false
@@ -827,7 +860,7 @@ public final class VIC {
         // the latches. New pixels are queued by their original half-cycle.
         advanceCollisionPipeline()
         advanceCollisionPipeline()
-        clockSpritePixels(startX: first, dotCount: 2, collisionStage: 1)
+        clockSpritePixels(startDot: 0, dotCount: 2, collisionStage: 1)
     }
 
     private func advanceCollisionPipeline() {
@@ -853,13 +886,15 @@ public final class VIC {
         }
         prepareRasterTraceForCurrentLine()
 
-        let colors = UInt32(borderColor & 15) << 16
-            | UInt32(backgroundColor[3] & 15) << 12
-            | UInt32(backgroundColor[2] & 15) << 8
-            | UInt32(backgroundColor[1] & 15) << 4
-            | UInt32(backgroundColor[0] & 15)
-            | UInt32(controlReg1 & 0x60) << 24
-            | UInt32(controlReg2 & 0x10) << 24
+        let colors = UInt64(borderColor & 15) << 16
+            | UInt64(backgroundColor[3] & 15) << 12
+            | UInt64(backgroundColor[2] & 15) << 8
+            | UInt64(backgroundColor[1] & 15) << 4
+            | UInt64(backgroundColor[0] & 15)
+            | UInt64(controlReg1 & 0x60) << 24
+            | UInt64(controlReg2 & 0x10) << 24
+            | UInt64(controlReg2 & 0x10) << 27
+            | UInt64(controlReg1 & 0x20) << 27
 
         rasterTraceValid.withUnsafeMutableBufferPointer { valid in
             rasterTraceGraphicsOutput.withUnsafeMutableBufferPointer { graphics in
@@ -871,7 +906,7 @@ public final class VIC {
                         clockGraphicsColorLatch(at: pixel)
                         valid[pixel] = true
                         graphics[pixel] = graphicsOutput
-                        color[pixel] = colors | UInt32(graphicsOutputMatrix) << 20
+                        color[pixel] = colors | UInt64(graphicsOutputMatrix) << 20
                         if !horizontalBorderActive { rasterTraceHasDisplayOpen = true }
                         if graphicsOutput { rasterTraceHasGraphicsOutput = true }
                     }
@@ -893,8 +928,9 @@ public final class VIC {
         graphicsOutputMatrix = graphicsBufferScreenBytes[column]
     }
 
-    private func clockSpritePixels(startX: Int, dotCount: Int, collisionStage: Int,
+    private func clockSpritePixels(startDot: Int, dotCount: Int, collisionStage: Int,
                                    oldX: Bool = false, multicolorBits: UInt8? = nil) {
+        let startX = beamX(atDot: startDot)
         let activeMask = activeVisibleSpriteMask()
         guard activeMask != 0 else { return }
         let capturesLine = spriteTraceLine == rasterLine
@@ -925,7 +961,23 @@ public final class VIC {
             }
             let expanded = spriteExpandX & mask != 0
             let multicolor = (multicolorBits ?? spriteMulticolor) & mask != 0
+            // The reload gate suppresses X matches through the pointer cycle
+            // and the first three dots of the middle-byte cycle. Original
+            // spritex hardware results put PAL sprite 0's first reuse at X=367.
+            let reloadDots: Int
+            if let offset = spriteDMACycleOffset, offset / 2 == sprite {
+                reloadDots = offset & 1 == 0 ? 8 : 3
+            } else {
+                reloadDots = 0
+            }
             for dot in 0..<dotCount {
+                if startDot + dot < reloadDots {
+                    shifter.remainingBits = 0
+                    shifter.expansionSecondDot = false
+                    shifter.multicolorSecondBit = false
+                    shifter.pixel = 0
+                    continue
+                }
                 let x = startX + dot
                 let value = shifter.clock(matchesX: spriteDisplay[sprite] && x == spritePosition,
                                           expanded: expanded, multicolor: multicolor)
@@ -1000,11 +1052,11 @@ public final class VIC {
         let first = beamX(atDot: 0) - 3 + period
         if register <= 0x24 {
             let shift = register == 0x20 ? 16 : Int(register - 0x21) * 4
-            let mask = UInt32(15) << shift
+            let mask = UInt64(15) << shift
             for dot in 0..<11 {
                 let x = (first + dot) % period
                 if x < VIC.screenWidth && rasterTraceValid[x] {
-                    rasterTraceColors[x] = (rasterTraceColors[x] & ~mask) | UInt32(value & 15) << shift
+                    rasterTraceColors[x] = (rasterTraceColors[x] & ~mask) | UInt64(value & 15) << shift
                 }
             }
         } else {
@@ -1014,6 +1066,30 @@ public final class VIC {
                     spriteTraceColor[x] = ColorPalette.rgba[Int(value & 15)]
                 }
             }
+        }
+    }
+
+    private func updateGraphicsModeOutput(mask: UInt8, value: UInt8, firstDot: Int, shift: Int = 24) {
+        guard cpuPhaseActive, rasterTraceLine == rasterLine else { return }
+        rasterTraceHasGraphicsModeChanges = true
+        // Mode selection follows the fetched data through a separate output
+        // path. Do not change the address or contents of an earlier g-access.
+        let packedMask = UInt64(mask) << shift
+        for dot in firstDot..<4 {
+            let x = beamX(atDot: dot)
+            if x < VIC.screenWidth && rasterTraceValid[x] {
+                rasterTraceColors[x] = (rasterTraceColors[x] & ~packedMask) | UInt64(value & mask) << shift
+            }
+        }
+    }
+
+    private func holdInvalidGraphicsOutput() {
+        guard cpuPhaseActive, rasterTraceLine == rasterLine else { return }
+        // Clearing BMM/MCM while ECM remains set releases black output
+        // after the color selector: one dot on 6569, two on 6567R8.
+        for dot in 0..<(videoStandard == .pal ? 1 : 2) {
+            let x = beamX(atDot: dot)
+            if x < VIC.screenWidth && rasterTraceValid[x] { rasterTraceColors[x] |= 1 << 33 }
         }
     }
 
@@ -1157,6 +1233,12 @@ public final class VIC {
             }
         }
 
+        let x = VIC.displayLeft + column * 8 + Int(columnControlReg2 & 7) + bitOffset
+        if rasterTraceHasGraphicsModeChanges, rasterTraceValid[x] {
+            return graphicsOutputPixel(pixelData: pixelData, screenByte: charCode, colorByte: colorData,
+                                       bit: bitOffset, pixel: x).foreground
+        }
+
         if columnBitmapMode {
             if columnMulticolorMode {
                 let pair = bitOffset / 2
@@ -1229,7 +1311,12 @@ public final class VIC {
         if recordTrace {
             lastLowPhaseMemoryReads.append(address)
         }
-        _ = readMemory?(address)
+        let value = readMemory?(address) ?? 0
+        if let sprite = spriteMiddleByteSlotForCurrentCycle() {
+            // Inactive sprite slots still load the shifter: phi1 supplies
+            // the idle byte, while phi2 samples the internal register bus.
+            latchSpriteDataByte(sprite: sprite, index: 1, value: value)
+        }
     }
 
     func raiseInterrupt(_ flag: UInt8) {
@@ -1238,7 +1325,13 @@ public final class VIC {
     }
 
     func checkRasterInterrupt() {
-        guard rasterLine == rasterCompare && !rasterIRQTriggeredThisLine else { return }
+        // The last phi2 write and the raster increment reach the comparator
+        // together. Following the counter across that edge must not retrigger.
+        if cpuPhaseActive && (rasterCycle == rasterCyclesPerLine - 1 || frameStartPending) { return }
+        let matched = rasterCounter == rasterCompare
+        let risingEdge = matched && !rasterCompareMatched
+        rasterCompareMatched = matched
+        guard risingEdge && !rasterIRQTriggeredThisLine else { return }
         rasterIRQTriggeredThisLine = true
         raiseInterrupt(0x01)  // IRST
     }
@@ -1274,7 +1367,7 @@ public final class VIC {
 
     /// Latch a light pen edge at the current raster beam position.
     public func triggerLightPenAtCurrentBeam() {
-        triggerLightPen(x: beamX(atDot: 8), y: Int(rasterLine))
+        triggerLightPen(x: beamX(atDot: 8), y: Int(rasterCounter))
     }
 
     func fetchCharData(column: Int) {
@@ -1384,16 +1477,24 @@ public final class VIC {
         let matrixAvailable = displayActive && videoMatrixLineIndex < 40
         let charCode = matrixAvailable ? lineBuffer[videoMatrixLineIndex] : 0
         let colorData = matrixAvailable ? colorBuffer[videoMatrixLineIndex] : 0
-        let address: UInt16
+        var address: UInt16
         if !displayActive {
-            address = extendedBGMode ? 0x39FF : 0x3FFF
+            address = 0x3FFF
         } else if bitmapMode {
-            let bitmapAddress = charBase | UInt16(videoCounter & 0x3FF) << 3 | UInt16(rowCounter)
-            address = extendedBGMode ? bitmapAddress & 0x39FF : bitmapAddress
+            address = charBase | UInt16(videoCounter & 0x3FF) << 3 | UInt16(rowCounter)
         } else {
-            let glyphCode = extendedBGMode ? (charCode & 0x3F) : charCode
-            address = charBase | UInt16(glyphCode) << 3 | UInt16(rowCounter)
+            address = charBase | UInt16(charCode) << 3 | UInt16(rowCounter)
         }
+        // BMM reaches the high-address selection before the low-address
+        // selection. The first g-access after a CPU write uses the old
+        // selection for A0-A7, with the new mode supplying A8-A13.
+        if displayActive, let oldBitmapMode = pendingGraphicsAddressBitmapMode {
+            let lowAddress = UInt16(oldBitmapMode ? videoCounter : Int(charCode)) << 3 | UInt16(rowCounter)
+            address = (address & 0x3F00) | (lowAddress & 0xFF)
+        }
+        // ECM gates A9/A10 independently of the bitmap address selector.
+        // A pending selection lasts only through the next low phase.
+        if pendingGraphicsAddressECM ?? extendedBGMode { address &= 0x39FF }
         if recordTrace { lastLowPhaseMemoryReads.append(address) }
         graphicsBuffer[column] = readMem?(address) ?? 0
         graphicsBufferControlReg1[column] = controlReg1
@@ -1548,12 +1649,55 @@ public final class VIC {
     private func rasterTraceIdleColor(pixel: Int) -> UInt8 {
         let state = rasterTraceColors[pixel]
         let matrix = UInt8(truncatingIfNeeded: state >> 20)
-        switch (state >> 28) & 7 {
-        case 2: return matrix & 15
+        let mode = (state >> 28) & 7
+        if mode >= 5 || state & (1 << 33) != 0 { return 0 }
+        if mode & 5 == 0 && state & (1 << 32) != 0 { return matrix & 15 }
+        switch mode {
         case 4: return rasterTraceBackgroundColor(Int(matrix >> 6), pixel: pixel)
-        case 5...7: return 0
         default: return UInt8(state & 15)
         }
+    }
+
+    private func graphicsOutputPixel(pixelData: UInt8, screenByte: UInt8, colorByte: UInt8,
+                                     bit: Int, pixel: Int) -> (color: UInt8, foreground: Bool) {
+        let mode = (rasterTraceColors[pixel] >> 28) & 7
+        let bitmap = mode & 2 != 0
+        let multicolor = mode & 1 != 0 && (bitmap || colorByte & 8 != 0)
+        // The data latch and color selector see MCM at different times.
+        // Replay from this byte's reload so a mode change can retain the
+        // previous hires pixel for the second dot of a multicolor pair.
+        var bits: UInt8 = 0
+        var secondDot = false
+        var previousMulticolor = false
+        for dot in 0...bit {
+            let sample = rasterTraceColors[pixel - bit + dot]
+            let dataMulticolor = sample & 0x80000000 != 0 && (sample & 0x20000000 != 0 || colorByte & 8 != 0)
+            if dot > 0 && dataMulticolor && !previousMulticolor { secondDot = true }
+            let shifted = UInt16(pixelData) << dot
+            if dataMulticolor {
+                if !secondDot { bits = UInt8((shifted >> 6) & 3) }
+                secondDot.toggle()
+            } else {
+                bits = UInt8((shifted >> 7) & 1) << 1
+            }
+            previousMulticolor = dataMulticolor
+        }
+        let foreground = bits & 2 != 0
+        if mode >= 5 || rasterTraceColors[pixel] & (1 << 33) != 0 { return (0, foreground) }
+        if multicolor {
+            switch bits {
+            case 0: return (rasterTraceBackgroundColor(0, pixel: pixel), false)
+            case 1: return (bitmap ? screenByte >> 4 : rasterTraceBackgroundColor(1, pixel: pixel), false)
+            case 2: return (bitmap ? screenByte & 15 : rasterTraceBackgroundColor(2, pixel: pixel), true)
+            default: return (colorByte & (bitmap ? 15 : 7), true)
+            }
+        }
+        if !foreground && mode & 4 == 0 && rasterTraceColors[pixel] & (1 << 32) != 0 {
+            return (screenByte & 15, false)
+        }
+        if bitmap && foreground { return (screenByte >> 4, true) }
+        if foreground { return (colorByte & 15, true) }
+        return (rasterTraceBackgroundColor(mode == 4 ? Int(screenByte >> 6) : 0, pixel: pixel), false)
     }
 
     func renderGraphicsLine(_ line: inout [UInt32], foregroundMask: inout [Bool], charRow: Int, pixelRow: Int,
@@ -1610,6 +1754,19 @@ public final class VIC {
             let columnXScroll = Int(columnControlReg2 & 0x07)
             let xPos = leftBorder + col * 8 + columnXScroll
             let columnBackgroundMarker = columnInvalidECMMode ? nil : markBackgroundPixel
+
+            if useColumnTrace, rasterTraceHasGraphicsModeChanges, rasterTraceLine == rasterLine {
+                for bit in 0..<8 {
+                    let pixel = xPos + bit
+                    guard pixel >= 0, pixel < VIC.screenWidth, rasterTraceValid[pixel] else { continue }
+                    let output = graphicsOutputPixel(pixelData: pixelData, screenByte: charCode,
+                                                     colorByte: colorData, bit: bit, pixel: pixel)
+                    line[pixel] = ColorPalette.rgba[Int(output.color)]
+                    foregroundMask[pixel] = output.foreground
+                    markBackgroundPixel?(pixel, -1)
+                }
+                continue
+            }
 
             if columnBitmapMode {
                 renderBitmapChar(
@@ -1882,6 +2039,7 @@ public final class VIC {
             let mask = UInt8(1 << sprite)
             if spriteEnabled & mask != 0 && spriteY[sprite] == lowRaster {
                 spriteDMACheckMask |= mask
+                if sprite == 0 { spriteZeroDMAStartedLate = rasterCycle == spriteDMAFirstStartCycle - 2 }
                 spriteMCBase[sprite] = 0
                 spriteYExpFF[sprite] = true
             }
@@ -1896,7 +2054,7 @@ public final class VIC {
                 spriteDisplay[sprite] = false
                 // Disable new X matches, but let an already shifting final
                 // row finish, including expanded sprites in the right border.
-            } else if spriteY[sprite] == lowRaster {
+            } else if spriteY[sprite] == lowRaster && spriteEnabled & (1 << sprite) != 0 {
                 spriteDisplay[sprite] = true
             }
         }
@@ -1937,6 +2095,7 @@ public final class VIC {
         guard sprite >= 0 && sprite < 8 else { return }
         guard activeSpriteDMASlot == sprite,
               let byteOffset = spriteLineByteOffset(for: sprite) else {
+            latchSpriteDataByte(sprite: sprite, index: 0, value: cpuPhaseInternalDataBus)
             return
         }
         spriteFetchInFlight = (sprite, UInt16(spritePointers[sprite]) * 64, byteOffset)
@@ -1961,7 +2120,11 @@ public final class VIC {
     }
 
     func fetchSpriteLastByte(sprite: Int) {
-        fetchSpriteByte(sprite: sprite, index: 2, lowPhase: false, recordTrace: recordsBusAccessTraces)
+        if spriteFetchInFlight?.sprite == sprite {
+            fetchSpriteByte(sprite: sprite, index: 2, lowPhase: false, recordTrace: recordsBusAccessTraces)
+        } else {
+            latchSpriteDataByte(sprite: sprite, index: 2, value: cpuPhaseInternalDataBus)
+        }
         spriteFetchInFlight = nil
     }
 
@@ -1969,16 +2132,27 @@ public final class VIC {
         guard let fetch = spriteFetchInFlight, fetch.sprite == sprite else { return }
         let offset = (fetch.offset + index) & 0x3F
         let address = fetch.pointer | UInt16(offset)
-        if recordTrace {
-            if lowPhase { lastLowPhaseMemoryReads.append(address) }
-            else { lastHighPhaseMemoryReads.append(address) }
+        let value: UInt8
+        if sprite == 0 && index == 0 && spriteZeroDMAStartedLate {
+            // AEC has not released the CPU yet; no RAM read takes place.
+            value = 0xFF
+            spriteZeroDMAStartedLate = false
+        } else {
+            if recordTrace {
+                if lowPhase { lastLowPhaseMemoryReads.append(address) }
+                else { lastHighPhaseMemoryReads.append(address) }
+            }
+            value = readMemory?(address) ?? 0
         }
-        let value = readMemory?(address) ?? 0
+        latchSpriteDataByte(sprite: sprite, index: index, value: value)
+        spriteMC[sprite] = (offset + 1) & 0x3F
+        spriteLastFetchedMC[sprite] = spriteMC[sprite]
+    }
+
+    private func latchSpriteDataByte(sprite: Int, index: Int, value: UInt8) {
         spriteLineData[sprite][index] = value
         let shift = (2 - index) * 8
         spriteShifters[sprite].data = (spriteShifters[sprite].data & ~(0xFF << shift)) | UInt32(value) << shift
-        spriteMC[sprite] = (offset + 1) & 0x3F
-        spriteLastFetchedMC[sprite] = spriteMC[sprite]
     }
 
     func renderSprites(_ line: inout [UInt32], fbY: Int, foregroundMask: [Bool]? = nil) {
@@ -2084,52 +2258,17 @@ public final class VIC {
     // MARK: - Register access
 
     public func readRegister(_ reg: UInt16) -> UInt8 {
+        let value = debugRegisterValue(reg)
+        if cpuPhaseActive { cpuPhaseInternalDataBus = value }
         let register = reg & 0x3F
         switch register {
-        case 0x00...0x0F:
-            // Sprite X/Y coordinates
-            let sprite = Int(register) / 2
-            if register & 1 == 0 {
-                return UInt8(spriteX[sprite] & 0xFF)
-            } else {
-                return spriteY[sprite]
-            }
-
-        case 0x10: return spriteXMSB
-        case 0x11:
-            var val = controlReg1 & 0x7F
-            if rasterLine > 255 { val |= 0x80 }
-            return val
-        case 0x12: return UInt8(rasterLine & 0xFF)
-        case 0x13: return lightPenX
-        case 0x14: return lightPenY
-        case 0x15: return spriteEnabled
-        case 0x16: return controlReg2 | 0xE0
-        case 0x17: return spriteExpandY
-        case 0x18: return memoryPointers | 0x01
-        case 0x19: return interruptRegister | 0x70
-        case 0x1A: return interruptEnable | 0xF0
-        case 0x1B: return spritePriority
-        case 0x1C: return spriteMulticolor
-        case 0x1D: return spriteExpandX
         case 0x1E:
-            let val = spriteSpriteCollision
             spriteSpriteCollision = 0
-            return val
         case 0x1F:
-            let val = spriteDataCollision
             spriteDataCollision = 0
-            return val
-        case 0x20: return borderColor | 0xF0
-        case 0x21: return backgroundColor[0] | 0xF0
-        case 0x22: return backgroundColor[1] | 0xF0
-        case 0x23: return backgroundColor[2] | 0xF0
-        case 0x24: return backgroundColor[3] | 0xF0
-        case 0x25: return spriteMulticolor0 | 0xF0
-        case 0x26: return spriteMulticolor1 | 0xF0
-        case 0x27...0x2E: return spriteColors[Int(register) - 0x27] | 0xF0
-        default: return 0xFF  // Unused registers read as $FF
+        default: break
         }
+        return value
     }
 
     public func debugRegisterValue(_ reg: UInt16) -> UInt8 {
@@ -2144,9 +2283,9 @@ public final class VIC {
         case 0x10: return spriteXMSB
         case 0x11:
             var value = controlReg1 & 0x7F
-            if rasterLine > 255 { value |= 0x80 }
+            if rasterCounter > 255 { value |= 0x80 }
             return value
-        case 0x12: return UInt8(rasterLine & 0xFF)
+        case 0x12: return UInt8(rasterCounter & 0xFF)
         case 0x13: return lightPenX
         case 0x14: return lightPenY
         case 0x15: return spriteEnabled
@@ -2175,6 +2314,7 @@ public final class VIC {
     public func writeRegister(_ reg: UInt16, value: UInt8) {
         let register = reg & 0x3F
         if cpuPhaseActive {
+            cpuPhaseInternalDataBus = value
             if register < 0x10 && register & 1 == 0 {
                 spriteXWriteThisCycle = (UInt8(register), UInt8(truncatingIfNeeded: spriteX[Int(register) / 2]))
             } else if register == 0x10 {
@@ -2202,6 +2342,24 @@ public final class VIC {
             }
 
         case 0x11:
+            if cpuPhaseActive && (controlReg1 ^ value) & 0x20 != 0 {
+                pendingGraphicsAddressBitmapMode = bitmapMode
+            }
+            if (controlReg1 ^ value) & 0x20 != 0 {
+                updateGraphicsModeOutput(mask: 0x20, value: value, firstDot: 0)
+                updateGraphicsModeOutput(mask: 0x20, value: value, firstDot: value & 0x20 == 0 ? 2 : 0, shift: 27)
+                if invalidECMMode && value & 0x60 == 0x40 && !multicolorMode { holdInvalidGraphicsOutput() }
+            }
+            if (controlReg1 ^ value) & 0x40 != 0 {
+                if cpuPhaseActive {
+                    // PAL delays release; NTSC delays assertion and preserves
+                    // the old mask when BMM changes in the same CPU write.
+                    let delay = videoStandard == .pal ? value & 0x40 == 0
+                        : value & 0x40 != 0 || (controlReg1 ^ value) & 0x20 != 0
+                    pendingGraphicsAddressECM = delay ? extendedBGMode : nil
+                }
+                updateGraphicsModeOutput(mask: 0x40, value: value, firstDot: value & 0x40 == 0 ? 2 : 0)
+            }
             controlReg1 = value & 0x7F
             rasterCompare = (rasterCompare & 0x00FF) | (UInt16(value & 0x80) << 1)
             if rasterLine == UInt16(VIC.firstBadLine) && displayEnabled {
@@ -2222,6 +2380,11 @@ public final class VIC {
 
         case 0x15: spriteEnabled = value
         case 0x16:
+            if (controlReg2 ^ value) & 0x10 != 0 {
+                updateGraphicsModeOutput(mask: 0x10, value: value, firstDot: 0)
+                updateGraphicsModeOutput(mask: 0x10, value: value, firstDot: 3, shift: 27)
+                if invalidECMMode && extendedBGMode && !bitmapMode && value & 0x10 == 0 { holdInvalidGraphicsOutput() }
+            }
             controlReg2 = value
             if cpuPhaseActive, (15..<55).contains(rasterCycle), graphicsBufferLine == rasterLine {
                 // Phi1 fetched this byte, but its first possible output dot is

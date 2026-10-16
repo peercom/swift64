@@ -91,7 +91,7 @@ SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
   swift test -c release -j 2 --filter PublicVICConformanceTests
 ```
 
-`SWIFT64_PUBLIC_VIC_TEST_IDS` selects a comma-separated subset. IDs are `phi1-pal`, `phi1-ntsc`, `sprite-collision-pal`, `graphics-collision-pal`; `fld-20-pal`, `fld-21-pal`, `fld-22-pal`, `fld-29-pal`, `fld-2a-pal`, `fld-2b-pal`; `sprite-dma-54-pal`, `sprite-dma-54-ntsc`, `sprite-dma-57-pal`, `sprite-dma-57-ntsc`; the twelve PAL border IDs; and the seventeen PAL sprite-register split IDs documented below. The default runs all 43. Local ROMs default to `Sources/C64App/ROMS`; `SWIFT64_PUBLIC_VIC_ROM_DIR` can select another directory containing the same named BASIC, Kernal, and character files. Boot is bounded at 300 frames and must display READY; each original BASIC stub is then started with RUN and has a three-million-cycle limit. KERNAL traps are disabled. Completion requires the program's actual CPU write to `$D7FF`, not a normalized SID mirror, patched instruction, direct PC entry, or scan for a result instruction. The four bus/collision programs self-check; the 39 visual programs additionally require exact color-index comparison, since their `$D7FF` write only requests capture. Instances run sequentially and are released between fixtures.
+`SWIFT64_PUBLIC_VIC_TEST_IDS` selects a comma-separated subset. The original 43-case set includes `phi1-pal`, `phi1-ntsc`, `sprite-collision-pal`, `graphics-collision-pal`; six `fld-<timing>-pal` IDs; four `sprite-dma-<timing>-pal/ntsc` IDs; twelve PAL border IDs; and seventeen PAL sprite-register split IDs. Later sections document subsequent additions. The current default runs all **146 programs**, with **144 passing** and two unresolved strict mode-transition comparisons; see the [latest sprite reload results](#sprite-reload-and-cycle-stealing). Local ROMs default to `Sources/C64App/ROMS`; `SWIFT64_PUBLIC_VIC_ROM_DIR` can select another directory containing the same named BASIC, Kernal, and character files. PRG boot is bounded at 300 frames and must display READY; each original BASIC stub is then started with RUN. CRT fixtures instead boot through their cartridge reset vector. Programs have a three-million-cycle limit, except the two cycle-stealing probes with a 30-million-cycle limit for their frame-by-frame measurements. KERNAL traps are disabled. Completion requires the program's actual mapped CPU write to `$D7FF`, not a normalized SID mirror, patched instruction, direct PC entry, or scan for a result instruction. Nine bus/collision/acknowledgement/sprite-X/cycle-stealing programs self-check; the remaining programs additionally require exact color-index comparison, since their `$D7FF` write only requests capture. Instances run sequentially and are released between fixtures.
 
 Measured Release results (2026-10-15), repeated with identical observables after the IRQ/NTSC/collision fixes:
 
@@ -218,7 +218,7 @@ This calibrates the default PAL 6569 reference behavior, not the alternate 8565 
 
 ## Public graphics-fetch and bitmap-border results
 
-The runner selects 50 public programs by default. Seven additional unchanged programs probe PAL/NTSC graphics-fetch timing, Blackmail FLI, and bitmap open borders. The 43-program result above is a historical sprite-split checkpoint. The table below records release 0.4.1; newer results follow in [bitmap output-latch proof](#bitmap-open-border-output-latch).
+At release 0.4.1, the runner selected 50 public programs by default. Seven additional unchanged programs probe PAL/NTSC graphics-fetch timing, Blackmail FLI, and bitmap open borders. The 43-program result above is a historical sprite-split checkpoint. The table below records release 0.4.1; newer results follow in [bitmap output-latch proof](#bitmap-open-border-output-latch) and [the 52-program side-border expansion](#inactive-sprite-fetches-and-side-border-probes).
 
 Release 0.4.1 validation (2026-10-15): all 50 programs reach their own `$D7FF=$00` completion write, but four fail their visual comparison. There are 46 passing programs: four bus/collision probes and 42 exact visual fixtures, covering 3,836,160 matching color indices. All previously passing sprite-split cases remain exact. The seven additional results are:
 
@@ -234,7 +234,7 @@ Release 0.4.1 validation (2026-10-15): all 50 programs reach their own `$D7FF=$0
 
 `swift build --build-tests -j 2` passes. Without the public-fixture environment variable, the focused Debug slice executes 597 tests (596 passed, one opt-in skip) and Release integration executes 760 (748 passed, 12 opt-in skips), both with zero failures. The separate full public run takes 259.6 seconds and exits 1 with three ordinary assertions and the Blackmail expected failure. The full public suite is deliberately not reported as green.
 
-Blackmail has a scoped, strict expected failure for its unresolved FLI row alignment. Its exact mismatch count is asserted outside that waiver, so changed results require investigation; the failure is not counted as a visual pass. The three standard-bitmap border probes retain ordinary zero-difference assertions: they failed in 0.4.1 and now pass without waivers. Multicolor bitmap and standard bitmap are tested separately; a pass for one does not certify the other.
+In releases 0.4.1/0.4.2, Blackmail had a scoped, strict expected failure for its FLI row alignment. Its exact mismatch count was asserted outside that waiver, so changed results required investigation; the failure was not counted as a visual pass. That exception is removed by the later [raster synchronizer fix](#raster-synchronizer-timing). The three standard-bitmap border probes retain ordinary zero-difference assertions: they failed in 0.4.1 and now pass without waivers. Multicolor bitmap and standard bitmap are tested separately; a pass for one does not certify the other.
 
 The pinned [bitmap-border observations](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/border/readme.txt) describe held bitmap background colors outside the graphics window, including an effect used by Krestology/Crest. These failures are useful compatibility targets, not reasons to adjust the upstream reference images. Speculative CIA timer/phase experiments did not resolve Blackmail and were removed; this release changes neither CIA timing nor the machine's CIA/CPU clock order.
 
@@ -259,6 +259,431 @@ That change alone removed 7,938 and 5,389 differences from the first two cases a
 `VICGraphicsColorLatchTests` adds eight ROM-independent PAL/NTSC regressions covering held colors across both side borders, all eight X-scroll values, zero-matrix idle loads, vertical gating with continuing memory access, fetched rather than reread matrix data, all eight mode selectors, CPU-phase color and scroll writes, repeat rendering without state advancement, invisible rasterlines, frame wrap, and reset. Pixel checks use the shared 376-pixel border crop; NTSC's skipped logical X=392...395 positions still require separate physical-output mapping, and are not silently claimed as correct.
 
 Validation is sequential with two build jobs and one emulator. `swift build --build-tests -j 2` passes; the checked Debug slice executes 605 tests (604 passed, one opt-in skip). Full Release integration executes 768 tests (757 passed, 11 slow-drive skips, zero unexpected failures), with Blackmail's existing expected failure reported separately. The full public set retains identical completion observables; the three bitmap comparisons improve to exact without weakening an assertion. No SID suite or audio playback was run. These changes ship in 0.4.2 and do not complete broader game/demo or chip-revision certification.
+
+## Inactive sprite fetches and side-border probes
+
+Development after 0.4.2 models the inactive fetch path described by the pinned [side-border sprite observations](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/sb_sprite_fetch/readme.txt). All sprite slots load their shifters even when DMA is inactive: the two phi2 bytes come from the internal VIC register bus (normally `$FF`), with the phi1 idle byte from `$3FFF` between them. CPU VIC-register reads/writes can change those outer bytes. This does not create extra memory reads, CPU stalls, or sprite-counter advancement. The implementation is original Swift; no VICE implementation code is included.
+
+`VICInactiveSpriteFetchTests` adds five bounded checks: all eight PAL/NTSC slots; current-phase VIC bus values and pull-up reset; non-mutating debugger versus collision-register reads; real indexed 6510 stores including mirrors and RAM isolation; and the extra PAL row at X=`$164` but not `$163`. The CPU test supplies `$AC/$4D/$26` through the actual dummy-read, idle-read, and write phases. Existing synthetic register-output fixtures seed after the early fetch slots; their original exact-pixel checks are retained.
+
+The fetch script and default public set add unmodified `sbsprf24-163.prg` and `sbsprf24-164.prg` from the same pinned revision. At the initial fetch-only checkpoint, both reached `$D7FF=$00` after 134,138 cycles, PC `$0CAA`, raster 257:11, but each differed from its reference by **487 / 102,272 pixels**, unchanged from before the fetch fix. The first differences occurred on raster 118, before the sprite Y-match line 122. The `$D016` write trace showed the border routine missing its intended cycle positions. That led to the shared synchronizer corrections documented below, not a reference tolerance or a VIC offset.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=sideborder-sprite-163-pal,sideborder-sprite-164-pal \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+At that checkpoint this command exited nonzero: **49 / 52 programs** passed, including 45 exact images and 4,142,976 matching color indices. All 97 completion/comparison/known-failure records from the previous 50-program run repeated identically. Blackmail's 5,558-pixel expected failure was distinct from the two ordinary side-border assertions. The command now passes following the synchronizer fixes below. Neither program completion alone nor the synthetic fetch proof counted as a full visual pass.
+
+The checked Debug integration slice executes 610 tests: 609 passed, one opt-in skip, zero failures. Release integration without the opt-in corpus executes 773 tests: 761 passed, 12 skips, zero failures. `swift build --build-tests -j 2` passes. Runs remain sequential with two build jobs and one emulator instance. No SID tests or playback checks are part of this batch. A downloaded SDL VICE reference binary crashed during startup, produced no usable trace, and is not used as validation evidence; no VICE application was installed. ROMs, fixture binaries, reference PNGs, and captures remain local/untracked.
+
+## Raster synchronizer timing
+
+Post-0.4.2 development closes all three remaining public visual failures without changing VIC counter boundaries or expected images. **All 52 programs pass**, including four bus/collision probes and **48 exact visual fixtures covering 4,411,520 color indices**. The expected-failure path is removed: every image comparison requires zero differences.
+
+| Fixture | Earlier differing pixels | Current differing pixels | Cycles after RUN / PC / raster |
+| --- | --- | --- | --- |
+| `blackmail-fli-pal` | 5,558 / 64,000 | 0 | 369,965 / `$0AA1` / 256:29 |
+| `sideborder-sprite-163-pal` | 487 / 102,272 | 0 | 134,138 / `$0CAA` / 257:11 |
+| `sideborder-sprite-164-pal` | 487 / 102,272 | 0 | 134,138 / `$0CAA` / 257:11 |
+
+The side-border routine reads a CIA timer to stabilize its IRQ before opening the border and injecting sprite bytes. Swift64 previously applied start/stop/force-load immediately and exposed zero during continuous counting. The new count pipeline follows [Lorenz's hardware cycle tables](https://ist.uwaterloo.ca/~schepers/MJK/cia6526.html), including delayed control/source changes, reload hold, cascaded counting and old-6526 timer IRQ acknowledgement. ICR reads acknowledge the interrupt; clearing its mask does not clear an already latched request. The timer table tests also check PB pins and interrupt data, not just final counter values. Both unchanged side-border images become exact with this correction.
+
+Blackmail then exposed a separate CPU bug: NMI edges bypassed instruction polling. The [documented 6502 detector/polling sequence](https://www.nesdev.org/wiki/Interrupts) requires an edge to reach an instruction's polling point; a late edge waits for the next instruction. NMI polling now follows the same instruction and branch windows as IRQ polling while retaining the edge until serviced. In Blackmail's final frame, the NMI vector read moves from raster 46 cycle 22 to cycle 25, the timer read from cycle 40 (`$B0`) to 43 (`$AD`), and the first `$D011` write from raster 47 cycle 27 to 43. The CIA-only intermediate result had 26,692 wrong pixels; correcting CPU polling reduces it to zero. This failed intermediate run is not counted as validation, and no per-program timing adjustment remains.
+
+Seven new `CIATimerPipelineTests` exercise first-four-cycle control sequences for both timers, continuous and cascaded counts, PB/ICR timing, cancellation of a pending IRQ, CPU-observed reads under PAL/NTSC, CNT/source propagation, and reset. Five `CPUNMIPollingTests` sweep ordinary instruction and branch arrival windows, transient late edges, held data reads, and held opcode fetches. Existing status-stack, BRK/IRQ vector-hijack, simultaneous IRQ/NMI, RESTORE, serial-data, and timer-output checks remain active. Older timer tests now wait for actual underflow output and explicit input-pipeline clocks instead of assuming immediate effects.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+  swift test -c release -j 2 --filter 'PublicVICConformanceTests|VIC.*Tests|C64TimingTests|CPU6502Tests|CPUInterruptPollingTests|CPUNMIPollingTests|CPUHeldReadTests|MemoryMapTests|CIATests|CIATimerPipelineTests|KeyboardTests|C64InterruptTests|C64ResetTests|Drive1541Tests|VIA6522Tests|IECBusTests|CartridgeTests|MachineProfileTests|TapeUnitTests|KernalTrapsTests'
+```
+
+The full Release command executes **996 tests: 985 passed, 11 opt-in slow-drive skips, zero failures**, with no expected-failure exceptions. The focused checked Debug slice executes 622 tests: 621 passed and one public-corpus skip. Raster tracing also records up to 32 timer/NMI-vector reads, using the existing trace flag and cycle threshold, to make synchronizer failures diagnosable without unbounded logs. No SID suite or audio playback was run. Builds/tests remain sequential, capped at two build jobs and one emulator. No emulator implementation code was copied from the references; binaries, ROMs, PNGs, and captures remain local/untracked.
+
+This evidence covers the named probes and default chip assumptions, not complete games, full external multiplexer/multi-part demos, other CIA/VIC revisions, or all NTSC raster effects. The broader VIC goal remains active. These changes are not in the published 0.4.2 app.
+
+An additional opt-in drive check is **not passing**:
+
+```sh
+SWIFT64_SLOW_TRUE_DRIVE_TESTS=1 swift test -c release -j 2 \
+  --filter Drive1541Tests/testTrueDriveD64PrgLoadUsesFileAddress
+```
+
+The bounded 10-million-cycle run fails seven assertions: TALK and its secondary address, UNTALK, CLOSE, payload, end pointer, and EOF. Both the new CPU/CIA and a control using their pre-change versions with the same current VIC finish at C64 PC `$EEAD`, drive PC `$F3F2`, serial status `$00`, and IEC commands `28 F0 3F`. The new sources were restored byte-for-byte before the repeat. This isolates the failure from the CPU/CIA timing batch but is not a clean-release comparison and does not close the drive issue. All tests were run sequentially.
+
+Live SDL VICE comparison was abandoned after four identical `x64sc` null-pointer crashes in `strlen` on macOS. No reference result is claimed from those runs. The downloaded app is not running and its disk image was unmounted; the public fixture comparisons above run directly in Swift64 and do not launch VICE.
+
+Final restoration check: `swift build --build-tests -j 2` passes. A Release repeat of Blackmail and both side-border programs also passes with zero differing pixels and the same cycle/PC/raster checkpoints listed above.
+
+## External sprite-multiplexer demo
+
+`ExternalVICDemoTests` runs Lasse Oorni's original [Hessian-derived 24-sprite example](https://cadaver.github.io/rants/sprite.html), not the full Hessian game. The original packed PRG boots via BASIC `RUN`, unpacks itself, installs its own raster IRQs, sorts sprites, and alternates its two display lists. There is no injected IRQ routine, patched PRG, manually set PC, or VICE process.
+
+```sh
+sh script/fetch_vic_demos.sh
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-demos \
+  swift test -c release -j 2 --filter ExternalVICDemoTests
+```
+
+The opt-in tests run one machine at a time, first NTSC then PAL. Each allows 24 frames for startup and checks the following 240 complete 320x200 display areas. At the demo's list-consumption instruction, a read-only observer snapshots the active sorted sprite table. The oracle independently composes the source program's solid 24x21 sprite rectangles using their colors, 9-bit X coordinates, and physical-slot priority over the character-ROM background. It does not derive expectations from VIC sprite state or recorded Swift64 images. SHA-256 checks reject a different PRG because the observer's memory addresses belong to this exact original program. Source and archive remain local/untracked.
+
+Checks also require repeated list consumption, use of both doublebuffers, more than 16 visible logical sprites in a frame, repeated visible high-X sprites, and over 1,000 overlapping pixels to exercise priority. Setting `SWIFT64_EXTERNAL_VIC_CAPTURE_DIR` saves only the final frame of each profile, or the first failing frame, as a local PPM. The 240-frame run is bounded; captures and downloaded archives are never release assets. This does not prove patterned/multicolor sprites, open borders in this demo, other programs, or hardware-specific analog output.
+
+Checked Debug validation (2026-10-15): both demo runs pass, comparing **480 full display frames / 30,720,000 pixels with zero differences**. NTSC consumes 248 sprite lists and PAL 250, with 24 logical sprites reached in each. The visual oracle also has a ROM-free negative-control test: removing a final-row pixel or reversing overlapping-sprite priority must produce an exact mismatch count. Normal test runs skip the two external demos unless explicitly enabled.
+
+The Release repeat passes the same 480 frames with the following coverage. The display oracle checks every pixel, including text and background, with no tolerated mismatch:
+
+| Profile | Lists consumed | Maximum logical / visible sprites | Visible high-X sprite instances | Overlapping pixels |
+| --- | --- | --- | --- | --- |
+| NTSC | 248 | 24 / 23 | 1,124 | 91,857 |
+| PAL | 250 | 24 / 23 | 1,127 | 90,521 |
+
+The sequential Release integration command below passes **47 tests, zero failures or skips** (55.4 seconds excluding the build). Blackmail and both side-border probes retain their exact images and cycle/PC/raster checkpoints. The checked Debug demo run took 634.8 seconds on this host; prefer Release for the opt-in corpus.
+
+```sh
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-demos \
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=blackmail-fli-pal,sideborder-sprite-163-pal,sideborder-sprite-164-pal \
+  swift test -c release -j 2 --filter 'ExternalVICDemoTests|PublicVICConformanceTests|VICSpriteDMALifecycleTests|C64TimingTests'
+```
+
+### Patterned Sprite Modes
+
+The same fetch script also obtains Martin Piper's published [`TestMultiplexor9.prg`](https://github.com/martinpiper/C64Public/blob/d4bad371e98e200bf0f8dbedbc1c1a6df5edb564/SpriteMultiplexor/TestData/TestMultiplexor9.prg) and its corresponding source/options at that pinned revision. Nothing from that program is incorporated into Swift64; the original source, author license, and binary remain local fixtures. Two additional opt-in runs cover PAL and NTSC with the unchanged PRG and the same 24-frame startup / 240-frame measurement bounds.
+
+This fixture mixes 24 logical sprites: 14 multicolor, 14 behind foreground graphics, 14 X-expanded, and 9 Y-expanded, with four different sprite patterns. The oracle reads the program's sorted indices and source arrays before the frame, decodes the original sprite bytes including transparent bit pairs, and composes hardware-slot priority over the character background. It never uses VIC sprite state to decide what should appear. Both the demo's `ABC` CPU-register-preservation check and its bottom-IRQ X-position increment are required every frame. The overlap and background-occlusion coverage counters must be nonzero beyond a minimum threshold.
+
+ROM-free oracle tests cover all four multicolor bit pairs, both expansion dimensions and boundaries, and the priority case where a behind-background winning sprite still masks a lower-priority front sprite. These are checks on the verifier; the original demo is never patched to force a failure or a pass. The exact-image assertion covers the 320x200 display, not analog output or the outer border.
+
+Release validation (2026-10-15) passes **480 mixed-mode frames / 30,720,000 pixels with zero differences**, split equally between PAL and NTSC. Each profile covers 540,304 overlapping pixels and 308,559 pixels where foreground graphics hide the winning sprite. Together with the Hessian-derived example, the run checks 960 complete display frames / 61,440,000 pixels. Original IRQ motion and register preservation continue throughout, so a static captured image cannot satisfy the run.
+
+The expanded sequential Release slice passes **387 tests with zero failures or skips** in 96.1 seconds excluding compilation. It includes all VIC component tests, C64 timing, both external programs, the three verifier checks, and the three public probes below. Blackmail and both side-border probes still have zero pixel differences and unchanged cycle/PC/raster checkpoints. Fresh fixture downloads were checksum-verified before this run; the three verifier tests also pass in checked Debug.
+
+```sh
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-demos \
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=blackmail-fli-pal,sideborder-sprite-163-pal,sideborder-sprite-164-pal \
+  swift test -c release -j 2 --filter 'ExternalVICDemoTests|PublicVICConformanceTests|VIC.*Tests|C64TimingTests'
+```
+
+### Complete Game Milestone
+
+The fetch script also downloads Fabrizio Caruso's original [Befana vs Balloons 2026 release](https://github.com/Fabrizio-Caruso/C64_Multiplexor_C_LIB/releases/tag/befana2026), its matching game/multiplexer source, and the author's non-commercial license notice. The SHA-256-pinned PRG is a local validation fixture only; neither the game, artwork, nor source is included in Swift64 or its release assets.
+
+`testOptInBefanaGameplayPAL` boots through BASIC, waits within fixed bounds for the real title/gameplay states, and supplies ordinary port-2 joystick input. No game variables, IRQ vectors, or PC are patched. It checks 240 title frames and 1,500 gameplay frames, including all four movement directions, shooting/scoring, level advancement, and continued play after a lost life.
+
+At the original IRQ3's first sprite setup, a read-only observer snapshots the completed sorted source table and sprite bitmap bytes. The independent compositor checks every winning opaque sprite pixel in the 320x200 display, including slot priority and the game's shared multicolor values. It does **not** read VIC sprite internals to construct expectations. Character RAM changes while the beam scans, so this game's proof deliberately excludes background/transparent pixels instead of comparing earlier rasterlines against final RAM. The two preceding external demos retain their full-display assertions; this is an additional game-level proof, not a replacement for those stricter images.
+
+PAL Release result (2026-10-15): **1,740 checked frames / 1,715,786 exact sprite pixels**, maximum 19 visible logical sprites, score 225, level 2, two lives remaining. Both title and level-2 captures were visually inspected. A ROM-free verifier control checks opaque-pixel coverage and rejects an incorrect shared multicolor pixel. `SWIFT64_EXTERNAL_VIC_CAPTURE_DIR` saves only the title, final gameplay frame, or first failure as local PPM files.
+
+**NTSC limitation, not a compatibility pass:** the same original PRG misses a title update on the NTSC profile. The bounded trace shows its line-252 sorter taking 2,656 clocks and scheduling the next line-zero IRQ at raster `30:19`, after the target line has passed. `testOptInBefanaNTSCSortDeadline` reproduces that missed deadline and verifies that the IRQ chain resumes, rather than accepting a skipped update as correct gameplay. This diagnostic is counted as a test check, never as an NTSC game milestone. It is source/timing evidence from Swift64, not a hardware capture; no software patch or VIC timing workaround conceals the limitation.
+
+Using fresh checksum-verified downloads, the expanded Release command in the preceding section passes **390 checks, zero failures or skips**, in 221.4 seconds excluding compilation. That total includes the NTSC limitation diagnostic. Both prior multiplexers repeat their exact PAL/NTSC results; Blackmail FLI and the two side-border probes retain zero pixel differences and unchanged completion checkpoints. The game alone can be reproduced with:
+
+```sh
+sh script/fetch_vic_demos.sh
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-demos \
+  swift test -c release -j 2 --filter ExternalVICDemoTests/testOptInBefanaGameplayPAL
+```
+
+`swift build --build-tests -j 2` passes, and all four ROM-free verifier tests pass in checked Debug. Fresh fixture fetching and `sh -n script/fetch_vic_demos.sh` also pass. No VICE process is used.
+
+This proves a bounded PAL play session in the emulation core, not all 30 game levels, NTSC gameplay, analog video, SID sound quality, disk loading, or sustained app playback.
+
+### Scrolling Game and HUD Split
+
+The original [C64gameframework example](https://github.com/cadaver/c64gameframework/tree/c634f6fa7004cc5bfb14df14dee6f9fa3fe20b1b) combines screen/color-RAM scrolling, a sprite multiplexer, a fixed HUD, and CIA/raster IRQs. The fetch script pins both the source revision and published `exampleef.crt` SHA-256 (`3e1d6e2de8e7773cf6073bdf5c2a72073f1564ed38c73d9844ae57c22e87f239`). It fetches original game material only, not emulator code. The cartridge and artwork remain local/untracked and must not be bundled with Swift64. EasyFlash boot deliberately keeps disk-loader behavior out of this VIC test.
+
+`testOptInScrollingGameFrameworkPAL` and `...NTSC` each run 900 frames, allowing 240 for startup. Starting at frame 500, ordinary port-2 right/fire input moves the player through the doorway into zone 1. Assertions require both sorted sprite buffers, all eight horizontal scroll phases, changing map coordinates, the new zone, and resumed movement after loading. No game RAM, PC, IRQ vector, or program byte is patched.
+
+Expected pixels come from source data captured by read-only CPU-write observers, never VIC sprite internals or saved Swift64 screenshots:
+
+- The game's top-of-frame `$D015` write follows its graphics setup. Snapshot screen RAM, color RAM, charset, and the CPU-issued scroll/background values there. Independently decode the complete 304x80 strip at physical coordinates `x=31..<335, y=55..<135`, before the CIA redraw starts at line 145. Later background rows change while scanning and are not falsely treated as frozen.
+- The panel's line-238 `$D011` write captures its screen/charset/colors. Decode the complete 304x8 HUD at `y=239..<247`, including transparent/background pixels, with the fixed panel scroll and character row 23.
+- At the first sprite setup, snapshot the original sorted tables and sprite-cache bytes. Independently decode every winning opaque sprite pixel within `x=31..<335, y=55..<230`, including multicolor, 9-bit X, expansion and slot priority. The first eight X-MSB/expansion values come from the first group's completed masks, as specified by the original sorter.
+- `BlankScreen` explicitly selects invalid ECM+MCM with sprites disabled during zone loading. Require black across the full 304x175 playfield crop plus a correct HUD, and bound this state to at most twelve frames after movement starts, in zone 1. Blanked frames are checked, not silently skipped; the final state must be playable again.
+
+A ROM-free negative control constructs known multicolor pairs and a sprite independently of the decoder. It rejects wrong colors, a missing sprite pixel, a one-pixel scroll offset, and nonblack output during blanking. Expectations use zero pixel tolerance. This validates bounded scrolling/HUD gameplay on the default PAL/NTSC profiles, not the whole game, all lower-screen background redraw pixels, analog output, disk loading, or SID quality.
+
+```sh
+sh script/fetch_vic_demos.sh
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-demos \
+SWIFT64_EXTERNAL_VIC_CAPTURE_DIR=.build/vic-framework-captures \
+  swift test -c release -j 2 --filter ExternalVICDemoTests/testOptInScrollingGameFramework
+```
+
+Captures are optional and bounded to four checkpoints per profile plus the first failure. No VICE executable is launched.
+
+Release results (2026-10-16): each profile checks **660 frames: 654 gameplay plus six loading frames (731-736)**. Each matches **17,829,600 graphics/HUD color indices** with zero differences. The separate sprite comparisons match **279,215 PAL / 279,006 NTSC opaque pixels**; some overlap the graphics bands, so these are not additive unique-pixel totals. Both reach zone 1, all eight X-scroll phases, both sprite buffers, and eight simultaneous source sprites. This example run does not claim all 24 framework sprites; Hessian/Piper provide the heavier reuse tests above. Final zone-1 screenshots were inspected separately from the numeric proof.
+
+The sequential Release selection `ExternalVICDemoTests|VIC.*Tests|C64TimingTests` runs **422 cases in 169.6 seconds: 421 pass, the public-runner case skips, and none fail**. All eight external opt-in cases run, including the separately classified Befana NTSC deadline diagnostic. Hessian/Piper retain 960 exact full display frames and their earlier overlap/priority counts; Befana retains PAL level 2, score 225, two lives, and 1,715,786 exact sprite pixels. This run does not rerun or waive the two known public mode-transition failures. Logs are `/tmp/swift64-vic-framework-integration.log`; captures are ignored under `.build/vic-framework-final`. The fetch script passes from fresh local fixtures with every binary checksum verified. No core behavior changes in this batch.
+
+Final checks: `swift build --build-tests -j 2` passes. The checked Debug `VIC.*Tests|C64TimingTests` slice runs 422 cases in 7.7 seconds: **413 pass, nine opt-in skips, zero failures**. A final Release repeat runs five cases in 70.1 seconds with no skips/failures: both scrolling profiles, the oracle negative control, and public completion/image checks with `SWIFT64_PUBLIC_VIC_TEST_IDS=blackmail-fli-pal,sideborder-sprite-163-pal,sideborder-sprite-164-pal,rasterirq-hold-pal`. The game counts/transition frames repeat exactly; the four public images and result/cycle/PC/raster checkpoints retain their previous results. All six Hessian/Piper/Befana checkpoint PPMs also remain byte-identical to `.build/vic-game-final`. Logs are `/tmp/swift64-vic-framework-build.log`, `...-debug.log`, and `...-repeat.log`. Fetch-script syntax, ignored-asset checks, and `git diff --check` pass. Validation is sequential; no SID test, app playback, or VICE launch is part of it.
+
+## DMA-delay scrolling and graphics-mode output
+
+The public runner now includes 42 pinned DMA-delay programs: three ways of delaying the line-48 bad line, seven start-delay values per method, and PAL/NTSC versions of each. They exercise read-modify-write and separate-store Y-scroll changes, plus DEN latching, without injecting CPU state or changing the programs. The initial Release run matches **2,688,000 / 2,688,000 display color indices**, with all 42 original `$D7FF=$00` completions, in 266.5 seconds. No core change was needed for these cases. This proves the selected practical scrolling sequences, not analog VSP memory corruption or the chip-dependent multi-selected buffer behavior in upstream `test4`.
+
+The first output-stage checkpoint used `videomode1` and `videomode2`, each for PAL and NTSC. These exposed a separate graphics-output bug: the renderer used the mode saved at g-access for the entire character, even when a subsequent CPU write changed the output color selector. Lines with actual mode changes now select colors and foreground status from per-pixel mode samples, while retaining the original fetched byte and address. Unchanged-mode lines keep their existing rendering path. That output-stage change did not alter CPU/CIA or graphics-fetch timing; the later address-stage fix is described below.
+
+At that initial checkpoint, PAL comparisons improved from **34 to 3** and **71 to 10** differing pixels out of 64,000, with unchanged completion checkpoints (`videomode1-pal`: 121,513 cycles, PC `$08FC`, raster `56:49`; `videomode2-pal`: 243,858 cycles, PC `$0910`, raster `126:48`). Both failed zero-tolerance assertions at individual mode-transition edges; the latest results are under [multicolor data and color selection](#multicolor-data-and-color-selection). The [upstream mode notes](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/videomode/readme.txt) describe manually constructed, hardware-compared references and chip/temperature-dependent pixels; these improvements do not certify every transition dot or VIC revision.
+
+The original NTSC comparisons failed with 2,976 and 5,854 differing pixels after the output change. Upstream history now establishes a fixture-version mismatch: both PRGs were changed in [3d4cbce (2025-12-20)](https://github.com/libsidplayfp/VICE-testprogs/commit/3d4cbce35c4f8f8ede42d2cb6b60b385ced9da79), adding screen patterns and changing the second program's bitmap bank/data. Their NTSC images were last changed in [bdc9204 (2016-06-02)](https://github.com/libsidplayfp/VICE-testprogs/commit/bdc9204b7ff36fbe6b9538794f16df932ea05df7) and [3666401 (2019-04-29)](https://github.com/libsidplayfp/VICE-testprogs/commit/3666401155a27feb0a9191b8c00477c8cab8a327). Those two comparisons are removed from the runner and fetch list, not marked passed or given relaxed tolerances. Their results remain historical diagnostics, not valid measures of the current PRGs.
+
+The replacements are `modesplit-pal` and `modesplit-ntsc`: the same unchanged, auto-detecting PRG, with references updated together in [6dee9e4 (2025-12-15)](https://github.com/libsidplayfp/VICE-testprogs/commit/6dee9e41cad26e8bb752eab8c3cf7e5f9cb88489). The [upstream README](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/split-tests/modesplit/README.txt) identifies hardware-matched PAL 6569 and NTSC 6567 references, while warning that their manual construction can still contain errors. The runner checks all 320x200 display pixels across eight scroll alignments and repeated text, bitmap, multicolor, ECM, and invalid-mode transitions. Both initially failed strict comparisons; their latest results are recorded below.
+
+The next graphics fetch after a CPU BMM change now retains the old mode's low address byte and uses the new mode for the high address bits. The selection expires after one low phase, including idle/refresh slots, and reset clears it; already-fetched bytes and idle addresses remain unchanged. This fixes the wrong glyph after a bitmap-to-text split. PAL `videomode2` improves from **10 to 6** differences; `videomode1` stays at **3**. `modesplit` improves from **1,088 to 934** on PAL and **1,162 to 1,008** on NTSC. Each still fails zero-tolerance comparison. Mode-selector/color delay, multicolor transition sampling, and remaining ECM address transitions are not certified.
+
+The selected Release run retains exact Blackmail FLI, PAL/NTSC graphics fetches, and both side-border sprite images. All nine programs reach the same completion checkpoints as before; `modesplit-pal` completes at 527,109 cycles / PC `$08C5` / raster `254:51`, and NTSC at 512,310 / `$08C5` / `254:45`. Six ROM-free mode-output tests pass in checked Debug and Release, including both BMM directions, ECM masks, first/second fetch addresses, fetched-byte retention, idle-slot expiry, and reset. No reference pixels or original programs are edited.
+
+`VICGraphicsModeOutputTests` adds four ROM-free PAL/NTSC tests covering all mode selections and scroll offsets, output changes to an already-fetched byte, unchanged memory accesses, foreground classification including invalid modes, and line/reset isolation. Its stable cell checks do not claim the unresolved analog transition dots. The focused checked Debug slice passes 41 tests without failures or skips.
+
+```sh
+sh script/fetch_vic_testprogs.sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=dma1-03-pal,dma1-03-ntsc,dma1-18-pal,dma1-18-ntsc,dma2-05-pal,dma2-05-ntsc,dma2-18-pal,dma2-18-ntsc,dma3-07-pal,dma3-07-ntsc,dma3-1a-pal,dma3-1a-ntsc \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+
+# Mode-transition diagnostics, including the remaining strict failures:
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=videomode1-pal,videomode2-pal,modesplit-pal,modesplit-ntsc \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+At that checkpoint, the default public selection contained 98 programs: two obsolete NTSC comparisons were replaced with the two version-matched modesplit cases above. All four valid mode-transition comparisons remain asserted. DMA IDs use `dma<method>-<hex-delay>-pal/ntsc`; all selected delays are listed in `dmaDelayFixtures`. Builds and runs remain sequential and bounded. Programs, reference PNGs, ROMs, and captures stay local/untracked. VICE is not launched and no VICE implementation code is used.
+
+Full Release public validation at the earlier output-stage checkpoint completed all 98 then-selected programs in 327.1 seconds: **94 passed, four mode-split comparisons failed**. The passing set comprised four self-checking bus/collision probes and **90 exact images / 7,099,520 matching color indices**. All 90 complete framebuffer captures were byte-for-byte identical to their corresponding earlier baselines, including pixels outside the comparison crops. The combined 81-test invocation had 80 passing component tests and the public-runner test with those four assertions; its exit status was deliberately nonzero. No other assertion failed.
+
+A separate sequential Release regression run of `VIC.*Tests|C64TimingTests`, with `SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-game-fixtures-verified`, executes 394 checks: **393 pass, one public-fixture opt-in skip, zero failures**, in 112.4 seconds. The independently run public-suite failures above are not hidden by this skip. Befana repeats its PAL level-2 milestone and identical NTSC deadline diagnostic; Hessian/Piper repeat all 960 exact PAL/NTSC display frames with unchanged overlap/priority counts. `swift build --build-tests -j 2`, `sh -n script/fetch_vic_testprogs.sh`, and `git diff --check` pass. No SID suite, VICE process, or app relaunch is part of these checks.
+
+The subsequent address-stage integration enables both public fixtures and external games for `VIC.*Tests|C64TimingTests`. It executes **396 test cases in 435.9 seconds: 395 pass and one public-runner case fails its four mode-transition assertions, with no skips**. All 98 original programs complete; 94 pass, including the same 90 exact images / 7,099,520 color indices. All 90 complete captures remain byte-identical to the earlier output-stage baseline. Direct before/after comparison of the two modesplit images finds 154 corrected pixels per profile and zero newly incorrect pixels. Their remaining 934/1,008 differences are still failures.
+
+Befana repeats its 1,740-frame PAL run (score 225, level 2, two lives, 1,715,786 exact sprite pixels) and its separately classified NTSC deadline diagnostic. Both external multiplexers repeat 960 exact PAL/NTSC display frames with unchanged overlap/priority counts. The final checked test build passes in 2.56 seconds, and fetch-script syntax / whitespace checks pass. This run does not certify every graphics-mode transition or change SID behavior. Logs remain local at `/tmp/swift64-vic-address-integration.log` and `/tmp/swift64-vic-address-unit.log`; captures remain ignored under `.build/vic-address-final-captures`.
+
+ECM-clear follow-up: the default PAL 6569 path retains the old A9/A10 mask for one more g-access after a CPU clear; the NTSC 6567R8 path releases it immediately. Both keep the old visible ECM background selector for two dots. This distinction is supported by the version-matched modesplit references, not a change to the test program or its timing. Applying the PAL address delay uniformly was rejected because it introduced 192 newly wrong NTSC pixels. With the profile distinction, PAL modesplit improves **934 -> 482** and NTSC **1,008 -> 856**, with **452/152 corrected pixels and zero newly wrong pixels**. PAL videomode2 improves **6 -> 4**; videomode1 remains at **3**. All four remain ordinary zero-tolerance failures with unchanged completion cycles/PC/raster.
+
+Four additional ROM-free checks cover profile-specific first/second addresses in text, bitmap, and idle state; immediate ECM assertion versus delayed release; two-dot output selection; reset while a selection is pending; refresh/idle/sprite-slot expiry; and compound BMM/ECM stores. The complete mode-output class now has ten tests, and the checked Debug mode/color/sequencer slice passes all 35 tests in 2.55 seconds. No graphics data, reference images, or program bytes are patched. C64C/8565/8562 revisions, the multicolor data latch, and remaining output-transition dots still need independent validation.
+
+Final ECM integration uses the same full `VIC.*Tests|C64TimingTests` Release selection with both public and external fixtures enabled. It executes **400 test cases in 434.5 seconds: 399 pass, one public-runner case fails four strict visual assertions, and none skip**. All 98 public programs complete; 94 pass, retaining 90 exact references / 7,099,520 color indices. All 90 complete passing captures are byte-identical to the preceding address-stage baseline. The four failing comparisons remain at 3/4/482/856 pixels with unchanged completion observables. Both multiplexers retain their 960 exact frames, and Befana retains its PAL level-2 result and separate NTSC deadline diagnostic. `swift build --build-tests -j 2`, fetch-script syntax, and whitespace checks pass. The final log is `/tmp/swift64-vic-ecm-integration.log`; local captures are under `.build/vic-ecm-final-captures`. VICE remains stopped, and no SID suite or app relaunch was run.
+
+### Multicolor data and color selection
+
+The follow-up separates the two-bit graphics-data latch from the color selector. MCM changes the selector immediately and reaches the data latch three dots later. Enabling it mid-byte first holds the previous hires sample; subsequent two-bit samples alternate with held dots. A byte reload realigns the pair phase, so odd horizontal scroll positions cannot be modeled by simply pairing adjacent bits in the original byte. This model predicts all 2,112 transition-window pixels in section 3 of the unchanged modesplit reference, including all eight scroll positions and six character rows. The PAL/NTSC references agree over those windows. The model is inferred from these hardware-matched observations and the graphics-shifter description, not from another emulator's implementation or a transistor-level certification.
+
+Bitmap background selection releases two dots after clearing BMM, while foreground color selection changes immediately. ECM background selection takes precedence over the retained bitmap selector. Clearing BMM/MCM with ECM still set retains invalid-mode black output for one dot on PAL 6569 and two on NTSC 6567R8, without erasing the underlying foreground/priority sample. A trial that incorrectly gave the retained bitmap background priority over ECM introduced 24 wrong PAL pixels; that ordering was rejected and covered by a foreground/background regression check.
+
+Six additional ROM-free tests cover the on/off transition windows, low-color text that must remain hires, foreground priority through a delayed data-width change, separate bitmap foreground/background timing, and invalid-mode release with both zero and opaque data. `VICGraphicsModeOutputTests` now has 16 tests. The checked Debug mode/color/sequencer slice passes **41 tests in 2.88 seconds**, with no skips. Normal non-mode-changing lines retain their existing rendering path; the extra per-dot latch replay is limited to mode-changing lines. The trace remains one preallocated scanline, now using 64-bit words to keep data, color, background, and blanking stages distinct. No fetched bytes, bus addresses, CPU timing, program data, or reference images change in this follow-up.
+
+Final sequential Release integration on 2026-10-16 runs `VIC.*Tests|C64TimingTests` with both fixture sets enabled: **406 test cases in 436.1 seconds, 405 passing, one public-runner case failing two strict visual assertions, and no skips**. All 98 public programs complete with their original success code. **96 programs pass: four self-checking bus/collision probes and 92 exact images / 7,227,520 matching color indices**. The remaining differences are:
+
+| Program | Previous ECM checkpoint | Current differences |
+|---------|-------------------------|---------------------|
+| `videomode1-pal` | 3 | 1: `(63,5)` is color 6, expected 14 |
+| `videomode2-pal` | 4 | 0, exact pass |
+| `modesplit-pal` | 482 | 0, exact pass |
+| `modesplit-ntsc` | 856 | 326, still failing |
+
+Independent before/after comparison finds **1,018 corrected pixels and zero newly wrong pixels** across those four images. Their completion cycles, PC, and raster positions are unchanged. All 90 previously passing complete PPM captures remain byte-identical to the ECM baseline, including pixels outside the reference crops. Both external multiplexers retain all 960 exact PAL/NTSC frames / 61,440,000 pixels. Befana retains its PAL level-2 milestone, 1,715,786 exact sprite pixels, and separately classified NTSC deadline diagnostic. The two remaining visual failures are not exceptions or passes, and alternate VIC/C64C revisions and broader games/demos remain unproved.
+
+`swift build --build-tests -j 2`, `sh -n script/fetch_vic_testprogs.sh`, and `git diff --check` pass. Logs remain local at `/tmp/swift64-vic-mcm-integration.log` and `/tmp/swift64-vic-mcm-checked.log`; captures remain ignored under `.build/vic-mcm-final-captures`. Runs use two build jobs and one emulator instance. VICE remains stopped, and no SID suite or app relaunch is part of this validation.
+
+### NTSC graphics-address transitions
+
+The NTSC 6567R8 address mask now has its own pending selection. ECM assertion retains the unmasked address for one more low phase. An isolated ECM clear still releases immediately, but a write that changes BMM at the same time retains the old ECM selection through the next low phase. PAL keeps its previously verified immediate assertion / delayed release. The BMM low-address stage remains independent, and the ECM mask is applied once to the resulting address rather than separately inside the text, bitmap, and idle branches.
+
+This is an inferred timing model supported by the unchanged, hardware-matched modesplit reference, not a physical address-bus capture. [Bauer's graphics-sequencer description](https://www.cebix.net/VIC-Article.txt) identifies ECM as the A9/A10 gate; the profile-specific transition timing comes from the original probe and reference data. The focused Release comparison corrects **192 pixels in isolated ECM transitions and 108 in compound BMM/ECM transitions**, reducing NTSC differences **326 -> 26**, with zero newly wrong pixels. All three PAL captures remain byte-identical, and all four programs retain their completion cycles/PC/raster.
+
+The remaining NTSC differences comprise 20 reference color-15 dots at `$D021` writes, two pixels at `(128,11)` / `(128,12)`, and four at `(68...71,70)`. The gray dots need independent chip/capture calibration; they are not grounds to insert unconditional gray output into the NMOS model. The other transition-edge pixels also remain unresolved. All 26 retain ordinary zero-tolerance assertions, as does the single remaining PAL `videomode1` pixel. Reference images and PRGs are unchanged.
+
+The mode-output class now has 18 tests. Added real 6510 `STA $D011` cases verify the first and settled addresses and fetched data for six isolated/compound transitions on both profiles. Expanded checks cover assertion as well as release in text, bitmap, and idle state; expiry through refresh/idle/sprite slots; and reset with either pending selection. The checked Debug mode/color/sequencer slice passes **43 tests in 5.05 seconds**, without skips. Logs remain local at `/tmp/swift64-vic-ntsc-mask-checked.log` and `/tmp/swift64-vic-ntsc-mask-trial.log`; trial captures are ignored under `.build/vic-ntsc-mask-captures`.
+
+Full Release integration completes **408 test cases in 437.8 seconds: 407 pass, one public-runner case fails the two remaining visual assertions, and none skip**. All 98 public programs complete; 96 pass, including the same 92 exact images / 7,227,520 color indices. Of the 94 complete captures, only `modesplit-ntsc` changes from the preceding multicolor baseline. All 92 previously passing images and the one-pixel PAL failure remain byte-identical. The NTSC completion checkpoint also remains 512,310 cycles / PC `$08C5` / raster `254:45`.
+
+Hessian and Piper repeat all 960 exact PAL/NTSC display frames with unchanged overlap and priority counts. Befana repeats score 225, level 2, two lives, and 1,715,786 exact PAL sprite pixels; its separate NTSC diagnostic repeats the missed raster-zero deadline at `30:19` after 2,656 sorter clocks. The final checked build, fetch-script syntax, and whitespace checks pass. Final results are in `/tmp/swift64-vic-ntsc-mask-integration.log`, with ignored captures under `.build/vic-ntsc-mask-final-captures`. Validation remains sequential with one emulator; no VICE process, SID suite, app relaunch, or reference-image change is involved.
+
+### Late bad lines and screen/color alignment
+
+Six more unchanged programs from the same pinned public suite now exercise late display entry, line crunching, matrix/color wraparound, and sprite/bitmap interaction. The five `colorfetchbug` variants cover text and bitmap data with deliberately distinct screen/color rows. The [original hardware report](https://sourceforge.net/p/vice-emu/bugs/1627/) describes the text case's first line taking its color from the wrong row in another implementation. These fixtures test Swift64's existing clocked matrix/color pairing; no new timing workaround was needed.
+
+`sequencer-shards-pal` is the author's small reproducer of an idle-to-display problem encountered in Lft's demo "Shards of Fancy". It combines expanded sprite DMA with late `$D011` bitmap writes. Its full PAL reference crop, including the top-right idle area and sprite bars, matches exactly. This is a [demo-derived test program](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/sequencer-bug/readme.txt), not a run of the complete demo or certification of its other parts.
+
+The initial `colorfetch-main-pal` run exposed a runner defect: its RAM initialization wrote `$8A` beneath `$D7FF` with I/O banked out at cycle 855,256 / PC `$081A`. The raw debugger watchpoint incorrectly treated that RAM write as the result. Completion detection now requires the test port to be I/O-mapped using the effective 6510 pins, not just the port output latch. A ROM-free negative control checks all eight banking combinations, success/failure values, an unrelated mirrored address, and DDR input pull-ups. This does not ignore a real failure result: every value written to mapped `$D7FF` still becomes the result and must equal zero.
+
+With that correction, all six programs complete naturally and match **613,632 / 613,632 color indices**. Each compares the existing 376x272 PAL display/border intersection without new masks or tolerances:
+
+| Program | Cycles | PC | Raster |
+|---------|--------|----|--------|
+| `colorfetch-main-pal` | 1,097,238 | `$0945` | `256:30` |
+| `colorfetch-main2-pal` | 94,782 | `$0907` | `256:30` |
+| `colorfetch-main3-pal` | 94,783 | `$091F` | `256:31` |
+| `colorfetch-main4-pal` | 94,777 | `$091F` | `256:25` |
+| `colorfetch-bitmap-pal` | 193,062 | `$0963` | `256:30` |
+| `sequencer-shards-pal` | 160,733 | `$0A29` | `55:20` |
+
+The focused Release run passes both test cases in 21.32 seconds. The checked Debug graphics-counter/color-latch/completion slice passes all 26 tests in 2.10 seconds. The programs, source, and PNG references remain local/untracked; `script/fetch_vic_testprogs.sh` fetches them from revision `ef8e8efe52f3d43df7acefad132c6506239bddee`. No emulator implementation code or ROMs are fetched.
+
+```sh
+sh script/fetch_vic_testprogs.sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=colorfetch-main-pal,colorfetch-main2-pal,colorfetch-main3-pal,colorfetch-main4-pal,colorfetch-bitmap-pal,sequencer-shards-pal \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+The bounded logs are `/tmp/swift64-vic-colorfetch-baseline.log` (the false RAM-write result), `/tmp/swift64-vic-colorfetch-mapped.log`, `/tmp/swift64-vic-late-display.log`, and `/tmp/swift64-vic-late-display-checked.log`. Captures stay ignored under `.build/vic-late-display-captures`. These six PAL passes do not resolve the existing PAL/NTSC mode-transition differences or certify alternate VIC revisions.
+
+Full sequential Release integration with both public and external fixtures enabled executes **409 test cases in 462.6 seconds: 408 pass, one public-runner case fails the two known mode-transition assertions, and none skip**. All **104 public programs complete; 102 pass**, including **98 exact images / 7,841,152 matching color indices**. Every previous completion cycle/PC/raster checkpoint and all 94 previous complete captures remain identical to the NTSC-mask baseline, including the still-failing one-pixel PAL and 26-pixel NTSC images.
+
+Hessian/Piper retain all 960 exact display frames and overlap/priority counts. Befana repeats PAL score 225 / level 2 / two lives / 1,715,786 exact sprite pixels, plus its separately classified NTSC deadline diagnostic. `swift build --build-tests -j 2`, fetch-script syntax, and whitespace checks pass. The final log is `/tmp/swift64-vic-late-display-integration.log`, with ignored captures under `.build/vic-late-display-final-captures`. No VIC, CPU, CIA, or SID implementation changed in this validation batch, and VICE remains stopped.
+
+### Sprite startup and expansion boundaries
+
+Nineteen additional unmodified public programs cover PAL/NTSC sprite enable/Y changes at DMA/display startup and PAL single/repeated sprite crunch. Ten initially failed despite returning `$D7FF=$00`: enable variants 1/2/4 differed by 378/157/149 pixels on each video standard, and repeated-crunch variants 26/27/28/29 differed by 472/348/286/228 pixels. Three VIC changes make every comparison exact:
+
+- A new sprite display requires `$D015` still enabled at the display comparison. Clearing it after DMA starts does not cancel DMA, and clearing it after display starts does not truncate the active sprite.
+- Sprite 0 starting DMA at the second Y comparison has only two BA warning clocks before its first high-phase slot. AEC still leaves the CPU connected for that slot, and the sprite receives `$FF` without a RAM read. MC still advances; the following two bytes and all later sprites/rows read normally.
+- The Y-expansion advance decision precedes a CPU `$D017` write in the comparison cycle. Setting expansion in that CPU phase cannot retroactively repeat the row; clearing it still forces advancement. The previously failing repeated-crunch cases had incorrectly repeated the same bytes for eight additional lines.
+
+The [sprite-enable sources and references](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/spriteenable) distinguish 6569/6567R8 from later-chip variants; only the former are used here. Its README records hardware checks for an older test revision, not direct hardware provenance for every current PNG. The [sprite-crunch references](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/spritecrunch) are upstream regression images. The three single-crunch filenames `3b-00`, `3c-00`, and `3d-00` contain identical PRG bytes at this revision (SHA-256 `3108d2b6141fda61fc94a79c176a94e05ec8a0e9d66764fed7f8f4e6ab523432`); only `3c-00` is retained in the runner, so duplicates do not inflate coverage.
+
+All nineteen distinct probes match **1,873,608 color indices** without reference edits or tolerance. PAL uses the existing 376x272 crop. NTSC compares 376x235 pixels spanning raster 28-262, the physical intersection of the 384x247 reference and Swift64's captured frame. It includes the complete display and available borders, but does not certify the reference's extra rows beyond the end of the NTSC frame.
+
+| Program | Cycles | PC | Raster |
+|---------|--------|----|--------|
+| `sprite-enable-1-pal` / `-ntsc` | 121,313 / 123,148 | `$08F9` / `$08FE` | `53:38` |
+| `sprite-enable-2-pal` / `-ntsc` | 121,313 / 123,148 | `$08F8` / `$08FD` | `53:38` |
+| `sprite-enable-3-pal` / `-ntsc` | 121,319 / 123,154 | `$08FA` / `$08FE` | `53:44` |
+| `sprite-enable-4-pal` / `-ntsc` | 121,313 / 123,148 | `$08F7` / `$08FB` | `53:38` |
+| `sprite-enable-5-pal` / `-ntsc` | 121,319 / 123,154 | `$08FA` / `$08FE` | `53:44` |
+| `spritecrunch-3c-00-pal` | 143,223 | `$0957` | `89:24` |
+| `spritecrunch2-07-pal` | 146,023 | `$0F9E` | `133:52` |
+| `spritecrunch2-08-pal` | 146,116 | `$0F9E` | `135:19` |
+| `spritecrunch2-09-pal` | 146,117 | `$0F9E` | `135:20` |
+| `spritecrunch2-25-pal` | 146,145 | `$0F9E` | `135:48` |
+| `spritecrunch2-26-pal` | 146,146 | `$0F9E` | `135:49` |
+| `spritecrunch2-27-pal` | 146,147 | `$0F9E` | `135:50` |
+| `spritecrunch2-28-pal` | 146,128 | `$0F9E` | `135:31` |
+| `spritecrunch2-29-pal` | 146,089 | `$0F9E` | `134:55` |
+
+Only the last two completion times change from the initial run, by 20 and 40 clocks respectively, as corrected sprite rows terminate DMA sooner. Five new ROM-independent regressions cover all eight display latches, real CPU expansion stores around the sampling edge, early/late DMA on both profiles, CPU read-pin visibility while RDY holds the microcycle, next-row recovery, and reset cleanup. Two older C64 timing assertions incorrectly expected immediate AEC takeover for a second-comparison start. They now check CPU ownership and `$FF` in the first slot, then VIC ownership in the next, retaining all their RDY and clock-progress assertions. The checked Debug sprite/C64-timing slice passes all 67 tests in 3.35 seconds. CPU behavior was not changed.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=sprite-enable-1-pal,sprite-enable-1-ntsc,sprite-enable-2-pal,sprite-enable-2-ntsc,sprite-enable-3-pal,sprite-enable-3-ntsc,sprite-enable-4-pal,sprite-enable-4-ntsc,sprite-enable-5-pal,sprite-enable-5-ntsc,spritecrunch-3c-00-pal,spritecrunch2-07-pal,spritecrunch2-08-pal,spritecrunch2-09-pal,spritecrunch2-25-pal,spritecrunch2-26-pal,spritecrunch2-27-pal,spritecrunch2-28-pal,spritecrunch2-29-pal \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+Initial/fixed logs are `/tmp/swift64-vic-sprite-boundaries-baseline.log` and `/tmp/swift64-vic-sprite-boundaries-fixed.log`; they include the two duplicate labels before deduplication. The bounded write trace `/tmp/swift64-vic-crunch-edge.log` exposes the `$D017` sampling boundary. Source programs, PNG references, and generated PPM captures remain local/untracked. No VICE executable is needed or launched.
+
+The complete external/public Release run takes 524.2 seconds. All **123 public programs complete; 121 pass**, with **117 exact images / 9,714,760 matching color indices**. All 100 prior complete captures and 104 prior completion result/cycle/PC checkpoints remain unchanged. Only `videomode1-pal` (one pixel) and `modesplit-ntsc` (26 pixels) fail the public comparisons. Hessian/Piper retain 960 exact PAL/NTSC display frames and unchanged overlap/priority counts. Befana repeats PAL score 225 / level 2 / two lives / 1,715,786 exact sprite pixels, plus its separate NTSC sorter-deadline diagnostic. The log is `/tmp/swift64-vic-sprite-boundaries-integration-final.log`, with ignored captures under `.build/vic-sprite-boundaries-final-captures`.
+
+That integrated run also exposed an old unit test which explicitly expected a disabled sprite to start displaying after its DMA check. Its three assertions conflicted with the now-exact public enable references. `testSpriteEnableClearAfterDMACheckSuppressesDisplayButKeepsDMA` corrects the visibility expectations, verifies that late re-enabling cannot start that row, and still requires all three DMA bytes/counter increments. This subsequent change affects only the test, not the emulator or the external captures above.
+
+After correcting that assertion, the final unit-only `VIC.*Tests|C64TimingTests` slices each execute 414 cases: **407 pass, seven opt-in cases skip, and zero fail**, in 0.54 seconds for Release and 7.38 seconds for checked Debug. Those skips are the six external programs and public-runner case exercised in the separately enabled run above, not seven additional passes. Logs: `/tmp/swift64-vic-sprite-boundaries-unit-final.log` and `/tmp/swift64-vic-sprite-boundaries-debug-final.log`. `swift build --build-tests -j 2` passes in 4.47 seconds; fetch-script syntax and `git diff --check` pass. No core code changes after the full external/public run, and no SID tests or app launches in this batch.
+
+### Raster IRQ holdoff and display-enable boundaries
+
+The unchanged public `rasterirq_hold` program exposed a false raster IRQ: it writes the next raster value to `$D012` in the final clock of each line, keeping the comparator matched. Resetting the IRQ decision at every line produced **11,432 wrong border pixels**. The VIC now retains the comparator match across lines and evaluates a final-phi2 compare write together with the incoming raster value. A continuous match cannot manufacture another rising edge; normal unmatched-to-matched interrupts and the existing same-line suppression remain intact.
+
+This behavior is documented by the original researchers in the [VIC Addendum, Raster IRQ section](https://github.com/martinpiper/C64Docs/blob/b82ab2af6a84396fa20c2a7b5b2f7131fa89ac55/VIC/VIC-Addendum.txt), which points to [the public test program](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/rasterirq/rasterirq_hold.asm). No emulator implementation code is used. The addendum covers PAL; NTSC boundary tests exercise the same modeled mechanism but are not independent NTSC hardware calibration.
+
+Fourteen other new unchanged public programs already pass before this fix: `den01-49-1/2`, `den10-48-1/2`, `denrsel-0/1`, and `disable-bad`, each in PAL and NTSC. They check DEN arming, border opening, and forced/cancelled late bad lines. The last test is a reproducer for an effect in the demo "angle +1", not a full-demo pass. Their references use the existing PAL/NTSC physical-frame intersection crops, with zero tolerance.
+
+Five ROM-independent tests in `VICRasterIRQEdgeTests` cover real 6510 stores one clock before/on/after the boundary, a genuinely new match, rejection of a departing-line match, the ninth raster bit, IRQ-mask changes, comparator rearming, and reset. Two older frame-wrap tests now clock the complete frame rather than manually jumping over the comparator's low interval. The checked Debug VIC/timing slice runs **419 cases: 412 pass, seven opt-in skips, zero failures**. `swift build --build-tests -j 2` also passes.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=den01-49-1-pal,den01-49-1-ntsc,den01-49-2-pal,den01-49-2-ntsc,den10-48-1-pal,den10-48-1-ntsc,den10-48-2-pal,den10-48-2-ntsc,denrsel-0-pal,denrsel-0-ntsc,denrsel-1-pal,denrsel-1-ntsc,disable-bad-pal,disable-bad-ntsc,rasterirq-hold-pal \
+  swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+Baseline and bounded IRQ-register trace: `/tmp/swift64-vic-den-baseline.log` and `/tmp/swift64-vic-irqhold-trace.log`. The trace uses `SWIFT64_PUBLIC_VIC_TRACE_RASTER=1` and `SWIFT64_PUBLIC_VIC_TRACE_AFTER_CYCLES=118900`. ROMs, original PRGs, reference PNGs, and generated PPMs remain local/untracked. VICE remains stopped after its unrelated startup crash; no SID tests or app launches are part of this work.
+
+Final sequential Release integration takes **577.9 seconds**, running 419 cases with 418 passing and the public-runner case failing only its two existing visual assertions. All **138 public programs complete; 136 pass**, including **132 exact images / 11,151,456 color indices**. All fifteen additions match **1,436,696 color indices**. Holdoff retains its original completion checkpoint: **121,091 cycles, PC `$08AD`, raster `50:5`**, now with **0/102,272** differences. All 119 prior complete captures and 123 prior result/cycle/PC checkpoints remain identical. The two remaining failures are still `videomode1-pal` (one pixel) and `modesplit-ntsc` (26 pixels), not exceptions or tolerated matches.
+
+Both external multiplexers retain all 960 exact PAL/NTSC display frames and their overlap/priority counts. Befana retains PAL score 225 / level 2 / two lives / 1,715,786 exact sprite pixels, plus the separately classified NTSC sorter-deadline diagnostic. Final integration log: `/tmp/swift64-vic-irq-edge-integration.log`; ignored captures: `.build/vic-irq-edge-final-captures`. A subsequent Release run of `PublicVICConformanceTests|VICRasterIRQEdgeTests|C64InterruptTests`, selecting only `rasterirq-hold-pal` for the public runner, passes **25 cases** in 3.33 seconds with the same result/cycle/PC/raster and exact image. Its log is `/tmp/swift64-vic-irq-edge-repeat.log`. The checked build, script syntax, and whitespace checks pass. No core changes follow the full integration run.
+
+### Frame-wrap and IRQ acknowledgement timing
+
+The raster counter now reaches zero one clock after the physical scanline wraps, placing the line-zero IRQ comparison in hardware cycle 2. Ordinary lines still compare in cycle 1. CPU reads of `$D011/$D012` and their mirrors retain the preceding final-line value during that first clock. Frame-start latches reset with the counter; frame length, sprite DMA slots, framebuffer geometry, and `frameReady` cadence do not gain a clock. This follows [Bauer section 3.12](https://www.cebix.net/VIC-Article.txt) and the [VIC Addendum's start-of-frame observation](https://raw.githubusercontent.com/martinpiper/C64Docs/b82ab2af6a84396fa20c2a7b5b2f7131fa89ac55/VIC/VIC-Addendum.txt). The Addendum specifically documents PAL; the PAL/NTSC unit coverage is not independent chip-revision calibration.
+
+The unchanged public [IRQ acknowledgement program](https://github.com/libsidplayfp/VICE-testprogs/blob/ef8e8efe52f3d43df7acefad132c6506239bddee/interrupts/irq-ackn-bug/irq-ack-vicii.asm), now selected as `irq-ack-pal`, exposed a separate CPU ordering error. The first two timing offsets of both `INC $D019` and `ASL $D019` lost IRQs for raster and sprite-sprite sources; `STA` acknowledgement and register readback were already correct. The failure was identical before and after the frame-wrap fix. CPU pin sampling now precedes same-cycle bus side effects, so an acknowledgement cannot erase the already sampled IRQ. Existing I-flag and NMI polling timing is unchanged.
+
+Before the CPU fix, the original program reported 255 at **990,000 cycles, PC `$0BFB`, raster `114:18`**. After it, the program reports 0 at **990,669 cycles, PC `$0BFB`, raster `124:57`**, with all embedded expected acknowledgement results satisfied. No program bytes or expected results are patched. Its original source is PAL-timed; no NTSC pass is inferred. This is a self-checking fixture, not an additional screenshot comparison.
+
+Six new frame-wrap tests cover real CPU reads/writes around the edge, register mirrors, interrupt masks/acknowledgement, reset cleanup, and three constant-length frames per video standard. Three CPU regressions cover all twelve absolute RMW opcodes, a newly asserted IRQ that must wait for its polling window, and a read-to-clear dummy access. Before the CPU change those three tests produce 15 assertion failures; afterward the checked Debug CPU/VIC/CIA/drive slice runs **826 cases: 803 pass, 23 opt-in cases skip, zero fail**. A focused Release repeat passes 23 cases, including the original acknowledgement/collision programs, Blackmail FLI, and raster holdoff; both visual fixtures retain exact pixels and their prior completion checkpoints.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=irq-ack-pal,blackmail-fli-pal,rasterirq-hold-pal,sprite-collision-pal,graphics-collision-pal \
+swift test -c release -j 2 --filter 'PublicVICConformanceTests|CPUInterruptPollingTests|VICRasterIRQEdgeTests'
+```
+
+Baseline logs: `/tmp/swift64-vic-irq-ack-baseline.log` and `/tmp/swift64-vic-irq-rmw-baseline.log`. Fixed checked/Release logs: `/tmp/swift64-vic-irq-sampling-debug.log` and `/tmp/swift64-vic-irq-sampling-release-focus.log`. All runs are sequential. Original programs and captures remain ignored; no VICE executable, emulator implementation code, SID tests, audio playback, or app launches are used for this follow-up.
+
+Full sequential Release integration runs **826 cases in 1,118.0 seconds: 811 pass, 14 optional CPU/slow-drive cases skip, and one public-runner case fails only its two existing visual assertions**. All **139 public programs complete; 137 pass**, including **132 exact images / 11,151,456 color indices**. All 138 previous result/cycle/PC checkpoints and all 134 previous complete public captures remain identical. `videomode1-pal` still differs at one pixel, and `modesplit-ntsc` at 26; neither is waived or counted as a pass.
+
+Both external multiplexers retain 960 exact full-display frames. Befana repeats PAL level 2 / score 225 / two lives / 1,715,786 exact sprite pixels; the NTSC sorter still schedules its line-zero IRQ at `30:19` after 2,656 clocks, a separately classified deadline diagnostic. The scrolling game retains 660 checked frames and 17,829,600 exact graphics/HUD pixels per profile, plus 279,215 PAL / 279,006 NTSC opaque sprite pixels, with the same six blanking frames and area transition. All 14 prior external checkpoint captures are byte-identical.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_CAPTURE_DIR=.build/vic-irq-sampling-final-public \
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-framework-fresh-fixtures \
+SWIFT64_EXTERNAL_VIC_CAPTURE_DIR=.build/vic-irq-sampling-final-external \
+swift test -c release -j 2 --filter 'CPU.*Tests|VIC.*Tests|C64TimingTests|C64InterruptTests|CIA.*Tests|VIA6522Tests|IECBusTests|Drive1541Tests'
+```
+
+Integration log: `/tmp/swift64-vic-irq-sampling-release-integration.log`. Final `swift build --build-tests -j 2`, fetch-script syntax, and whitespace checks pass; the build log is `/tmp/swift64-vic-irq-sampling-final-build.log`. No core changes follow that full run. These results establish the corrected edge and acknowledgement behavior while retaining existing game/demo proof; they do not certify all raster effects or alternate VIC revisions.
+
+### Ultimax VIC memory and cartridge graphics
+
+The VIC's memory path previously ignored cartridge mapping entirely. In Ultimax mode, local `$3000-$3FFF` now reads the upper 4K of ROMH (CPU `$F000-$FFFF`) independently of the CIA2 RAM bank. The other 12K remains CIA-banked RAM, including the normally character-ROM-mapped addresses. Normal 8K/16K/off modes retain their existing RAM/character-ROM mapping. Missing ROMH uses the shared-bus value rather than exposing hidden RAM, and VIC reads do not invoke CPU read callbacks or cartridge CPU-read side effects.
+
+The mapping follows Thomas Giesel's hardware-derived [PLA tables A.10-A.11 and address-bus pull-ups](https://skoe.de/docs/c64-dissected/pla/c64_pla_dissected_a4ss.pdf#page=64). The pinned [original EasyFlash VIC probes and hardware observations](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/C64/carts/ultimax) provide three independent reference comparisons. These are three startup modes of the same test program, not three different games. Each changes CIA2 banks and screen/charset selection, boots through its cartridge reset vector, and writes its original `$D7FF` completion. No program, reference pixels, or ROMs are patched. The runner recognizes mapped Ultimax I/O regardless of `$01`; a negative control checks every CPU-port configuration.
+
+Before the fix, `ultimax-vic-ef-pal` differed at **7,819 / 64,000 pixels**; afterward it is exact. `8k-vic-ef-pal` and `16k-vic-ef-pal` match before and after. All three retain **763,110 cycles / PC `$09D6` / raster `256:54`**, with result zero. Their fixed Release repeat checks **192,000 exact color indices** and passes all seven selected XCTest cases. Four ROM-independent cartridge regressions cover all CIA banks, upper/lower ROMH distinction, EasyFlash bank/mode/reset changes, CPU-port independence, missing ROM, and actual PAL/NTSC sprite DMA with pointers in RAM or ROM. The checked Debug cartridge/memory/sprite/completion slice runs 181 cases: 180 pass, the public-runner case skips, and none fail.
+
+```sh
+sh script/fetch_vic_testprogs.sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=ultimax-vic-ef-pal,8k-vic-ef-pal,16k-vic-ef-pal \
+swift test -c release -j 2 --filter 'PublicVICConformanceTests|CartridgeTests/testUltimaxVIC'
+```
+
+Baseline/fixed logs: `/tmp/swift64-vic-ultimax-public-baseline.log` and `/tmp/swift64-vic-ultimax-public-fixed.log`. Captures remain ignored under `.build/vic-ultimax-baseline` and `.build/vic-ultimax-fixed`. The three references are PAL; PAL/NTSC synthetic DMA checks are not independent NTSC hardware measurements. Phase-dependent custom cartridge logic, address-line overrides, and general freezer compatibility are outside this proof. No VICE executable, SID suite, or app launch is used.
+
+Full sequential Release validation runs **991 cases in 1,117.8 seconds: 976 pass, 14 optional CPU/slow-drive cases skip, and one public-runner case fails only the two existing visual assertions**. All **142 public programs complete; 140 pass**, including **135 exact images / 11,343,456 matching color indices**. The one-pixel `videomode1-pal` and 26-pixel `modesplit-ntsc` differences remain ordinary failures, not waived matches. All 139 prior result/cycle/PC/raster checkpoints, all 134 previous public captures, and all 14 previous external captures remain identical. Hessian/Piper retain 960 exact display frames; Befana retains its PAL level-2 milestone and separate NTSC deadline diagnostic; the scrolling game retains both 660-frame profile runs and area transitions.
+
+The same checked Debug selection runs **991 cases: 968 pass, 23 opt-in cases skip, zero fail**, in 43.9 seconds. The complete Release and Debug logs are `/tmp/swift64-vic-ultimax-integration.log` and `/tmp/swift64-vic-ultimax-debug-integration.log`. Final public/external captures are ignored under `.build/vic-ultimax-final-public` and `.build/vic-ultimax-final-external`. `swift build --build-tests -j 2`, fetch-script syntax, and whitespace checks pass; the build log is `/tmp/swift64-vic-ultimax-final-build.log`. No core changes follow these runs.
+
+```sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_EXTERNAL_VIC_DEMOS_DIR=.build/vic-framework-fresh-fixtures \
+swift test -c release -j 2 --filter 'CPU.*Tests|VIC.*Tests|C64TimingTests|C64InterruptTests|CIA.*Tests|VIA6522Tests|IECBusTests|Drive1541Tests|MemoryMapTests|CartridgeTests'
+```
+
+### Sprite reload and cycle stealing
+
+The original [sprite-X test programs](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/spritex) expose a reload boundary used by the ninth-sprite trick in Krestage 3. A sprite consumed at X=256 is repositioned into the right border. Before the fix, PAL cases 14/15 and NTSC cases 14/15/16 incorrectly collide. PAL must reject X=365/366 but allow X=367; the corresponding NTSC cases must all remain clear. The pinned source contains **29 cases**, despite the older README's 28-row table.
+
+The sprite shifter now gates output and new X matches through its pointer-fetch cycle and the first three dots of its middle-byte cycle. Reload cancels an already active tail, including expansion/multicolor phase state. This is an empirical sequencer model constrained by the original public results, not a transistor-level derivation. It uses the slot phase rather than hard-coded X coordinates, so wrapped PAL/NTSC slots share the same rule. Memory access phases, MC progression, BA/AEC, inactive-fetch byte contents, and ordinary register-write timing are unchanged.
+
+The original [cycle-stealing programs and hardware measurements](https://github.com/libsidplayfp/VICE-testprogs/tree/ef8e8efe52f3d43df7acefad132c6506239bddee/VICII/spritesteal) additionally check ten enable masks on two sprite-Y/measurement-line combinations. Each combination records 64 separately timed frames and compares 63 measurements with its embedded reference. They run unchanged, with a bounded 30-million-cycle budget per profile rather than the usual three-million-cycle cap. They passed before the reload fix; they are new independent timing coverage, not a claimed timing improvement.
+
+```sh
+sh script/fetch_vic_testprogs.sh
+SWIFT64_PUBLIC_VIC_TESTPROGS_DIR=.build/vic-testprogs \
+SWIFT64_PUBLIC_VIC_TEST_IDS=sprite-x-pal,sprite-x-ntsc,sprite-steal-pal,sprite-steal-ntsc \
+swift test -c release -j 2 --filter PublicVICConformanceTests
+```
+
+Baseline: `/tmp/swift64-vic-sprite-reuse-baseline.log`. The fixed focused Release run, `/tmp/swift64-vic-reload-public.log`, passes all 12 selected public programs. Both 29-case sprite-X tests report zero: PAL **612,822 cycles / PC `$09D2` / raster `55:21`**, NTSC **533,524 / `$09D3` / `55:4`**. Their one-clock difference from the failing run follows the original success/failure branch. Both side-border sprite references, five sprite-register-split references, and Blackmail FLI still match exactly; sprite-sprite and sprite-graphics collision timing checks also pass.
+
+Three bounded ROM-independent regressions exercise the early-reuse boundary, all eight sprite fetch slots in PAL/NTSC with hires/multicolor/X expansion, and cancellation of an in-flight tail without spontaneous restart. The all-slot checks establish implementation consistency, not additional hardware measurements. The checked Debug VIC/timing run executes **432 cases: 423 pass, nine opt-in skips, zero fail**, in 16.4 seconds (`/tmp/swift64-vic-reload-debug-final.log`). Public fixtures, ROMs, and generated captures remain ignored. No VICE executable or SID suite is used.
+
+Full sequential Release integration executes **994 cases in 1,351.2 seconds: 979 pass, 14 optional cases skip, and one public-runner case fails its two unchanged visual assertions**. All **146 public programs complete; 144 pass**, including **135 exact images / 11,343,456 color indices**. The remaining failures are `videomode1-pal` (one pixel) and `modesplit-ntsc` (26 pixels), with no tolerances or waivers. Both cycle-stealing probes retain their baseline checkpoints: PAL **25,726,795 cycles / PC `$0918` / raster `265:52`**, NTSC **22,428,305 / `$0918` / `257:55`**. All 142 prior completion checkpoints, all 137 public captures (including the two failing comparisons), and all 14 external captures remain identical.
+
+Hessian/Piper retain 960 exact display frames. Befana retains PAL level 2 / score 225 / two lives / 1,715,786 exact sprite pixels, plus its separately classified NTSC deadline diagnostic. Both scrolling-game profiles retain 660 checked frames, their area transition, and the same graphics/sprite counts. The broad checked Debug integration executes **994 cases: 971 pass, 23 opt-in skips, zero failures**, in 43.4 seconds. Logs: `/tmp/swift64-vic-reload-integration.log` and `/tmp/swift64-vic-reload-debug-integration.log`; ignored captures: `.build/vic-reload-final-public` and `.build/vic-reload-final-external`. No core changes follow these runs.
 
 ## VIC graphics counters and raster effects
 

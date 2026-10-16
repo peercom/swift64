@@ -86,6 +86,30 @@ final class VICSpriteDMALifecycleTests: XCTestCase {
         }
     }
 
+    func testEnableMustStillBeSetAtDisplayStartWithoutCancellingDMA() {
+        for standard in standards {
+            for sprite in 0..<8 {
+                let vic = VIC()
+                vic.videoStandard = standard
+                let mask = UInt8(1 << sprite)
+                vic.spriteY[sprite] = 50
+                vic.writeRegister(0x15, value: mask)
+                advance(vic, toLine: 50, cycle: vic.spriteDMAFirstStartCycle - 1)
+                XCTAssertTrue(vic.spriteDMAEligible(sprite))
+                vic.beginCycle()
+                vic.writeRegister(0x15, value: 0)
+                vic.endCycle()
+                vic.tick()
+                XCTAssertFalse(vic.spriteDisplay[sprite], "\(standard) sprite=\(sprite)")
+                XCTAssertTrue(vic.spriteDMAEligible(sprite))
+                // Re-enabling after the display comparison cannot start this row.
+                vic.writeRegister(0x15, value: mask)
+                vic.tick()
+                XCTAssertFalse(vic.spriteDisplay[sprite])
+            }
+        }
+    }
+
     func testExpandedSpriteCanStretchPastItsNominalHeight() {
         let vic = VIC()
         vic.writeRegister(0x15, value: 1)
@@ -210,6 +234,31 @@ final class VICSpriteDMALifecycleTests: XCTestCase {
         advance(vic, toLine: 100, cycle: 59)
         XCTAssertEqual(vic.spriteLastFetchedByteOffset[0], 5)
         XCTAssertEqual(vic.spriteLineData[0], [5, 6, 7])
+    }
+
+    func testCPUExpansionSetAtToggleCycleCannotRetroactivelyRepeatTheRow() {
+        for standard in standards {
+            let toggleCycle = standard == .pal ? 55 : 56
+            for writeCycle in (toggleCycle - 1)...(toggleCycle + 1) {
+                let c64 = C64(machineProfile: standard == .pal ? .palC64 : .ntscC64)
+                let vic = c64.vic
+                vic.rasterLine = 100
+                vic.rasterCycle = writeCycle - 3
+                vic.spriteDMACheckMask = 8
+                vic.spriteMC[3] = 3
+                vic.spriteMCBase[3] = 0
+                c64.memory.ram[0x07FB] = 0x20
+                c64.cpu.pc = 0x0600
+                c64.cpu.a = 8
+                c64.memory.ram[0x0600] = 0x8D // STA $D017
+                c64.memory.ram[0x0601] = 0x17
+                c64.memory.ram[0x0602] = 0xD0
+                for _ in 0..<4 { c64.tickOneCycle() }
+                advance(vic, toLine: 101, cycle: 16)
+                XCTAssertEqual(vic.spriteMCBase[3], writeCycle < toggleCycle ? 0 : 3,
+                               "\(standard) writeCycle=\(writeCycle)")
+            }
+        }
     }
 
     func testFinalRowDisplayEndsAtDisplayLatchNotAtDMAStop() {

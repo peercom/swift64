@@ -219,4 +219,97 @@ final class VICSpriteShifterTests: XCTestCase {
             for x in 200..<224 { XCTAssertEqual(pixel(vic, x), ColorPalette.rgba[0]) }
         }
     }
+
+    func testNinthSpriteReuseWaitsForReloadWindowToEnd() {
+        // Original hardware-checked spritex cases 14...16: sprite 0 is
+        // consumed at X=256, then moved alongside sprite 7 in the border.
+        for standard in standards {
+            for x in 365...367 {
+                let vic = VIC()
+                vic.videoStandard = standard
+                vic.rasterLine = 49
+                vic.spriteEnabled = 0x81
+                vic.spriteY[0] = 49
+                vic.spriteY[7] = 49
+                vic.spriteX[0] = 256
+                vic.spriteX[7] = 367
+                vic.readMemory = { address in
+                    if address == 0x07F8 { return 0x20 }
+                    if address == 0x07FF { return 0x21 }
+                    if (0x0800..<0x083F).contains(address) { return 0xFF }
+                    if address == 0x0852 { return 0x80 }
+                    if address == 0x0854 { return 1 }
+                    return 0
+                }
+                while vic.rasterLine < 56 { vic.tick() }
+                while vic.rasterCycle < 50 { vic.tick() }
+                XCTAssertEqual(vic.spriteShifters[0].data, 0)
+                XCTAssertEqual(vic.readRegister(0x1E), 0)
+                vic.spriteX[0] = UInt16(x)
+                while vic.rasterLine < 63 { vic.tick() }
+                XCTAssertEqual(vic.readRegister(0x1E), standard == .pal && x == 367 ? 0x81 : 0,
+                               "\(standard) reuse X=\(x)")
+            }
+        }
+    }
+
+    func testReloadGateUsesFetchPhaseForEverySpriteAndVideoStandard() {
+        for standard in standards {
+            for sprite in 0..<8 {
+                for expanded in [false, true] {
+                    for multicolor in [false, true] {
+                        for dot in [2, 3] {
+                            let vic = VIC()
+                            vic.videoStandard = standard
+                            vic.rasterLine = 100
+                            let mask = UInt8(1 << sprite)
+                            vic.spriteEnabled = mask
+                            vic.spriteDMACheckMask = mask
+                            vic.spriteDisplay[sprite] = true
+                            vic.spriteY[sprite] = 100
+                            vic.spriteExpandX = expanded ? mask : 0
+                            vic.spriteMulticolor = multicolor ? mask : 0
+                            let start = vic.spriteDMAStartCycle(for: sprite)!
+                            vic.rasterCycle = (start + 1) % vic.rasterCyclesPerLine
+                            vic.spriteX[sprite] = UInt16(vic.beamX(atDot: dot))
+                            vic.rasterCycle = start
+                            vic.readMemory = { _ in 0xFF }
+                            vic.tick()
+                            vic.tick()
+                            let expectedBits = dot == 2 ? 0 : expanded ? 22 : 19
+                            XCTAssertEqual(vic.spriteShifters[sprite].remainingBits, expectedBits,
+                                           "\(standard) sprite=\(sprite) dot=\(dot) expanded=\(expanded) multicolor=\(multicolor)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testReloadCancelsAnActiveTailWithoutRestartingItAfterFetch() {
+        for standard in standards {
+            for sprite in 0..<8 {
+                let vic = VIC()
+                vic.videoStandard = standard
+                vic.rasterLine = 100
+                let mask = UInt8(1 << sprite)
+                vic.spriteEnabled = mask
+                vic.spriteDMACheckMask = mask
+                vic.spriteDisplay[sprite] = true
+                vic.spriteY[sprite] = 100
+                vic.spriteX[sprite] = 100
+                vic.spriteExpandX = mask
+                vic.spriteMulticolor = mask
+                vic.spriteShifters[sprite] = VIC.SpriteShifter(data: 0xFFFFFF, remainingBits: 11,
+                                                              expansionSecondDot: true, multicolorSecondBit: true,
+                                                              pixel: 3)
+                vic.rasterCycle = vic.spriteDMAStartCycle(for: sprite)!
+                vic.readMemory = { _ in 0xFF }
+                for _ in 0..<3 { vic.tick() }
+                XCTAssertFalse(vic.spriteShifters[sprite].active, "\(standard) sprite=\(sprite)")
+                XCTAssertEqual(vic.spriteShifters[sprite].data, 0xFFFFFF)
+                XCTAssertEqual(vic.spriteShifters[sprite].pixel, 0)
+            }
+        }
+    }
 }

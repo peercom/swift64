@@ -73,6 +73,49 @@ final class VICSpriteFetchTests: XCTestCase {
         }
     }
 
+    func testSecondDMACheckLeavesOnlySpriteZerosFirstByteWithoutAEC() {
+        for (standard, starts) in schedules {
+            for late in [false, true] {
+                let vic = VIC()
+                vic.videoStandard = standard
+                vic.rasterLine = 100
+                vic.rasterCycle = starts[0] - 3
+                vic.spriteY = [UInt8](repeating: 100, count: 8)
+                vic.spriteEnabled = late ? 0 : 0xFF
+                var dataReads: [UInt16] = []
+                vic.readMemory = { address in
+                    if (0x07F8...0x07FF).contains(address) { return 0x20 }
+                    if (0x0800...0x0802).contains(address) { dataReads.append(address) }
+                    return UInt8(truncatingIfNeeded: address)
+                }
+                vic.tick()
+                vic.writeRegister(0x15, value: 0xFF)
+                vic.tick()
+                vic.tick()
+                XCTAssertTrue(vic.baLineLow)
+                XCTAssertEqual(vic.aecLineLow, !late)
+                XCTAssertEqual(vic.busOwner, late ? .cpu : .vicSpriteDMA)
+                vic.tick()
+                XCTAssertEqual(vic.spriteLineData[0][0], late ? 0xFF : 0)
+                XCTAssertEqual(vic.lastHighPhaseMemoryReads, late ? [] : [0x0800])
+                XCTAssertTrue(vic.aecLineLow)
+                vic.tick()
+                XCTAssertEqual(vic.spriteLineData[0], [late ? 0xFF : 0, 1, 2])
+                XCTAssertEqual(vic.spriteMC[0], 3)
+                for _ in 0..<14 { vic.tick() }
+                for sprite in 1..<8 {
+                    XCTAssertEqual(vic.spriteLineData[sprite], [0, 1, 2])
+                }
+                XCTAssertEqual(dataReads.count, late ? 23 : 24)
+                // Startup damage must not leak into the next row.
+                while !(vic.rasterLine == 101 && vic.rasterCycle == starts[0]) { vic.tick() }
+                XCTAssertTrue(vic.aecLineLow)
+                vic.tick()
+                XCTAssertEqual(vic.spriteLineData[0][0], 3)
+            }
+        }
+    }
+
     func testD018ChangeJustBeforePointerReadSelectsNewSpriteImage() {
         for (standard, starts) in schedules {
             let vic = VIC()
@@ -97,6 +140,54 @@ final class VICSpriteFetchTests: XCTestCase {
             XCTAssertEqual(vic.lastLowPhaseMemoryReads, [0x0BF8])
             XCTAssertEqual(vic.lastHighPhaseMemoryReads, [0x0C00])
         }
+    }
+
+    func testLateSpriteDMAKeepsCPUReadPinsDrivenUntilAECCloses() {
+        for (standard, starts) in schedules {
+            for late in [false, true] {
+                let c64 = C64(machineProfile: standard == .pal ? .palC64 : .ntscC64)
+                let vic = c64.vic
+                vic.rasterLine = 100
+                vic.rasterCycle = starts[0] - 3
+                vic.spriteY[0] = 100
+                vic.spriteEnabled = late ? 0 : 1
+                vic.tick()
+                vic.writeRegister(0x15, value: 1)
+                vic.tick()
+                vic.tick()
+                c64.cpu.pc = 0x0600
+                c64.memory.ram[0x0600] = 0xEA
+                var reads: [UInt16] = []
+                c64.memory.onCPURead = { address, _ in reads.append(address) }
+                c64.tickOneCycle()
+                XCTAssertEqual(reads, late ? [0x0600] : [])
+                XCTAssertEqual(c64.cpu.cycle, 0, "BA holds the read microcycle in both cases")
+                XCTAssertTrue(vic.aecLineLow)
+                reads.removeAll()
+                c64.tickOneCycle()
+                XCTAssertTrue(reads.isEmpty, "AEC must disconnect the CPU's memory pins")
+                XCTAssertEqual(c64.cpu.cycle, 0)
+                c64.memory.onCPURead = nil
+            }
+        }
+    }
+
+    func testResetDiscardsLateSpriteDMAStartup() {
+        let vic = VIC()
+        vic.rasterLine = 100
+        vic.rasterCycle = 55
+        vic.spriteY[0] = 100
+        vic.spriteEnabled = 1
+        vic.tick()
+        vic.tick()
+        XCTAssertFalse(vic.aecLineLow)
+        vic.reset()
+        vic.rasterCycle = 57
+        vic.spriteDMACheckMask = 1
+        vic.readMemory = { $0 == 0x07F8 ? 0x20 : 0xA5 }
+        XCTAssertTrue(vic.aecLineLow)
+        vic.tick()
+        XCTAssertEqual(vic.spriteLineData[0][0], 0xA5)
     }
 
     func testPointerStaysLatchedButBankPinsRemainLiveDuringBurst() {

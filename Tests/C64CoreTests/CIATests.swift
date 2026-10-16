@@ -53,6 +53,8 @@ final class CIATests: XCTestCase {
         cia.writeRegister(0x0E, value: 0x01)
 
         tickTimerAUnderflow(cia)
+        cia.tick()
+        cia.tick() // Cascaded count crosses the Timer B input pipeline.
 
         XCTAssertFalse(cia.interruptActive)
         XCTAssertEqual(cia.timerB, 0x0000)
@@ -75,6 +77,8 @@ final class CIATests: XCTestCase {
         cia.writeRegister(0x0E, value: 0x01)
 
         tickTimerAUnderflow(cia)
+        cia.tick()
+        cia.tick()
 
         XCTAssertFalse(cia.interruptActive)
         XCTAssertEqual(cia.timerB, 0x0000)
@@ -103,6 +107,8 @@ final class CIATests: XCTestCase {
 
         cia.setCNTLine(high: true)
         tickTimerAUnderflow(cia)
+        cia.tick()
+        cia.tick()
 
         XCTAssertEqual(cia.timerB, 0x0000)
         XCTAssertFalse(cia.interruptActive)
@@ -125,10 +131,12 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.timerA, 0x0001)
 
         cia.pulseCNT()
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerA, 0x0000)
         XCTAssertFalse(cia.interruptActive)
 
         cia.pulseCNT()
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerA, 0x0001)
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.interruptData & 0x01, 0x01)
@@ -146,16 +154,19 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.timerA, 0x0001)
 
         cia.setCNTLine(high: true)
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerA, 0x0000)
         XCTAssertFalse(cia.interruptActive)
 
         cia.setCNTLine(high: true)
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerA, 0x0000)
 
         cia.setCNTLine(high: false)
         XCTAssertEqual(cia.timerA, 0x0000)
 
         cia.setCNTLine(high: true)
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerA, 0x0001)
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.interruptData & 0x01, 0x01)
@@ -172,10 +183,12 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.timerB, 0x0001)
 
         cia.pulseCNT()
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerB, 0x0000)
         XCTAssertFalse(cia.interruptActive)
 
         cia.pulseCNT()
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerB, 0x0001)
         XCTAssertTrue(cia.interruptActive)
         XCTAssertEqual(cia.interruptData & 0x02, 0x02)
@@ -190,11 +203,13 @@ final class CIATests: XCTestCase {
         cia.writeRegister(0x0F, value: 0x21)
 
         cia.setCNTLine(high: true)
+        tickCNTPropagation(cia)
         XCTAssertEqual(cia.timerB, 0x0000)
         XCTAssertFalse(cia.interruptActive)
 
         cia.setCNTLine(high: false)
         cia.setCNTLine(high: true)
+        tickCNTPropagation(cia)
 
         XCTAssertEqual(cia.timerB, 0x0001)
         XCTAssertTrue(cia.interruptActive)
@@ -320,6 +335,8 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.readRegister(0x06), 0xFE)
 
         cia.writeRegister(0x0F, value: 0x10)
+        cia.tick()
+        cia.tick()
 
         XCTAssertEqual(cia.readRegister(0x07), 0x56)
     }
@@ -527,7 +544,7 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.readRegister(0x01), 0b1111_1010)
     }
 
-    func testEnablingPendingInterruptAssertsOnceAndMaskClearDeasserts() {
+    func testEnablingPendingInterruptAssertsOnceAndRequiresReadToAcknowledge() {
         let cia = CIA(isCIA1: true)
         var irqStates: [Bool] = []
         cia.onInterrupt = { irqStates.append($0) }
@@ -542,8 +559,12 @@ final class CIATests: XCTestCase {
 
         cia.writeRegister(0x0D, value: 0x01)
 
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.interruptData, 0x81)
+        XCTAssertEqual(irqStates, [true])
+        XCTAssertEqual(cia.readRegister(0x0D), 0x81)
         XCTAssertFalse(cia.interruptActive)
-        XCTAssertEqual(cia.interruptData, 0x01)
+        XCTAssertEqual(cia.interruptData, 0)
         XCTAssertEqual(irqStates, [true, false])
     }
 
@@ -742,12 +763,28 @@ final class CIATests: XCTestCase {
     }
 
     private func tickTimerAUnderflow(_ cia: CIA) {
-        cia.tick()
-        cia.tick()
+        let toggle = cia.timerAOutputHigh
+        for _ in 0..<8 {
+            cia.tick()
+            if cia.timerAControl & 4 != 0 {
+                if cia.timerAOutputHigh != toggle { return }
+            } else if cia.timerAPulseCyclesRemaining != 0 { return }
+        }
+        XCTFail("Timer A did not underflow within eight clocks")
     }
 
     private func tickTimerBUnderflow(_ cia: CIA) {
-        cia.tick()
-        cia.tick()
+        let toggle = cia.timerBOutputHigh
+        for _ in 0..<8 {
+            cia.tick()
+            if cia.timerBControl & 4 != 0 {
+                if cia.timerBOutputHigh != toggle { return }
+            } else if cia.timerBPulseCyclesRemaining != 0 { return }
+        }
+        XCTFail("Timer B did not underflow within eight clocks")
+    }
+
+    private func tickCNTPropagation(_ cia: CIA) {
+        for _ in 0..<4 { cia.tick() }
     }
 }

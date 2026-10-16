@@ -87,7 +87,7 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertEqual(c64.sid.voices[0].accumulator, 0)
     }
 
-    func testCIA1InterruptMaskClearDeassertsCPUIRQLine() {
+    func testCIA1InterruptMaskClearRequiresReadToAcknowledgeCPUIRQ() {
         let c64 = C64()
 
         c64.cia1.interruptData = 0x01
@@ -97,6 +97,8 @@ final class C64InterruptTests: XCTestCase {
 
         c64.cia1.writeRegister(0x0D, value: 0x01)
 
+        XCTAssertTrue(c64.cpu.irqLine)
+        XCTAssertEqual(c64.cia1.readRegister(0x0D), 0x81)
         XCTAssertFalse(c64.cpu.irqLine)
     }
 
@@ -131,6 +133,8 @@ final class C64InterruptTests: XCTestCase {
 
         c64.vic.writeRegister(0x19, value: 0x01)
 
+        XCTAssertTrue(c64.cpu.irqLine)
+        XCTAssertEqual(c64.cia1.readRegister(0x0D), 0x81)
         XCTAssertFalse(c64.cpu.irqLine)
     }
 
@@ -148,6 +152,8 @@ final class C64InterruptTests: XCTestCase {
 
     func testRestoreKeyPressTriggersMachineLevelNMI() {
         let c64 = C64()
+        c64.cpu.pc = 0x0600
+        c64.memory.ram[0x0600] = 0xEA
 
         XCTAssertFalse(c64.restoreKeyDown)
 
@@ -156,6 +162,9 @@ final class C64InterruptTests: XCTestCase {
         XCTAssertTrue(c64.restoreKeyDown)
         XCTAssertFalse(c64.cpu.nmiLine)
 
+        c64.tickOneCycle()
+        XCTAssertFalse(c64.cpu.servicingInterrupt)
+        c64.tickOneCycle() // NOP polls the captured RESTORE edge.
         c64.tickOneCycle()
 
         XCTAssertTrue(c64.cpu.servicingInterrupt)

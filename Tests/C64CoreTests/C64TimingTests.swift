@@ -197,12 +197,16 @@ final class C64TimingTests: XCTestCase {
 
         XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
-        XCTAssertTrue(c64.vic.aecLineLow)
+        XCTAssertFalse(c64.vic.aecLineLow, "The late start has only two BA warning clocks")
+        XCTAssertEqual(c64.vic.busOwner, .cpu)
         let cyclesBeforeDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
         XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.spriteLineData[0][0], 0xFF)
+        XCTAssertTrue(c64.vic.aecLineLow)
+        XCTAssertEqual(c64.vic.busOwner, .vicSpriteDMA)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 1)
     }
@@ -234,12 +238,16 @@ final class C64TimingTests: XCTestCase {
 
         XCTAssertEqual(c64.vic.rasterCycle, 57)
         XCTAssertEqual(c64.vic.busPhase, .spriteDMA(sprite: 0))
-        XCTAssertTrue(c64.vic.aecLineLow)
+        XCTAssertFalse(c64.vic.aecLineLow, "The late Y match has only two BA warning clocks")
+        XCTAssertEqual(c64.vic.busOwner, .cpu)
         let cyclesBeforeDMA = c64.cpu.totalCycles
 
         c64.tickOneCycle()
 
         XCTAssertEqual(c64.vic.rasterCycle, 58)
+        XCTAssertEqual(c64.vic.spriteLineData[0][0], 0xFF)
+        XCTAssertTrue(c64.vic.aecLineLow)
+        XCTAssertEqual(c64.vic.busOwner, .vicSpriteDMA)
         XCTAssertFalse(c64.cpu.rdyLine)
         XCTAssertEqual(c64.cpu.totalCycles, cyclesBeforeDMA + 1)
     }

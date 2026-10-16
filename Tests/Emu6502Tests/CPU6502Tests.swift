@@ -474,6 +474,7 @@ final class CPU6502Tests: XCTestCase {
         bus.memory[0xFFFB] = 0x07
         cpu.setNMILine(high: true)
 
+        runInstructions(cpu, count: 1)  // NOP polls the NMI edge detector.
         runInstructions(cpu, count: 1)
 
         XCTAssertEqual(bus.memory[0x01FB] & Flags.brk, 0)
@@ -698,6 +699,7 @@ final class CPU6502Tests: XCTestCase {
         cpu.setNMILine(high: true)
         cpu.irqLine = true
 
+        runInstructions(cpu, count: 1)  // NOP polls both interrupt detectors.
         runInstructions(cpu, count: 1)  // NMI sequence wins arbitration.
         XCTAssertEqual(cpu.pc, 0x0700)
         XCTAssertEqual(cpu.x, 0x00)

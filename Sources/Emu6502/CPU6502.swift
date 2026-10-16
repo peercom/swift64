@@ -93,6 +93,8 @@ public final class CPU6502 {
     /// poll result. Most instructions poll the pin at their penultimate cycle.
     private var irqSample = false
     private var irqPending = false
+    private var nmiSample = false
+    private var nmiPolled = false
 
     /// Vector selected for the current BRK/IRQ/NMI/RESET sequence.
     var interruptVectorAddress: UInt16 = Vector.irq
@@ -118,6 +120,8 @@ public final class CPU6502 {
         interruptType = .none
         irqSample = false
         irqPending = false
+        nmiSample = false
+        nmiPolled = false
         interruptVectorAddress = Vector.irq
         deferNMIUntilAfterNextInstruction = false
         cycle = 0
@@ -134,7 +138,7 @@ public final class CPU6502 {
     }
 
     /// Set the NMI input line level. A low→high transition is latched and
-    /// serviced at the next instruction boundary.
+    /// serviced after an instruction polls the edge detector.
     public func setNMILine(high: Bool) {
         if high && !nmiLine {
             if protectsLateNMIVectorHijack {
@@ -166,7 +170,13 @@ public final class CPU6502 {
     public func tick(busAvailable: Bool = true) -> Bool {
         guard !jammed else { return false }
         totalCycles += 1
-        defer { irqSample = irqLine && !getFlag(Flags.interrupt) }
+        // Bus reads/writes may acknowledge an IRQ after this cycle's pin
+        // sample. Preserve that sample without changing I-flag timing.
+        let irqAtCycleStart = irqLine
+        defer {
+            irqSample = irqAtCycleStart && !getFlag(Flags.interrupt)
+            nmiSample = nmiPending
+        }
 
         if !rdyLine && currentCycleIsRead() {
             // RDY holds the microcycle, not the memory pins. The C64 may also
@@ -184,7 +194,9 @@ public final class CPU6502 {
             // Check for pending interrupts at instruction boundary
             detectNMIEdge()
             let takeIRQ = irqPending
+            let takeNMI = nmiPolled && nmiPending
             irqPending = false
+            nmiPolled = false
 
             if resetPending {
                 resetPending = false
@@ -196,7 +208,7 @@ public final class CPU6502 {
                     nmiPending = true
                     nmiLinePrev = true
                 }
-            } else if nmiPending {
+            } else if takeNMI {
                 acknowledgePendingNMI()
                 beginInterrupt(.nmi)
                 return true
@@ -215,10 +227,17 @@ public final class CPU6502 {
             if CPU6502.templateTable[Int(opcode)] == .branch {
                 // Branches poll on their offset cycle, not the final dummy
                 // cycle of a same-page taken branch. A page fixup polls again.
-                if previousCycle == 1 { irqPending = irqSample }
-                if previousCycle == 3 { irqPending = irqPending || irqSample }
+                if previousCycle == 1 {
+                    irqPending = irqSample
+                    nmiPolled = nmiSample
+                }
+                if previousCycle == 3 {
+                    irqPending = irqPending || irqSample
+                    nmiPolled = nmiPolled || nmiSample
+                }
             } else if cycle == 0 {
                 irqPending = irqSample
+                nmiPolled = nmiSample
             }
         }
 
@@ -247,6 +266,8 @@ public final class CPU6502 {
         interruptType = .none
         irqSample = false
         irqPending = false
+        nmiSample = false
+        nmiPolled = false
         interruptVectorAddress = Vector.irq
         deferNMIUntilAfterNextInstruction = false
         rdyLine = true
@@ -291,6 +312,8 @@ public final class CPU6502 {
 
     func acknowledgePendingNMI() {
         nmiPending = false
+        nmiSample = false
+        nmiPolled = false
         nmiLinePrev = nmiLine
     }
 

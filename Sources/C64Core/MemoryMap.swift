@@ -430,8 +430,14 @@ public final class MemoryMap: Bus {
         let physAddr = bank + addr
 
         let value: UInt8
-        // Character ROM is visible to VIC at $1000-$1FFF and $9000-$9FFF
-        if (physAddr >= 0x1000 && physAddr < 0x2000) || (physAddr >= 0x9000 && physAddr < 0xA000) {
+        if cartridge?.usesUltimaxMemoryMap == true {
+            // Ultimax disables character ROM. VIC $3000-$3FFF selects ROMH;
+            // pulled-up CPU address lines select its upper 4K in every CIA bank.
+            value = addr >= 0x3000
+                ? cartridge?.read(UInt16(0xF000 | (addr & 0x0FFF))) ?? cpuDataBus
+                : ram[physAddr]
+        } else if (physAddr >= 0x1000 && physAddr < 0x2000) || (physAddr >= 0x9000 && physAddr < 0xA000) {
+            // Normal cartridge modes leave the VIC character-ROM windows intact.
             value = charROM[physAddr & 0x0FFF]
         } else {
             value = ram[physAddr]

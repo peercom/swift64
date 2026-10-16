@@ -5,7 +5,8 @@ final class VICSpriteRegisterTimingTests: XCTestCase {
     private let standards: [C64VideoStandard] = [.pal, .ntsc]
 
     private func machine(_ standard: C64VideoStandard, sprite: Int = 0,
-                         x: UInt16 = 100, byte: UInt8 = 0xFF, multicolor: Bool = false) -> C64 {
+                         x: UInt16 = 100, byte: UInt8 = 0xFF, multicolor: Bool = false,
+                         startCycle: Int = 12) -> C64 {
         let c64 = C64(machineProfile: standard == .pal ? .palC64 : .ntscC64)
         c64.trueDriveEmulationMode = .off
         c64.kernalTraps.enabled = false
@@ -16,6 +17,9 @@ final class VICSpriteRegisterTimingTests: XCTestCase {
         vic.horizontalBorderActive = false
         vic.recordsBusAccessTraces = false
         vic.readMemory = { _ in 0 }
+        // Seed the output row after the early sprite slots have finished.
+        // Inactive fetches also overwrite the shifters on real hardware.
+        while vic.rasterCycle < startCycle { vic.tick() }
         vic.spriteDisplay[sprite] = true
         vic.spriteX[sprite] = x
         vic.spriteColors[sprite] = 1
@@ -154,7 +158,7 @@ final class VICSpriteRegisterTimingTests: XCTestCase {
     func testColorOutputWriteSpansTheHorizontalCounterWrap() {
         for standard in standards {
             for cycle in [12, 13] {
-                let c64 = machine(standard)
+                let c64 = machine(standard, startCycle: 0)
                 c64.vic.spriteDisplay[0] = false
                 c64.vic.verticalBorderActive = true
                 c64.vic.verticalBorderClosePending = true

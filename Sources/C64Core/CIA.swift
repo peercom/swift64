@@ -64,6 +64,39 @@ public final class CIA {
     /// Remaining visible cycles for Timer B pulse output on PB7.
     var timerBPulseCyclesRemaining: Int = 0
 
+    private struct TimerPipeline {
+        var countNow = false
+        var countNext = false
+        var forceLoadNext = false
+        var forceLoadRequested = false
+        var oneShotPrevious = false
+
+        mutating func clock(counter: inout UInt16, latch: UInt16,
+                            control: inout UInt8, input: Bool) -> Bool {
+            if countNow { counter &-= 1 }
+            let underflow = counter == 0 && countNext
+            let reload = forceLoadNext || underflow
+            if reload { counter = latch }
+            if underflow && (control & 0x08 != 0 || oneShotPrevious) {
+                control &= ~0x01
+            }
+            // A reload removes the next count, not the continuously arriving
+            // clock input. START/STOP and source changes cross both stages.
+            countNow = reload ? false : countNext
+            countNext = input && control & 0x01 != 0
+            forceLoadNext = forceLoadRequested
+            forceLoadRequested = false
+            oneShotPrevious = control & 0x08 != 0
+            return underflow
+        }
+    }
+
+    private var timerAPipeline = TimerPipeline()
+    private var timerBPipeline = TimerPipeline()
+    private var cntPulsePending = false
+    private var cntPulseSampled = false
+    private var pendingTimerInterrupts: UInt8 = 0
+
     // MARK: - Interrupt
 
     /// Interrupt control mask (which sources are enabled)
@@ -176,6 +209,11 @@ public final class CIA {
         timerBHighLatched = nil
         timerBOutputHigh = false
         timerBPulseCyclesRemaining = 0
+        timerAPipeline = TimerPipeline()
+        timerBPipeline = TimerPipeline()
+        cntPulsePending = false
+        cntPulseSampled = false
+        pendingTimerInterrupts = 0
 
         interruptMask = 0x00
         interruptData = 0x00
@@ -233,24 +271,27 @@ public final class CIA {
     /// Advance one system clock cycle.
     public func tick() {
         expireTimerOutputPulses()
-
-        // Timer A
-        if timerAControl & 0x01 != 0 {
-            let countSource = timerAControl & 0x20  // bit 5: 0=system clock, 1=CNT pin
-            if countSource == 0 {
-                countTimerA()
-            }
+        if pendingTimerInterrupts != 0 {
+            pendingTimerInterrupts = 0
+            checkInterrupt()
         }
 
-        // Timer B
-        if timerBControl & 0x01 != 0 {
-            let countSource = timerBControl & 0x60
-            if countSource == 0 {
-                // Count system clock
-                countTimerB()
-            }
-            // countSource == 0x40: count timer A underflows (handled in timerAUnderflow)
+        let underflowA = timerAPipeline.clock(counter: &timerA, latch: timerALatch,
+                                             control: &timerAControl,
+                                             input: timerAControl & 0x20 == 0 || cntPulseSampled)
+        if underflowA { timerAUnderflow() }
+        let inputB: Bool
+        switch timerBControl & 0x60 {
+        case 0x00: inputB = true
+        case 0x20: inputB = cntPulseSampled
+        case 0x40: inputB = underflowA
+        default: inputB = underflowA && cntLineHigh
         }
+        let underflowB = timerBPipeline.clock(counter: &timerB, latch: timerBLatch,
+                                             control: &timerBControl, input: inputB)
+        if underflowB { timerBUnderflow() }
+        cntPulseSampled = cntPulsePending
+        cntPulsePending = false
 
         tickTOD()
     }
@@ -261,49 +302,19 @@ public final class CIA {
 
         // Set interrupt flag
         interruptData |= 0x01
-        checkInterrupt()
-
-        // Reload or stop
-        if timerAControl & 0x08 != 0 {
-            // One-shot: stop timer
-            timerAControl &= ~0x01
-        }
-        timerA = timerALatch
-
-        if timerBCountsTimerAUnderflows {
-            if timerB == 0 {
-                timerBUnderflow()
-            } else {
-                timerB &-= 1
-            }
-        }
+        pendingTimerInterrupts |= 0x01
     }
 
     func timerBUnderflow() {
         updateTimerBOutput()
 
         interruptData |= 0x02
-        checkInterrupt()
-
-        if timerBControl & 0x08 != 0 {
-            timerBControl &= ~0x01
-        }
-        timerB = timerBLatch
-    }
-
-    var timerBCountsTimerAUnderflows: Bool {
-        guard timerBControl & 0x01 != 0 else { return false }
-
-        switch timerBControl & 0x60 {
-        case 0x40: return true
-        case 0x60: return cntLineHigh
-        default: return false
-        }
+        pendingTimerInterrupts |= 0x02
     }
 
     func checkInterrupt() {
         let wasActive = interruptActive
-        let isActive = (interruptData & interruptMask & 0x1F) != 0
+        let isActive = interruptActive || (interruptData & interruptMask & ~pendingTimerInterrupts & 0x1F) != 0
 
         if isActive {
             interruptData |= 0x80  // Set IR bit
@@ -341,31 +352,8 @@ public final class CIA {
     }
 
     public func pulseCNT() {
-        if timerAControl & 0x01 != 0 && timerAControl & 0x20 != 0 {
-            countTimerA()
-        }
-
-        if timerBControl & 0x01 != 0 && timerBControl & 0x60 == 0x20 {
-            countTimerB()
-        }
-
+        cntPulsePending = true
         shiftSerialInputBit()
-    }
-
-    func countTimerA() {
-        if timerA == 0 {
-            timerAUnderflow()
-        } else {
-            timerA &-= 1
-        }
-    }
-
-    func countTimerB() {
-        if timerB == 0 {
-            timerBUnderflow()
-        } else {
-            timerB &-= 1
-        }
     }
 
     var timerAOutputPBHigh: Bool {
@@ -595,6 +583,7 @@ public final class CIA {
             // Interrupt control — reading clears
             let val = interruptData
             interruptData = 0
+            pendingTimerInterrupts = 0
             let wasActive = interruptActive
             interruptActive = false
             if wasActive {
@@ -723,7 +712,7 @@ public final class CIA {
                 serialOutputBitsRemaining = 8
             }
             if forceLoad {
-                timerA = timerALatch
+                timerAPipeline.forceLoadRequested = true
                 timerAHighLatched = nil
             }
 
@@ -737,7 +726,7 @@ public final class CIA {
                 timerBPulseCyclesRemaining = 0
             }
             if forceLoad {
-                timerB = timerBLatch
+                timerBPipeline.forceLoadRequested = true
                 timerBHighLatched = nil
             }
 
