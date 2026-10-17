@@ -1,8 +1,8 @@
 import Foundation
 
 /// Low-level disk media consumed by true 1541 emulation.
-public struct DiskImage {
-    public enum Format: Equatable {
+public struct DiskImage: Codable {
+    public enum Format: Equatable, Codable {
         case d64
         case g64
         case nib
@@ -46,8 +46,8 @@ public struct DiskImage {
         public var hasDuplicateSectorHeaders: Bool { duplicateSectorHeaderCount > 0 }
     }
 
-    public struct Track: Equatable {
-        public struct WeakBitRange: Equatable {
+    public struct Track: Equatable, Codable {
+        public struct WeakBitRange: Equatable, Codable {
             public let startBit: Int
             public let endBit: Int
 
@@ -61,7 +61,7 @@ public struct DiskImage {
             }
         }
 
-        public struct SpeedZoneRange: Equatable {
+        public struct SpeedZoneRange: Equatable, Codable {
             public let startByte: Int
             public let endByte: Int
             public let zone: UInt8

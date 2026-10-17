@@ -110,6 +110,41 @@ struct C64App: App {
 
                 Divider()
 
+                Button("Save State...") {
+                    saveFile(type: EmulatorController.snapshotFileExtension, title: "Save Machine State", defaultName: emulator.suggestedStateName) { url in
+                        do {
+                            try emulator.saveState(to: url)
+                        } catch {
+                            print("Could not save state: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Button("Load State...") {
+                    openFile(types: [EmulatorController.snapshotFileExtension], title: "Load Machine State") { url in
+                        do {
+                            try emulator.loadState(from: url)
+                        } catch {
+                            print("Could not load state: \(error.localizedDescription)")
+                        }
+                    }
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                Button("Quick Save State") {
+                    emulator.quickSaveState()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+
+                Button("Quick Load State") {
+                    emulator.quickLoadState()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option])
+                .disabled(!emulator.hasQuickSave)
+
+                Divider()
+
                 Button("Reset C64") {
                     emulator.c64.reset()
                     emulator.powerDriveIfNeeded()

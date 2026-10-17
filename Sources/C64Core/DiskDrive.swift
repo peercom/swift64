@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// Virtual 1541 disk drive — parses D64 images and serves files via Kernal traps.
 public final class DiskDrive {
@@ -120,7 +121,7 @@ public final class DiskDrive {
 
     // MARK: - Channel state
 
-    struct Channel {
+    struct Channel: Codable {
         var data: [UInt8] = []
         var writeData: [UInt8] = []
         var position: Int = 0
@@ -2879,5 +2880,35 @@ public final class DiskDrive {
     private func petsciiFilenameBytes(_ filename: String) -> [UInt8] {
         let bytes = filename.prefix(16).map { charToPetscii($0) }
         return bytes + [UInt8](repeating: 0xA0, count: max(0, 16 - bytes.count))
+    }
+}
+
+// MARK: - Snapshot state
+
+extension DiskDrive {
+    public static let snapshotStoredPropertyCount = 14
+
+    /// The image is embedded and re-parsed on restore; channels and DOS RAM follow.
+    func saveState(to w: inout StateWriter) throws {
+        w.write(imageData)
+        try w.writeBoxed(mountedFormat)
+        try w.writeBoxed(channels)
+        w.write(commandStatus); w.write(commandResponseData); w.write(dosMemory); w.write(lastMemoryExecuteAddress)
+        w.write(hasUnsavedChanges); w.write(isWriteProtected)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        let image: [UInt8]? = try r.read()
+        let format = try r.readBoxed(DiskImage.Format?.self, label: "disk format")
+        unmount()
+        if let image {
+            let mounted = format == .g64 ? mountG64(Data(image)) : mount(Data(image))
+            guard mounted else { throw MachineStateError.invalidValue("disk image") }
+        }
+        let restoredChannels = try r.readBoxed([Channel].self, label: "disk channels")
+        channels = try snapshotFixed(restoredChannels, count: 16, "disk channels")
+        commandStatus = try r.read(); commandResponseData = try r.read()
+        dosMemory = try snapshotFixed(try r.read(), count: 0x10000, "DOS memory"); lastMemoryExecuteAddress = try r.read()
+        hasUnsavedChanges = try r.read(); isWriteProtected = try r.read()
     }
 }

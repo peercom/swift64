@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// IEC serial bus connecting the C64 to the 1541 disk drive.
 ///
@@ -153,5 +154,21 @@ public final class IECBus {
 
     func iecLog(_ msg: String) {
         C64Trace.log(.iec, msg)
+    }
+}
+
+// MARK: - Snapshot state
+
+extension IECBus {
+    public static let snapshotStoredPropertyCount = 9
+
+    func saveState(to w: inout StateWriter) {
+        w.write(c64Atn); w.write(c64Clk); w.write(c64Data)
+        w.write(driveClk); w.write(driveData); w.write(driveAtn)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        c64Atn = try r.read(); c64Clk = try r.read(); c64Data = try r.read()
+        driveClk = try r.read(); driveData = try r.read(); driveAtn = try r.read()
     }
 }

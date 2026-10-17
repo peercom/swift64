@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// Manages GCR-encoded track data for the 1541 disk drive emulation.
 /// Stores raw GCR byte streams per track, as read by the drive head.
@@ -1979,5 +1980,25 @@ public final class GCRDisk {
             UInt8((bits >> 8) & 0xFF),
             UInt8(bits & 0xFF),
         ]
+    }
+}
+
+// MARK: - Snapshot state
+
+extension GCRDisk {
+    public static let snapshotStoredPropertyCount = 5
+
+    func saveState(to w: inout StateWriter) throws {
+        w.write(tracks)
+        try w.writeBoxed(trackInfos)
+        try w.writeBoxed(image)
+        w.write(hasUnsavedLowLevelWrites); w.write(writeProtected)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        tracks = try snapshotFixed(try r.read(), count: GCRDisk.maxHalfTracks, "GCR tracks")
+        trackInfos = try snapshotFixed(try r.readBoxed([DiskImage.Track?].self, label: "GCR track info"), count: GCRDisk.maxHalfTracks, "GCR track info")
+        image = try r.readBoxed(DiskImage?.self, label: "disk image")
+        hasUnsavedLowLevelWrites = try r.read(); writeProtected = try r.read()
     }
 }

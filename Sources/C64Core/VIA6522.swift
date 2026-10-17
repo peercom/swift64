@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// MOS 6522 VIA (Versatile Interface Adapter) used in the 1541 disk drive.
 /// Two instances: VIA1 (serial bus interface at $1800) and VIA2 (disk controller at $1C00).
@@ -771,5 +772,37 @@ public final class VIA6522 {
 
     func viaLog(_ msg: String) {
         C64Trace.log(.via, msg)
+    }
+}
+
+// MARK: - Snapshot state
+
+extension VIA6522 {
+    public static let snapshotStoredPropertyCount = 48
+
+    func saveState(to w: inout StateWriter) {
+        w.write(portA); w.write(portB); w.write(ddra); w.write(ddrb)
+        w.write(portAInput); w.write(portBInput); w.write(portAInputLatch); w.write(portBInputLatch)
+        w.write(timer1Counter); w.write(timer1Latch); w.write(timer1Fired); w.write(pendingT1IRQ)
+        w.write(timer1HighLatched); w.write(timer1PB7OutputHigh)
+        w.write(timer2Counter); w.write(timer2LatchLow); w.write(timer2Fired); w.write(timer2HighLatched); w.write(pb6LineHigh)
+        w.write(shiftRegister); w.write(shiftRegisterBitCount); w.write(shiftRegisterPhi2Active)
+        w.write(shiftRegisterTimer2Active); w.write(shiftRegisterTimer2Counter)
+        w.write(acr); w.write(pcr); w.write(ifr); w.write(ier)
+        w.write(ca2OutputState); w.write(cb2OutputState); w.write(cb1OutputState)
+        w.write(ca1); w.write(ca1Prev); w.write(ca2); w.write(ca2Prev); w.write(cb1); w.write(cb1Prev); w.write(cb2); w.write(cb2Prev)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        portA = try r.read(); portB = try r.read(); ddra = try r.read(); ddrb = try r.read()
+        portAInput = try r.read(); portBInput = try r.read(); portAInputLatch = try r.read(); portBInputLatch = try r.read()
+        timer1Counter = try r.read(); timer1Latch = try r.read(); timer1Fired = try r.read(); pendingT1IRQ = try r.read()
+        timer1HighLatched = try r.read(); timer1PB7OutputHigh = try r.read()
+        timer2Counter = try r.read(); timer2LatchLow = try r.read(); timer2Fired = try r.read(); timer2HighLatched = try r.read(); pb6LineHigh = try r.read()
+        shiftRegister = try r.read(); shiftRegisterBitCount = try r.read(); shiftRegisterPhi2Active = try r.read()
+        shiftRegisterTimer2Active = try r.read(); shiftRegisterTimer2Counter = try r.read()
+        acr = try r.read(); pcr = try r.read(); ifr = try r.read(); ier = try r.read()
+        ca2OutputState = try r.read(); cb2OutputState = try r.read(); cb1OutputState = try r.read()
+        ca1 = try r.read(); ca1Prev = try r.read(); ca2 = try r.read(); ca2Prev = try r.read(); cb1 = try r.read(); cb1Prev = try r.read(); cb2 = try r.read(); cb2Prev = try r.read()
     }
 }

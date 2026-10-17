@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// Virtual datasette — parses T64 and TAP files for Kernal trap loading.
 public final class TapeUnit {
@@ -20,7 +21,7 @@ public final class TapeUnit {
         public let isOverflow: Bool
     }
 
-    public struct TapeWritePulse: Equatable {
+    public struct TapeWritePulse: Equatable, Codable {
         public let cyclesSincePreviousEdge: Int
         public let levelHigh: Bool
     }
@@ -925,5 +926,30 @@ public final class TapeUnit {
         bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
         bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
         bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
+    }
+}
+
+// MARK: - Snapshot state
+
+extension TapeUnit {
+    public static let snapshotStoredPropertyCount = 17
+
+    /// The image is embedded; the parsed entries and pulses are rebuilt on restore.
+    func saveState(to w: inout StateWriter) throws {
+        w.write(imageData)
+        w.write(readSignalHigh); w.write(rawPlaybackActive); w.write(currentPulseIndex); w.write(cyclesUntilNextPulse)
+        try w.writeBoxed(writePulses)
+        w.write(writeLineHigh); w.write(lastWritePulseCycle); w.write(hasUnsavedChanges)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        unmount()
+        if let image: [UInt8] = try r.read() {
+            guard mount(Data(image)) else { throw MachineStateError.invalidValue("tape image") }
+        }
+        readSignalHigh = try r.read(); rawPlaybackActive = try r.read(); currentPulseIndex = try r.read(); cyclesUntilNextPulse = try r.read()
+        writePulses = try r.readBoxed([TapeWritePulse].self, label: "tape write pulses")
+        writeLineHigh = try r.read(); lastWritePulseCycle = try r.read(); hasUnsavedChanges = try r.read()
+        guard currentPulseIndex >= 0, currentPulseIndex <= tapPulses.count else { throw MachineStateError.invalidValue("tape position") }
     }
 }

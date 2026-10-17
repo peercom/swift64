@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added save states. File > Save State and Load State (Cmd+Shift+S / Cmd+Shift+L) write and read `.s64` snapshots; Quick Save and Quick Load (Cmd+Option+S / Cmd+Option+L) use one slot in Application Support. Snapshots can also be dropped onto the window. A snapshot captures the whole machine at a clock cycle, mid-instruction and mid-rasterline: CPU, memory and CPU port, VIC-II with its line buffers and sprite shifters, SID, both CIAs, the IEC bus, Kernal trap channels, the cartridge with its bank and RAM state, the true-drive 1541 with its VIAs, RAM, head position and GCR disk, the high-level drive channels and DOS RAM, and the tape unit; mounted disk, tape, and cartridge images are embedded so loading a snapshot needs no media remount. ROMs are not embedded.
+- Snapshot restores are checked for determinism: a machine restored from a snapshot, and the same machine rewound to it, continue cycle-for-cycle identically to the uninterrupted run, with and without ROMs and with the true drive running. A reflection-based test counts every chip's stored properties so a new field cannot be left out of the format silently.
+
 ## 0.5.0 - 2026-10-17
 
 - Added warp mode (toolbar, Emulation menu, Cmd+Shift+W). The emulation thread drops frame pacing and the speaker is muted; leaving warp discards the stale audio queue and refills before playback resumes. The status bar and inspector show the current speed.

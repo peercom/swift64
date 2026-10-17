@@ -13,11 +13,13 @@
 		0E0ABC6CD6C8A0ADD9CB2D3D /* ColorPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */; };
 		12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CA3D09FA940CA84F595C9C /* SID.swift */; };
 		1B2CB2A35B2D90CD4CAF25F8 /* GamepadInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1BB5DCC357EB4316FDE25D /* GamepadInput.swift */; };
+		20702496B3C60BEFD75F806B /* MachineState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42DCFA6E9CB1FDC388D7975B /* MachineState.swift */; };
 		237804E7A0DB0B5647CDF6DE /* DiskDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */; };
 		25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */; };
 		265046B932FB1B4566FBAC25 /* VIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118A9E70995FB663B124F661 /* VIC.swift */; };
 		26A69A079EBA706CEB051566 /* C64Trace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 979027D7F59AB7A5559A257A /* C64Trace.swift */; };
 		2C9EC3AC9377AA1438FEB365 /* AudioPlaybackValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C85B84EEF594DCC763E080 /* AudioPlaybackValidation.swift */; };
+		2D932A0B5645857AAA90A880 /* MachineSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6FE23CB28ECE8F58124EEDA /* MachineSnapshot.swift */; };
 		2FA754BF02D45F6B5430ADB3 /* Joystick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7FC9314BC445E26A33A4C2 /* Joystick.swift */; };
 		31A83EA49D0E0C56CC9C40F9 /* DiskImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C9714128738A08B2767150 /* DiskImage.swift */; };
 		326E85E04717EA1ABA30CA35 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F02EA636B5026B5622417D /* MetalRenderer.swift */; };
@@ -96,6 +98,7 @@
 		2D5E8A112118514B27CCE218 /* C64.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64.swift; sourceTree = "<group>"; };
 		2DCA5949F8CA7D9CEE00B959 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		300DE71EBF779617B43AA9E1 /* C64App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64App.swift; sourceTree = "<group>"; };
+		42DCFA6E9CB1FDC388D7975B /* MachineState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineState.swift; sourceTree = "<group>"; };
 		4769B97731BB5103DAF2CF61 /* C64Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Preferences.swift; sourceTree = "<group>"; };
 		4D2FB0EE8A45043570D73910 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 		54132BA620E1EB972F64D612 /* C64App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = C64App.entitlements; sourceTree = "<group>"; };
@@ -127,6 +130,7 @@
 		E872D132D76715546D258507 /* GCRDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GCRDisk.swift; sourceTree = "<group>"; };
 		EFABA3AD3237026A30ACD089 /* libC64Core.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libC64Core.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3EAFE976F27217801A0897F /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		F6FE23CB28ECE8F58124EEDA /* MachineSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineSnapshot.swift; sourceTree = "<group>"; };
 		FD1ED263F1FD419DE817455C /* MachineProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineProfile.swift; sourceTree = "<group>"; };
 		FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		FF1BB5DCC357EB4316FDE25D /* GamepadInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GamepadInput.swift; sourceTree = "<group>"; };
@@ -165,6 +169,7 @@
 				0BC4533014D9BB87EF27F4D3 /* Bus.swift */,
 				18D794E204E86C69D37D1747 /* CPU6502.swift */,
 				16FCE7B1EFA4B960CF8646CF /* Instructions.swift */,
+				42DCFA6E9CB1FDC388D7975B /* MachineState.swift */,
 				DE2DF1EFA74DD2855CA6DD0E /* Types.swift */,
 			);
 			name = Emu6502;
@@ -203,6 +208,7 @@
 				61ADFC557D655CE2C63F112B /* KernalTraps.swift */,
 				B9DE024727035BA1DC20CE24 /* Keyboard.swift */,
 				FD1ED263F1FD419DE817455C /* MachineProfile.swift */,
+				F6FE23CB28ECE8F58124EEDA /* MachineSnapshot.swift */,
 				0544971F445D40AAACADAB98 /* MemoryMap.swift */,
 				8C5238177200FD6BB810A221 /* PRGLoader.swift */,
 				06CA3D09FA940CA84F595C9C /* SID.swift */,
@@ -427,6 +433,7 @@
 				63A1943C769CD9CC6DB30CD0 /* Bus.swift in Sources */,
 				0783C74D3AD33E6C614B97F6 /* CPU6502.swift in Sources */,
 				7C527898C5FB1F00B5911383 /* Instructions.swift in Sources */,
+				20702496B3C60BEFD75F806B /* MachineState.swift in Sources */,
 				92DE108DF8221F3C31CC13AA /* Types.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -453,6 +460,7 @@
 				D50F9121748726FFCD25D246 /* KernalTraps.swift in Sources */,
 				629FAE2EF13B430DDCDB30AD /* Keyboard.swift in Sources */,
 				DB3E30025ACCA5876A7E5593 /* MachineProfile.swift in Sources */,
+				2D932A0B5645857AAA90A880 /* MachineSnapshot.swift in Sources */,
 				FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */,
 				FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */,
 				12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */,

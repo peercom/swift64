@@ -5,7 +5,7 @@ import Foundation
 public struct PRGLoader {
 
     /// Parsed PRG file.
-    public struct PRGFile {
+    public struct PRGFile: Codable {
         public let loadAddress: UInt16
         public let data: [UInt8]
 

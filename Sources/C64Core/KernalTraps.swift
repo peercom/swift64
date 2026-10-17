@@ -703,3 +703,23 @@ public final class KernalTraps {
         cpu.servicingInterrupt = false
     }
 }
+
+// MARK: - Snapshot state
+
+extension KernalTraps {
+    public static let snapshotStoredPropertyCount = 15
+
+    func saveState(to w: inout StateWriter) throws {
+        w.write(enabled); w.write(handledLoadTrapCount); w.write(lastLoadTrapFilename)
+        w.write(lastLoadTrapAddress); w.write(lastLoadTrapEndAddress); w.write(autostartSystemAreaDiskLoads)
+        w.write(currentInputChannel); w.write(currentOutputChannel); w.write(diskChannels.sorted())
+        try w.writeBoxed(pendingPRG)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        enabled = try r.read(); handledLoadTrapCount = try r.read(); lastLoadTrapFilename = try r.read()
+        lastLoadTrapAddress = try r.read(); lastLoadTrapEndAddress = try r.read(); autostartSystemAreaDiskLoads = try r.read()
+        currentInputChannel = try r.read(); currentOutputChannel = try r.read(); diskChannels = Set(try r.read() as [Int])
+        pendingPRG = try r.readBoxed(PRGLoader.PRGFile?.self, label: "pending program")
+    }
+}

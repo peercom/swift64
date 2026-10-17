@@ -1385,3 +1385,72 @@ public final class DriveMemoryMap: Bus {
         }
     }
 }
+
+// MARK: - Snapshot state
+
+extension Drive1541 {
+    public static let snapshotStoredPropertyCount = 67
+
+    private func modelValue(_ model: DriveModel) -> UInt8 {
+        switch model {
+        case .model1541: return 0
+        case .model1541C: return 1
+        case .model1541II: return 2
+        }
+    }
+
+    /// The drive ROM, diagnostics counters, and callbacks are not state.
+    func saveState(to w: inout StateWriter) throws {
+        w.write(modelValue(driveModel)); w.write(is1541C); w.write(track0SensorEnabled)
+        w.write(halfTrack); w.write(headBitPosition); w.write(stepperPhase)
+        w.write(motorOn); w.write(motorCommandOn); w.write(motorSpinDownCyclesRemaining); w.write(ledOn)
+        w.write(syncDetected); w.write(shiftRegister); w.write(bitCounter); w.write(weakBitLFSR)
+        w.write(ue7Counter); w.write(uf4Counter); w.write(byteReadyEdge); w.write(byteReadyLevel)
+        w.write(soDelay); w.write(byteReadySODelayAdjustment); w.write(byteReadyActive)
+        w.write(byteReadyCount); w.write(via2PortAReadCount); w.write(via2PortAReadBytes)
+        w.write(presentedGCRByteStartBit); w.write(presentedGCRByteEndBit)
+        w.write(syncDetectionCount); w.write(weakBitReadCount); w.write(lastWeakBitHalfTrack); w.write(lastWeakBitPosition)
+        w.write(variableSpeedZoneSampleCount); w.write(variableSpeedZoneMask)
+        w.write(lastVariableSpeedZoneHalfTrack); w.write(lastVariableSpeedZoneByteIndex); w.write(lastVariableSpeedZone)
+        w.write(gcrWriteByteCount); w.write(gcrWriteEraseBitCount); w.write(gcrWriteBitOffset); w.write(gcrWriteFreshBitsRemaining)
+        w.write(gcrWriteSpliceCount); w.write(previousGCRWriteGateActive)
+        w.write(decodedIECCommandBytes); w.write(decodedIECDataBytes)
+        w.write(noProgressCycleCount); w.write(lastFailureReason); w.write(mediaChanged); w.write(mediaChangeCount); w.write(enabled)
+        cpu.saveState(to: &w)
+        w.write(memory.ram); w.write(memory.driveDataBus)
+        via1.saveState(to: &w); via2.saveState(to: &w)
+        try disk.saveState(to: &w)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        switch try r.read() as UInt8 {
+        case 0: driveModel = .model1541
+        case 1: driveModel = .model1541C
+        case 2: driveModel = .model1541II
+        default: throw MachineStateError.invalidValue("drive model")
+        }
+        is1541C = try r.read(); track0SensorEnabled = try r.read()
+        halfTrack = try r.read(); headBitPosition = try r.read(); stepperPhase = try r.read()
+        motorOn = try r.read(); motorCommandOn = try r.read(); motorSpinDownCyclesRemaining = try r.read(); ledOn = try r.read()
+        syncDetected = try r.read(); shiftRegister = try r.read(); bitCounter = try r.read(); weakBitLFSR = try r.read()
+        ue7Counter = try r.read(); uf4Counter = try r.read(); byteReadyEdge = try r.read(); byteReadyLevel = try r.read()
+        soDelay = try r.read(); byteReadySODelayAdjustment = try r.read(); byteReadyActive = try r.read()
+        byteReadyCount = try r.read(); via2PortAReadCount = try r.read(); via2PortAReadBytes = try r.read()
+        presentedGCRByteStartBit = try r.read(); presentedGCRByteEndBit = try r.read()
+        syncDetectionCount = try r.read(); weakBitReadCount = try r.read(); lastWeakBitHalfTrack = try r.read(); lastWeakBitPosition = try r.read()
+        variableSpeedZoneSampleCount = try r.read(); variableSpeedZoneMask = try r.read()
+        lastVariableSpeedZoneHalfTrack = try r.read(); lastVariableSpeedZoneByteIndex = try r.read(); lastVariableSpeedZone = try r.read()
+        gcrWriteByteCount = try r.read(); gcrWriteEraseBitCount = try r.read(); gcrWriteBitOffset = try r.read(); gcrWriteFreshBitsRemaining = try r.read()
+        gcrWriteSpliceCount = try r.read(); previousGCRWriteGateActive = try r.read()
+        decodedIECCommandBytes = try r.read(); decodedIECDataBytes = try r.read()
+        noProgressCycleCount = try r.read(); lastFailureReason = try r.read(); mediaChanged = try r.read(); mediaChangeCount = try r.read(); enabled = try r.read()
+        try cpu.restoreState(from: &r)
+        memory.ram = try snapshotFixed(try r.read(), count: 2048, "drive RAM"); memory.driveDataBus = try r.read()
+        try via1.restoreState(from: &r); try via2.restoreState(from: &r)
+        try disk.restoreState(from: &r)
+    }
+}
+
+extension DriveMemoryMap {
+    public static let snapshotStoredPropertyCount = 6
+}

@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 private extension Double {
     func clamped(to range: ClosedRange<Double>) -> Double {
@@ -1493,6 +1494,92 @@ public final class SID {
             if voice == 2 { oscillator3Readback = 0 }
         } else if wasTestSet && voices[voice].shiftRegister == 0 {
             voices[voice].shiftRegister = 0x7FFFF8
+        }
+    }
+}
+
+// MARK: - Snapshot state
+
+extension SID {
+    public static let snapshotStoredPropertyCount = 41
+
+    /// The audio sample queue is not part of the state; it is flushed on restore.
+    func saveState(to w: inout StateWriter) {
+        w.write(model.rawValue); w.write(accuracyMode.rawValue); w.write(clockRate)
+        w.write(UInt8(voices.count))
+        for voice in voices { voice.saveState(to: &w) }
+        w.write(filterCutoff); w.write(filterResonance); w.write(filterControl); w.write(volumeFilter)
+        w.write(externalAudioInput)
+        w.write(paddleX); w.write(paddleY); w.write(paddleTargetX); w.write(paddleTargetY)
+        w.write(paddleScanCounter); w.write(continuousPaddleScanEnabled)
+        w.write(dataBusLatch); w.write(dataBusLatchCyclesRemaining)
+        w.write(filterLow); w.write(filterBand); w.write(filterHigh)
+        w.write(oscillator3Readback); w.write(oscillator3ReadbackValid)
+        w.write(envelope3Readback); w.write(envelope3ReadbackValid)
+        w.write(sampleCycleCounter); w.write(audioAccumulator); w.write(audioAccumulatorCount); w.write(audioOutputState)
+        w.write(lastDirectOutput); w.write(lastFilterInput); w.write(lastFilterOutput); w.write(lastMixedOutput)
+        w.write(oscillatorMSBRose); w.write(noiseClockRose)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        guard let savedModel = Model(rawValue: try r.read()) else { throw MachineStateError.invalidValue("SID model") }
+        guard let savedMode = AccuracyMode(rawValue: try r.read()) else { throw MachineStateError.invalidValue("SID accuracy mode") }
+        model = savedModel; accuracyMode = savedMode; clockRate = try r.read()
+        let voiceCount: UInt8 = try r.read()
+        guard voiceCount == 3 else { throw MachineStateError.invalidValue("SID voice count") }
+        for index in 0..<3 { try voices[index].restoreState(from: &r) }
+        filterCutoff = try r.read(); filterResonance = try r.read(); filterControl = try r.read(); volumeFilter = try r.read()
+        externalAudioInput = try r.read()
+        paddleX = try r.read(); paddleY = try r.read(); paddleTargetX = try r.read(); paddleTargetY = try r.read()
+        paddleScanCounter = try r.read(); continuousPaddleScanEnabled = try r.read()
+        dataBusLatch = try r.read(); dataBusLatchCyclesRemaining = try r.read()
+        filterLow = try r.read(); filterBand = try r.read(); filterHigh = try r.read()
+        oscillator3Readback = try r.read(); oscillator3ReadbackValid = try r.read()
+        envelope3Readback = try r.read(); envelope3ReadbackValid = try r.read()
+        sampleCycleCounter = try r.read(); audioAccumulator = try r.read(); audioAccumulatorCount = try r.read(); audioOutputState = try r.read()
+        lastDirectOutput = try r.read(); lastFilterInput = try r.read(); lastFilterOutput = try r.read(); lastMixedOutput = try r.read()
+        let msb: [Bool] = try r.read(); let noise: [Bool] = try r.read()
+        guard msb.count == 3, noise.count == 3 else { throw MachineStateError.invalidValue("SID oscillator flags") }
+        oscillatorMSBRose = msb; noiseClockRose = noise
+        discardBufferedAudioSamples()
+    }
+}
+
+extension SID.Voice {
+    func saveState(to w: inout StateWriter) {
+        w.write(frequency); w.write(pulseWidth); w.write(control); w.write(attackDecay); w.write(sustainRelease)
+        w.write(accumulator); w.write(shiftRegister); w.write(envelopeCounter); w.write(envelopeLevel)
+        w.write(envelopeState.snapshotValue)
+        w.write(exponentialCounter); w.write(exponentialPeriod); w.write(holdZero); w.write(gate)
+        w.write(rateCounter); w.write(waveformDACOutput); w.write(waveformDACHoldCyclesRemaining)
+    }
+
+    mutating func restoreState(from r: inout StateReader) throws {
+        frequency = try r.read(); pulseWidth = try r.read(); control = try r.read(); attackDecay = try r.read(); sustainRelease = try r.read()
+        accumulator = try r.read(); shiftRegister = try r.read(); envelopeCounter = try r.read(); envelopeLevel = try r.read()
+        envelopeState = try SID.EnvelopeState(snapshotValue: try r.read())
+        exponentialCounter = try r.read(); exponentialPeriod = try r.read(); holdZero = try r.read(); gate = try r.read()
+        rateCounter = try r.read(); waveformDACOutput = try r.read(); waveformDACHoldCyclesRemaining = try r.read()
+    }
+}
+
+extension SID.EnvelopeState {
+    var snapshotValue: UInt8 {
+        switch self {
+        case .attack: return 0
+        case .decay: return 1
+        case .sustain: return 2
+        case .release: return 3
+        }
+    }
+
+    init(snapshotValue: UInt8) throws {
+        switch snapshotValue {
+        case 0: self = .attack
+        case 1: self = .decay
+        case 2: self = .sustain
+        case 3: self = .release
+        default: throw MachineStateError.invalidValue("SID envelope state")
         }
     }
 }

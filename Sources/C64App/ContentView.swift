@@ -516,7 +516,7 @@ private struct C64DisplayWorkspace: View {
                             .font(.system(size: 34, weight: .semibold))
                         Text("Drop C64 media")
                             .font(.headline)
-                        Text("D64, G64, NIB, NBZ, P64, T64, TAP, PRG, P00, CRT")
+                        Text("D64, G64, NIB, NBZ, P64, T64, TAP, PRG, P00, CRT, S64 state")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -530,7 +530,7 @@ private struct C64DisplayWorkspace: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if showsStatusBar {
-                    C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage, warpEnabled: emulator.warpEnabled)
+                    C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage, warpEnabled: emulator.warpEnabled, stateMessage: emulator.stateMessage)
                 }
             }
         }
@@ -620,6 +620,7 @@ private struct C64StatusBar: View {
     let status: C64.EmulationStatus
     let romStatusMessage: String
     let warpEnabled: Bool
+    let stateMessage: String?
 
     var body: some View {
         HStack(spacing: 14) {
@@ -636,6 +637,10 @@ private struct C64StatusBar: View {
             if let failure = status.lastFailureReason {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+                    .lineLimit(1)
+            } else if let stateMessage {
+                Label(stateMessage, systemImage: "square.and.arrow.down")
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else {
                 Label(romStatusSummary, systemImage: romStatusIcon)
@@ -1465,6 +1470,13 @@ final class EmulatorController: ObservableObject {
         return "\(base)-modified.g64"
     }
 
+    var suggestedStateName: String {
+        let base = (c64.emulationStatus.mountedDiskName ?? c64.emulationStatus.mountedCartridgeName ?? c64.emulationStatus.mountedTapeName)
+            .map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "c64"
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        return "\(base)-\(stamp).\(Self.snapshotFileExtension)"
+    }
+
     var suggestedCapturedTAPName: String {
         "captured-tape.tap"
     }
@@ -1580,6 +1592,69 @@ final class EmulatorController: ObservableObject {
         gamepads = manager
     }
 
+    // MARK: - Save states
+
+    static let snapshotFileExtension = "s64"
+
+    /// Quick-save slot in Application Support, shared across launches.
+    var quickSaveURL: URL? {
+        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                      appropriateFor: nil, create: true) else { return nil }
+        let directory = base.appendingPathComponent("Swift64/States", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("QuickSave.\(Self.snapshotFileExtension)")
+    }
+
+    @Published private(set) var stateMessage: String?
+
+    /// Serialize the running machine; the core takes its own lock, so this is
+    /// safe from the main thread while the emulation thread runs frames.
+    func saveState(to url: URL) throws {
+        let data = try c64.saveState()
+        try data.write(to: url, options: .atomic)
+        stateMessage = "Saved state to \(url.lastPathComponent)"
+        refreshStatus()
+    }
+
+    func loadState(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        try c64.restoreState(from: data)
+        displayFramesPerSecond = c64.machineProfile.displayFramesPerSecond
+        if c64.trueDriveEmulationMode != .off && !c64.drive1541.enabled {
+            powerDriveIfNeeded()
+        }
+        stateMessage = "Loaded state from \(url.lastPathComponent)"
+        refreshStatus()
+    }
+
+    func quickSaveState() {
+        guard let url = quickSaveURL else { return }
+        do {
+            try saveState(to: url)
+        } catch {
+            stateMessage = "Quick save failed: \(error.localizedDescription)"
+            print(stateMessage!)
+        }
+    }
+
+    func quickLoadState() {
+        guard let url = quickSaveURL, FileManager.default.fileExists(atPath: url.path) else {
+            stateMessage = "No quick save yet"
+            return
+        }
+        do {
+            try loadState(from: url)
+        } catch {
+            stateMessage = "Quick load failed: \(error.localizedDescription)"
+            print(stateMessage!)
+        }
+    }
+
+    var hasQuickSave: Bool {
+        guard let url = quickSaveURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     /// Run as fast as possible with the speaker muted, or return to real time.
     func setWarp(_ enabled: Bool) {
         guard warpEnabled != enabled else { return }
@@ -1600,6 +1675,13 @@ final class EmulatorController: ObservableObject {
     func loadFile(_ url: URL) {
         let ext = url.pathExtension.lowercased()
         switch ext {
+        case Self.snapshotFileExtension:
+            do {
+                try loadState(from: readUserSelectedFileURL(url))
+            } catch {
+                stateMessage = "Could not load state: \(error.localizedDescription)"
+                print(stateMessage!)
+            }
         case "d64", "g64", "nib", "nbz", "p64":
             mountDisk(url)
         case "t64", "tap":
@@ -1740,6 +1822,15 @@ final class EmulatorController: ObservableObject {
         c64.markExportedT64ImageSaved()
         refreshStatus()
         print("Saved T64 exported: \(url.lastPathComponent)")
+    }
+
+    /// Resolve a dropped or chosen URL while holding its security scope.
+    private func readUserSelectedFileURL(_ url: URL) throws -> URL {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("Swift64-\(UUID().uuidString).\(Self.snapshotFileExtension)")
+        try Data(contentsOf: url).write(to: temporary, options: .atomic)
+        return temporary
     }
 
     private func readUserSelectedFile(_ url: URL) throws -> Data {

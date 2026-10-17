@@ -1171,3 +1171,162 @@ public final class C64 {
         }
     }
 }
+
+// MARK: - Machine snapshots
+
+extension C64 {
+    public static let snapshotMagic = "SW64SNAP"
+    public static let snapshotFormatVersion: UInt16 = 1
+    public static let snapshotStoredPropertyCount = 46
+
+    /// Serialize the complete machine, including mounted media, so that
+    /// `restoreState(from:)` continues from exactly this clock cycle.
+    public func saveState() throws -> Data {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+
+        var w = StateWriter()
+        for byte in C64.snapshotMagic.utf8 { w.writeInteger(byte) }
+        w.writeInteger(C64.snapshotFormatVersion)
+        writeChunk("MACH", to: &w) { saveMachineState(to: &$0) }
+        writeChunk("CPU ", to: &w) { cpu.saveState(to: &$0) }
+        writeChunk("MEM ", to: &w) { memory.saveState(to: &$0) }
+        writeChunk("VIC ", to: &w) { vic.saveState(to: &$0) }
+        writeChunk("SID ", to: &w) { sid.saveState(to: &$0) }
+        writeChunk("CIA1", to: &w) { cia1.saveState(to: &$0) }
+        writeChunk("CIA2", to: &w) { cia2.saveState(to: &$0) }
+        writeChunk("IEC ", to: &w) { iecBus.saveState(to: &$0) }
+        try writeChunk("TRAP", to: &w) { try kernalTraps.saveState(to: &$0) }
+        try writeChunk("CART", to: &w) { try $0.writeBoxed(memory.cartridge) }
+        try writeChunk("DRV ", to: &w) { try drive1541.saveState(to: &$0) }
+        try writeChunk("HDSK", to: &w) { try diskDrive.saveState(to: &$0) }
+        try writeChunk("TAPE", to: &w) { try tapeUnit.saveState(to: &$0) }
+        return Data(w.bytes)
+    }
+
+    /// Replace the whole machine state with a snapshot made by `saveState()`.
+    /// ROMs stay as loaded; the debugger and host input mappings are untouched.
+    public func restoreState(from data: Data) throws {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+
+        var r = StateReader(bytes: [UInt8](data))
+        let magic = String(decoding: try r.readBytes(C64.snapshotMagic.utf8.count), as: UTF8.self)
+        guard magic == C64.snapshotMagic else { throw MachineStateError.badMagic }
+        let version: UInt16 = try r.readInteger()
+        guard version == C64.snapshotFormatVersion else { throw MachineStateError.unsupportedVersion(version) }
+
+        try readChunk("MACH", from: &r) { try restoreMachineState(from: &$0) }
+        try readChunk("CPU ", from: &r) { try cpu.restoreState(from: &$0) }
+        try readChunk("MEM ", from: &r) { try memory.restoreState(from: &$0) }
+        try readChunk("VIC ", from: &r) { try vic.restoreState(from: &$0) }
+        try readChunk("SID ", from: &r) { try sid.restoreState(from: &$0) }
+        try readChunk("CIA1", from: &r) { try cia1.restoreState(from: &$0) }
+        try readChunk("CIA2", from: &r) { try cia2.restoreState(from: &$0) }
+        try readChunk("IEC ", from: &r) { try iecBus.restoreState(from: &$0) }
+        try readChunk("TRAP", from: &r) { try kernalTraps.restoreState(from: &$0) }
+        try readChunk("CART", from: &r) { memory.cartridge = try $0.readBoxed(Cartridge?.self, label: "cartridge") }
+        try readChunk("DRV ", from: &r) { try drive1541.restoreState(from: &$0) }
+        try readChunk("HDSK", from: &r) { try diskDrive.restoreState(from: &$0) }
+        try readChunk("TAPE", from: &r) { try tapeUnit.restoreState(from: &$0) }
+
+        driveTickBudgetConsumedThisC64Cycle = false
+        updateIRQ()
+        updateNMI()
+        // Host keys currently held replace the matrix captured at save time.
+        keyboard.updateMatrix()
+    }
+
+    private func writeChunk(_ tag: String, to w: inout StateWriter, _ body: (inout StateWriter) throws -> Void) rethrows {
+        let handle = w.beginChunk(tag, version: 1)
+        try body(&w)
+        w.endChunk(handle)
+    }
+
+    private func readChunk(_ tag: String, from r: inout StateReader, _ body: (inout StateReader) throws -> Void) throws {
+        var chunk = try r.expectChunk(tag).body
+        try body(&chunk)
+        try chunk.finishChunk(tag)
+    }
+
+    private func saveMachineState(to w: inout StateWriter) {
+        w.write(machineProfile.name)
+        w.write(sidModelOverride?.rawValue); w.write(ciaModelOverride?.rawValue)
+        w.write(trueDriveEmulationMode.snapshotValue)
+        w.write(driveClockRatio); w.write(driveClockAccumulator); w.write(driveTickPlacement.snapshotValue)
+        w.write(running); w.write(restoreKeyDown)
+        w.write(mountedDiskName); w.write(mountedTapeName); w.write(mountedCartridgeName); w.write(lastFailureReason)
+        w.write(sidChipWriteCount); w.write(sidRAMWindowWriteCount)
+        w.write(sidChipRegisterWriteCounts); w.write(sidRAMWindowRegisterWriteCounts)
+        w.write(pcFFFFCycleCount); w.write(pcFFFFVectorBounceCycleCount); w.write(pcFFFFVectorBounceMask)
+        w.write(loadNoProgressCycleCount); w.write(lastProgressSignature); w.write(lastFailureWasClearedAtCycle)
+        w.write(String(pendingTypedText)); w.write(lineCycle)
+    }
+
+    private func restoreMachineState(from r: inout StateReader) throws {
+        let profileName: String = try r.read()
+        guard let profile = MachineProfile.allPresets.first(where: { $0.name == profileName }) else {
+            throw MachineStateError.invalidValue("machine profile \(profileName)")
+        }
+        if profile != machineProfile { machineProfile = profile }
+        let sidOverride: String? = try r.read()
+        sidModelOverride = try sidOverride.map { name in
+            guard let model = SID.Model(rawValue: name) else { throw MachineStateError.invalidValue("SID model override") }
+            return model
+        }
+        let ciaOverride: String? = try r.read()
+        ciaModelOverride = try ciaOverride.map { name in
+            guard let model = CIA.Model(rawValue: name) else { throw MachineStateError.invalidValue("CIA model override") }
+            return model
+        }
+        trueDriveEmulationMode = try TrueDriveEmulationMode(snapshotValue: try r.read())
+        driveClockRatio = try r.read(); driveClockAccumulator = try r.read()
+        driveTickPlacement = try DriveTickPlacement(snapshotValue: try r.read())
+        running = try r.read(); restoreKeyDown = try r.read()
+        mountedDiskName = try r.read(); mountedTapeName = try r.read(); mountedCartridgeName = try r.read(); lastFailureReason = try r.read()
+        sidChipWriteCount = try r.read(); sidRAMWindowWriteCount = try r.read()
+        sidChipRegisterWriteCounts = try snapshotFixed(try r.read(), count: 32, "SID write counts")
+        sidRAMWindowRegisterWriteCounts = try snapshotFixed(try r.read(), count: 32, "SID RAM write counts")
+        pcFFFFCycleCount = try r.read(); pcFFFFVectorBounceCycleCount = try r.read(); pcFFFFVectorBounceMask = try r.read()
+        loadNoProgressCycleCount = try r.read(); lastProgressSignature = try r.read(); lastFailureWasClearedAtCycle = try r.read()
+        pendingTypedText = Array(try r.read() as String); lineCycle = try r.read()
+    }
+}
+
+extension TrueDriveEmulationMode {
+    var snapshotValue: UInt8 {
+        switch self {
+        case .off: return 0
+        case .standard1541: return 1
+        case .compat1541: return 2
+        }
+    }
+
+    init(snapshotValue: UInt8) throws {
+        switch snapshotValue {
+        case 0: self = .off
+        case 1: self = .standard1541
+        case 2: self = .compat1541
+        default: throw MachineStateError.invalidValue("true drive mode")
+        }
+    }
+}
+
+extension DriveTickPlacement {
+    var snapshotValue: UInt8 {
+        switch self {
+        case .afterC64: return 0
+        case .beforeC64: return 1
+        case .beforeCIA2SampleWhenDue: return 2
+        }
+    }
+
+    init(snapshotValue: UInt8) throws {
+        switch snapshotValue {
+        case 0: self = .afterC64
+        case 1: self = .beforeC64
+        case 2: self = .beforeCIA2SampleWhenDue
+        default: throw MachineStateError.invalidValue("drive tick placement")
+        }
+    }
+}

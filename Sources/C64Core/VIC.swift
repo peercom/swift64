@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// VIC-II emulation with PAL/NTSC bus and pixel sequencing.
 /// Captured graphics/sprite output is composed into the framebuffer per line.
@@ -2426,5 +2427,140 @@ public final class VIC {
         case 0x27...0x2E: spriteColors[Int(register) - 0x27] = value & 0x0F
         default: break
         }
+    }
+}
+
+// MARK: - Snapshot state
+
+extension VIC {
+    public static let snapshotStoredPropertyCount = 124
+
+    /// Scratch line buffers, bus-access diagnostics, and callbacks are not state.
+    func saveState(to w: inout StateWriter) {
+        w.write(UInt8(videoStandard == .pal ? 0 : 1))
+        w.write(spriteX); w.write(spriteY); w.write(spriteXMSB)
+        w.write(controlReg1); w.write(controlReg2); w.write(rasterCompare); w.write(memoryPointers)
+        w.write(interruptRegister); w.write(interruptEnable)
+        w.write(spriteEnabled); w.write(spriteMulticolor); w.write(spriteExpandX); w.write(spriteExpandY); w.write(spritePriority)
+        w.write(spriteColors); w.write(spriteMulticolor0); w.write(spriteMulticolor1)
+        w.write(spriteSpriteCollision); w.write(spriteDataCollision)
+        w.write(collisionPipeline0); w.write(collisionPipeline1); w.write(collisionPipeline2)
+        w.write(backgroundColor); w.write(borderColor)
+        w.write(rasterLine); w.write(rasterCycle); w.write(displayActive)
+        w.write(badLine); w.write(badLineStartCycle); w.write(matrixDMAActive); w.write(cpuPhaseActive); w.write(badLineUpdatePending)
+        w.write(pendingGraphicsAddressBitmapMode); w.write(pendingGraphicsAddressECM)
+        w.write(badLineDENLatched); w.write(rasterIRQTriggeredThisLine); w.write(rasterCompareMatched); w.write(frameStartPending)
+        w.write(lightPenX); w.write(lightPenY); w.write(lightPenLatchedThisFrame)
+        w.write(verticalBorderActive); w.write(verticalBorderClosePending); w.write(horizontalBorderActive)
+        w.write(refreshCounter); w.write(rowCounter); w.write(videoCounter); w.write(videoCounterBase); w.write(videoMatrixLineIndex)
+        w.write(lineBuffer); w.write(colorBuffer); w.write(badLineFetchMask); w.write(displayLineBufferValid); w.write(displayLineBufferBase)
+        w.write(graphicsBuffer); w.write(graphicsFetchMask); w.write(graphicsBufferBase); w.write(graphicsBufferPixelRow)
+        w.write(graphicsBufferValid); w.write(graphicsBufferLine)
+        w.write(graphicsBufferControlReg1); w.write(graphicsBufferControlReg2); w.write(graphicsBufferMemoryPointers)
+        w.write(graphicsBufferBackgroundColors); w.write(graphicsBufferScreenBytes); w.write(graphicsBufferColorData)
+        w.write(graphicsOutputMatrix)
+        w.write(spriteYExpFF); w.write(spriteCrunchPendingMask); w.write(spriteMC); w.write(spriteMCBase)
+        w.write(spriteLastFetchedMC); w.write(spriteLastFetchedByteOffset)
+        if let fetch = spriteFetchInFlight {
+            w.write(true); w.write(fetch.sprite); w.write(fetch.pointer); w.write(fetch.offset)
+        } else {
+            w.write(false)
+        }
+        w.write(spriteDisplay); w.write(spriteLineData)
+        for shifter in spriteShifters {
+            w.write(shifter.data); w.write(shifter.remainingBits); w.write(shifter.expansionSecondDot)
+            w.write(shifter.multicolorSecondBit); w.write(shifter.pixel)
+        }
+        w.write(cpuPhaseInternalDataBus)
+        if let write = spriteXWriteThisCycle {
+            w.write(true); w.write(write.register); w.write(write.previous)
+        } else {
+            w.write(false)
+        }
+        w.write(spriteMulticolorWriteThisCycle)
+        w.write(spritePointers); w.write(spriteDMACheckLine); w.write(spriteDMACheckMask); w.write(spriteZeroDMAStartedLate)
+        w.write(rasterTraceLine); w.write(rasterTraceHasSamples); w.write(rasterTraceHasDisplayOpen)
+        w.write(rasterTraceHasGraphicsOutput); w.write(rasterTraceHasGraphicsModeChanges)
+        w.write(rasterTraceValid); w.write(rasterTraceDisplayOpen); w.write(rasterTraceGraphicsOutput); w.write(rasterTraceColors)
+        w.write(spriteTraceLine); w.write(spriteTraceHasSamples); w.write(spriteTraceValid); w.write(spriteTraceColor)
+        w.write(spriteTraceColorRegister); w.write(spriteTracePriorityBehindBG); w.write(spriteTraceDisplayForeground)
+        w.write(spriteTraceSpriteMask); w.write(spriteTraceTouchedPixels)
+        w.write(framebuffer); w.write(frameReady); w.write(spriteOccupancyGeneration)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        let width = VIC.screenWidth
+        videoStandard = (try r.read() as UInt8) == 0 ? .pal : .ntsc
+        spriteX = try snapshotFixed(try r.read(), count: 8, "sprite X"); spriteY = try snapshotFixed(try r.read(), count: 8, "sprite Y"); spriteXMSB = try r.read()
+        controlReg1 = try r.read(); controlReg2 = try r.read(); rasterCompare = try r.read(); memoryPointers = try r.read()
+        interruptRegister = try r.read(); interruptEnable = try r.read()
+        spriteEnabled = try r.read(); spriteMulticolor = try r.read(); spriteExpandX = try r.read(); spriteExpandY = try r.read(); spritePriority = try r.read()
+        spriteColors = try snapshotFixed(try r.read(), count: 8, "sprite colors"); spriteMulticolor0 = try r.read(); spriteMulticolor1 = try r.read()
+        spriteSpriteCollision = try r.read(); spriteDataCollision = try r.read()
+        collisionPipeline0 = try r.read(); collisionPipeline1 = try r.read(); collisionPipeline2 = try r.read()
+        backgroundColor = try snapshotFixed(try r.read(), count: 4, "background colors"); borderColor = try r.read()
+        rasterLine = try r.read(); rasterCycle = try r.read(); displayActive = try r.read()
+        badLine = try r.read(); badLineStartCycle = try r.read(); matrixDMAActive = try r.read(); cpuPhaseActive = try r.read(); badLineUpdatePending = try r.read()
+        pendingGraphicsAddressBitmapMode = try r.read(); pendingGraphicsAddressECM = try r.read()
+        badLineDENLatched = try r.read(); rasterIRQTriggeredThisLine = try r.read(); rasterCompareMatched = try r.read(); frameStartPending = try r.read()
+        lightPenX = try r.read(); lightPenY = try r.read(); lightPenLatchedThisFrame = try r.read()
+        verticalBorderActive = try r.read(); verticalBorderClosePending = try r.read(); horizontalBorderActive = try r.read()
+        refreshCounter = try r.read(); rowCounter = try r.read(); videoCounter = try r.read(); videoCounterBase = try r.read(); videoMatrixLineIndex = try r.read()
+        lineBuffer = try snapshotFixed(try r.read(), count: 40, "line buffer"); colorBuffer = try snapshotFixed(try r.read(), count: 40, "color buffer")
+        badLineFetchMask = try r.read(); displayLineBufferValid = try r.read(); displayLineBufferBase = try r.read()
+        graphicsBuffer = try snapshotFixed(try r.read(), count: 40, "graphics buffer"); graphicsFetchMask = try r.read(); graphicsBufferBase = try r.read(); graphicsBufferPixelRow = try r.read()
+        graphicsBufferValid = try r.read(); graphicsBufferLine = try r.read()
+        graphicsBufferControlReg1 = try snapshotFixed(try r.read(), count: 40, "graphics control 1")
+        graphicsBufferControlReg2 = try snapshotFixed(try r.read(), count: 40, "graphics control 2")
+        graphicsBufferMemoryPointers = try snapshotFixed(try r.read(), count: 40, "graphics pointers")
+        graphicsBufferBackgroundColors = try snapshotFixed(try r.read(), count: 40, "graphics background colors")
+        guard graphicsBufferBackgroundColors.allSatisfy({ $0.count == 4 }) else { throw MachineStateError.invalidValue("graphics background colors") }
+        graphicsBufferScreenBytes = try snapshotFixed(try r.read(), count: 40, "graphics screen bytes")
+        graphicsBufferColorData = try snapshotFixed(try r.read(), count: 40, "graphics color data")
+        graphicsOutputMatrix = try r.read()
+        spriteYExpFF = try snapshotFixed(try r.read(), count: 8, "sprite expansion flip-flops"); spriteCrunchPendingMask = try r.read()
+        spriteMC = try snapshotFixed(try r.read(), count: 8, "sprite MC"); spriteMCBase = try snapshotFixed(try r.read(), count: 8, "sprite MCBASE")
+        spriteLastFetchedMC = try snapshotFixed(try r.read(), count: 8, "sprite fetched MC"); spriteLastFetchedByteOffset = try snapshotFixed(try r.read(), count: 8, "sprite fetched offset")
+        if try r.read() as Bool {
+            spriteFetchInFlight = (sprite: try r.read(), pointer: try r.read(), offset: try r.read())
+        } else {
+            spriteFetchInFlight = nil
+        }
+        spriteDisplay = try snapshotFixed(try r.read(), count: 8, "sprite display")
+        spriteLineData = try snapshotFixed(try r.read(), count: 8, "sprite line data")
+        guard spriteLineData.allSatisfy({ $0.count == 3 }) else { throw MachineStateError.invalidValue("sprite line data") }
+        for index in 0..<8 {
+            spriteShifters[index].data = try r.read(); spriteShifters[index].remainingBits = try r.read()
+            spriteShifters[index].expansionSecondDot = try r.read(); spriteShifters[index].multicolorSecondBit = try r.read()
+            spriteShifters[index].pixel = try r.read()
+        }
+        cpuPhaseInternalDataBus = try r.read()
+        if try r.read() as Bool {
+            spriteXWriteThisCycle = (register: try r.read(), previous: try r.read())
+        } else {
+            spriteXWriteThisCycle = nil
+        }
+        spriteMulticolorWriteThisCycle = try r.read()
+        spritePointers = try snapshotFixed(try r.read(), count: 8, "sprite pointers"); spriteDMACheckLine = try r.read(); spriteDMACheckMask = try r.read(); spriteZeroDMAStartedLate = try r.read()
+        rasterTraceLine = try r.read(); rasterTraceHasSamples = try r.read(); rasterTraceHasDisplayOpen = try r.read()
+        rasterTraceHasGraphicsOutput = try r.read(); rasterTraceHasGraphicsModeChanges = try r.read()
+        rasterTraceValid = try snapshotFixed(try r.read(), count: width, "raster trace valid")
+        rasterTraceDisplayOpen = try snapshotFixed(try r.read(), count: width, "raster trace display")
+        rasterTraceGraphicsOutput = try snapshotFixed(try r.read(), count: width, "raster trace graphics")
+        rasterTraceColors = try snapshotFixed(try r.read(), count: width, "raster trace colors")
+        spriteTraceLine = try r.read(); spriteTraceHasSamples = try r.read()
+        spriteTraceValid = try snapshotFixed(try r.read(), count: width, "sprite trace valid")
+        spriteTraceColor = try snapshotFixed(try r.read(), count: width, "sprite trace color")
+        spriteTraceColorRegister = try snapshotFixed(try r.read(), count: width, "sprite trace register")
+        spriteTracePriorityBehindBG = try snapshotFixed(try r.read(), count: width, "sprite trace priority")
+        spriteTraceDisplayForeground = try snapshotFixed(try r.read(), count: width, "sprite trace foreground")
+        spriteTraceSpriteMask = try snapshotFixed(try r.read(), count: width, "sprite trace mask")
+        spriteTraceTouchedPixels = try r.read()
+        guard spriteTraceTouchedPixels.allSatisfy({ (0..<width).contains($0) }) else { throw MachineStateError.invalidValue("sprite trace pixels") }
+        framebuffer = try snapshotFixed(try r.read(), count: width * VIC.screenHeight, "framebuffer")
+        frameReady = try r.read(); spriteOccupancyGeneration = try r.read()
+        // Generation stamps left by earlier lines must not match restored ones.
+        for index in spriteOccupancyGenerationScratch.indices { spriteOccupancyGenerationScratch[index] = 0 }
+        lastHighPhaseMemoryReads = []; lastHighPhaseColorRAMReads = []; lastLowPhaseMemoryReads = []
     }
 }

@@ -336,3 +336,53 @@ public final class CPU6502 {
     /// Begin interrupt sequence for cycle 1-6 (called from executeInterruptCycle in Instructions.swift)
     // executeInterruptCycle is in Instructions.swift
 }
+
+// MARK: - CPU state
+
+extension CPU6502 {
+    /// Stored properties serialized below; `MachineStateTests` checks the count.
+    public static let snapshotStoredPropertyCount = 30
+
+    public func saveState(to w: inout StateWriter) {
+        w.write(a); w.write(x); w.write(y); w.write(sp); w.write(pc); w.write(p)
+        w.write(irqLine); w.write(rdyLine); w.write(totalCycles); w.write(jammed)
+        w.write(opcode); w.write(cycle); w.write(addr); w.write(data); w.write(baseAddr)
+        w.write(pointer); w.write(pageCrossed)
+        w.write(nmiPending); w.write(nmiLinePrev); w.write(nmiLine); w.write(servicingInterrupt)
+        w.write(interruptType.snapshotValue)
+        w.write(irqSample); w.write(irqPending); w.write(nmiSample); w.write(nmiPolled)
+        w.write(interruptVectorAddress); w.write(deferNMIUntilAfterNextInstruction); w.write(resetPending)
+    }
+
+    public func restoreState(from r: inout StateReader) throws {
+        a = try r.read(); x = try r.read(); y = try r.read(); sp = try r.read(); pc = try r.read(); p = try r.read()
+        irqLine = try r.read(); rdyLine = try r.read(); totalCycles = try r.read(); jammed = try r.read()
+        opcode = try r.read(); cycle = try r.read(); addr = try r.read(); data = try r.read(); baseAddr = try r.read()
+        pointer = try r.read(); pageCrossed = try r.read()
+        nmiPending = try r.read(); nmiLinePrev = try r.read(); nmiLine = try r.read(); servicingInterrupt = try r.read()
+        interruptType = try InterruptKind(snapshotValue: try r.read())
+        irqSample = try r.read(); irqPending = try r.read(); nmiSample = try r.read(); nmiPolled = try r.read()
+        interruptVectorAddress = try r.read(); deferNMIUntilAfterNextInstruction = try r.read(); resetPending = try r.read()
+    }
+}
+
+extension CPU6502.InterruptKind {
+    var snapshotValue: UInt8 {
+        switch self {
+        case .none: return 0
+        case .nmi: return 1
+        case .irq: return 2
+        case .reset: return 3
+        }
+    }
+
+    init(snapshotValue: UInt8) throws {
+        switch snapshotValue {
+        case 0: self = .none
+        case 1: self = .nmi
+        case 2: self = .irq
+        case 3: self = .reset
+        default: throw MachineStateError.invalidValue("CPU interrupt kind")
+        }
+    }
+}

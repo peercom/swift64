@@ -454,3 +454,27 @@ public final class MemoryMap: Bus {
         return Int(bits) * 0x4000
     }
 }
+
+// MARK: - Snapshot state
+
+extension MemoryMap {
+    public static let snapshotStoredPropertyCount = 25
+
+    /// ROMs, the cartridge, and callbacks are not part of the memory state.
+    func saveState(to w: inout StateWriter) {
+        w.write(ram); w.write(colorRAM)
+        w.write(portDirection); w.write(portData); w.write(cassetteSenseLineHigh)
+        w.write(cpuDataBus); w.write(cpuDataBusDecayDelay); w.write(cpuDataBusDecayCounter)
+    }
+
+    func restoreState(from r: inout StateReader) throws {
+        let ramBytes: [UInt8] = try r.read()
+        let colorBytes: [UInt8] = try r.read()
+        guard ramBytes.count == 0x10000, colorBytes.count == 1024 else {
+            throw MachineStateError.invalidValue("RAM size")
+        }
+        ram = ramBytes; colorRAM = colorBytes
+        portDirection = try r.read(); portData = try r.read(); cassetteSenseLineHigh = try r.read()
+        cpuDataBus = try r.read(); cpuDataBusDecayDelay = try r.read(); cpuDataBusDecayCounter = try r.read()
+    }
+}

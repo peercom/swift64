@@ -1,4 +1,5 @@
 import Foundation
+import Emu6502
 
 /// MOS 6526 CIA (Complex Interface Adapter) emulation.
 /// Two instances: CIA1 ($DC00, IRQ) and CIA2 ($DD00, NMI).
@@ -87,7 +88,7 @@ public final class CIA {
     /// Remaining visible cycles for Timer B pulse output on PB7.
     var timerBPulseCyclesRemaining: Int = 0
 
-    private struct TimerPipeline {
+    fileprivate struct TimerPipeline {
         var countNow = false
         var countNext = false
         var forceLoadNext = false
@@ -136,9 +137,9 @@ public final class CIA {
         }
     }
 
-    private var timerAPipeline = TimerPipeline()
+    fileprivate var timerAPipeline = TimerPipeline()
     private var timerAUnderflowedLastTick = false
-    private var timerBPipeline = TimerPipeline()
+    fileprivate var timerBPipeline = TimerPipeline()
     private var cntPulsePending = false
     private var cntPulseSampled = false
     /// 6526 interrupt pipeline: a timer flag that is enabled when it is
@@ -1068,5 +1069,81 @@ public final class CIA {
             rows |= UInt8(1 << row)
         }
         return rows
+    }
+}
+
+// MARK: - Snapshot state
+
+extension CIA {
+    public static let snapshotStoredPropertyCount = 82
+
+    private func modelValue(_ model: Model) -> UInt8 { model == .mos6526 ? 0 : 1 }
+
+    func saveState(to w: inout StateWriter) {
+        w.write(modelValue(model)); w.write(cyclesPerTodTenth); w.write(tod50HzCyclesPerTenth); w.write(tod60HzCyclesPerTenth)
+        w.write(portA); w.write(portB); w.write(ddra); w.write(ddrb)
+        w.write(timerA); w.write(timerALatch); w.write(timerAControl); w.write(timerAHighLatched)
+        w.write(timerAOutputHigh); w.write(timerAPulseCyclesRemaining)
+        w.write(timerB); w.write(timerBLatch); w.write(timerBControl); w.write(timerBHighLatched)
+        w.write(timerBOutputHigh); w.write(timerBPulseCyclesRemaining)
+        timerAPipeline.saveState(to: &w); w.write(timerAUnderflowedLastTick); timerBPipeline.saveState(to: &w)
+        w.write(cntPulsePending); w.write(cntPulseSampled)
+        w.write(interruptArmed); w.write(interruptControlReadThisCycle); w.write(interruptControlReadLastCycle)
+        w.write(interruptControlReadIRBit); w.write(interruptBlockedIRBit)
+        w.write(flagsRaisedThisClock); w.write(flagsRaisedLastClock); w.write(interruptControlClearWriteThisCycle)
+        w.write(interruptMask); w.write(interruptData); w.write(interruptActive)
+        w.write(flagLineHigh); w.write(cntLineHigh)
+        w.write(todTenths); w.write(todSeconds); w.write(todMinutes); w.write(todHours)
+        w.write(todAlarmTenths); w.write(todAlarmSeconds); w.write(todAlarmMinutes); w.write(todAlarmHours)
+        w.write(todLatched); w.write(todLatchTenths); w.write(todLatchSeconds); w.write(todLatchMinutes); w.write(todLatchHours)
+        w.write(todWriteAlarm); w.write(todCycleCount); w.write(todStoppedForWrite)
+        w.write(keyboardMatrix); w.write(joystickPort1); w.write(joystickPort2); w.write(lastReportedPortBPins)
+        w.write(serialData); w.write(spLineHigh); w.write(serialInputShift); w.write(serialInputBitsReceived)
+        w.write(serialOutputShift); w.write(serialOutputBitsRemaining); w.write(serialOutputPending)
+        w.write(serialOutputLoadPending); w.write(serialOutputFreshlyLoaded); w.write(serialOutputNextEdgeIsOutput)
+        w.write(serialOutputStarted); w.write(serialOutputStartedCountdown); w.write(serialOutputFlagCountdown)
+        w.write(serialCNTLow); w.write(serialCNTLowCountdowns); w.write(serialCNTHighCountdowns)
+    }
+
+    /// Restores silently: the machine re-derives IRQ/NMI lines afterwards.
+    func restoreState(from r: inout StateReader) throws {
+        model = (try r.read() as UInt8) == 0 ? .mos6526 : .mos6526A
+        cyclesPerTodTenth = try r.read(); tod50HzCyclesPerTenth = try r.read(); tod60HzCyclesPerTenth = try r.read()
+        portA = try r.read(); portB = try r.read(); ddra = try r.read(); ddrb = try r.read()
+        timerA = try r.read(); timerALatch = try r.read(); timerAControl = try r.read(); timerAHighLatched = try r.read()
+        timerAOutputHigh = try r.read(); timerAPulseCyclesRemaining = try r.read()
+        timerB = try r.read(); timerBLatch = try r.read(); timerBControl = try r.read(); timerBHighLatched = try r.read()
+        timerBOutputHigh = try r.read(); timerBPulseCyclesRemaining = try r.read()
+        try timerAPipeline.restoreState(from: &r); timerAUnderflowedLastTick = try r.read(); try timerBPipeline.restoreState(from: &r)
+        cntPulsePending = try r.read(); cntPulseSampled = try r.read()
+        interruptArmed = try r.read(); interruptControlReadThisCycle = try r.read(); interruptControlReadLastCycle = try r.read()
+        interruptControlReadIRBit = try r.read(); interruptBlockedIRBit = try r.read()
+        flagsRaisedThisClock = try r.read(); flagsRaisedLastClock = try r.read(); interruptControlClearWriteThisCycle = try r.read()
+        interruptMask = try r.read(); interruptData = try r.read(); interruptActive = try r.read()
+        flagLineHigh = try r.read(); cntLineHigh = try r.read()
+        todTenths = try r.read(); todSeconds = try r.read(); todMinutes = try r.read(); todHours = try r.read()
+        todAlarmTenths = try r.read(); todAlarmSeconds = try r.read(); todAlarmMinutes = try r.read(); todAlarmHours = try r.read()
+        todLatched = try r.read(); todLatchTenths = try r.read(); todLatchSeconds = try r.read(); todLatchMinutes = try r.read(); todLatchHours = try r.read()
+        todWriteAlarm = try r.read(); todCycleCount = try r.read(); todStoppedForWrite = try r.read()
+        let matrix: [UInt8] = try r.read()
+        guard matrix.count == 8 else { throw MachineStateError.invalidValue("keyboard matrix") }
+        keyboardMatrix = matrix; joystickPort1 = try r.read(); joystickPort2 = try r.read(); lastReportedPortBPins = try r.read()
+        serialData = try r.read(); spLineHigh = try r.read(); serialInputShift = try r.read(); serialInputBitsReceived = try r.read()
+        serialOutputShift = try r.read(); serialOutputBitsRemaining = try r.read(); serialOutputPending = try r.read()
+        serialOutputLoadPending = try r.read(); serialOutputFreshlyLoaded = try r.read(); serialOutputNextEdgeIsOutput = try r.read()
+        serialOutputStarted = try r.read(); serialOutputStartedCountdown = try r.read(); serialOutputFlagCountdown = try r.read()
+        serialCNTLow = try r.read(); serialCNTLowCountdowns = try r.read(); serialCNTHighCountdowns = try r.read()
+    }
+}
+
+extension CIA.TimerPipeline {
+    func saveState(to w: inout StateWriter) {
+        w.write(countNow); w.write(countNext); w.write(forceLoadNext)
+        w.write(forceLoadRequested); w.write(oneShotPrevious); w.write(reloadedLastClock)
+    }
+
+    mutating func restoreState(from r: inout StateReader) throws {
+        countNow = try r.read(); countNext = try r.read(); forceLoadNext = try r.read()
+        forceLoadRequested = try r.read(); oneShotPrevious = try r.read(); reloadedLastClock = try r.read()
     }
 }

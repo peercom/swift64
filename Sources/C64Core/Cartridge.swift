@@ -1,8 +1,8 @@
 import Foundation
 
 /// C64 cartridge image with enough mapping detail for standard CRT ROMs.
-public struct Cartridge: Equatable {
-    public enum MappingMode: Equatable {
+public struct Cartridge: Equatable, Codable {
+    public enum MappingMode: Equatable, Codable {
         case normal8K
         case normal16K
         case ultimax
@@ -46,28 +46,28 @@ public struct Cartridge: Equatable {
         case easyFlash
     }
 
-    public enum EasyFlashMemoryMode: Equatable {
+    public enum EasyFlashMemoryMode: Equatable, Codable {
         case off
         case ultimax
         case eightK
         case sixteenK
     }
 
-    private enum KCSMemoryMode: Equatable {
+    private enum KCSMemoryMode: Equatable, Codable {
         case ram
         case eightK
         case sixteenK
         case ultimax
     }
 
-    private enum AtomicPowerMemoryMode: Equatable {
+    private enum AtomicPowerMemoryMode: Equatable, Codable {
         case off
         case eightK
         case sixteenK
         case ultimax
     }
 
-    public struct Chip: Equatable {
+    public struct Chip: Equatable, Codable {
         public let type: UInt16
         public let bank: UInt16
         public let loadAddress: UInt16
