@@ -96,6 +96,15 @@ struct ContentView: View {
                     .toggleStyle(.button)
                     .help(status.trueDriveMode == .off ? "Fast Kernal-trap loading is active" : "Compatibility true-drive 1541 emulation is active")
 
+                    Toggle(isOn: Binding(
+                        get: { emulator.warpEnabled },
+                        set: { emulator.setWarp($0) }
+                    )) {
+                        Label("Warp", systemImage: "hare")
+                    }
+                    .toggleStyle(.button)
+                    .help(emulator.warpEnabled ? "Warp mode: running as fast as possible with audio muted" : "Run as fast as possible with audio muted")
+
                     Button(action: { showingDriveStatus.toggle() }) {
                         Label("Drive Status", systemImage: status.lastFailureReason == nil ? "gauge.with.dots.needle.67percent" : "exclamationmark.triangle")
                     }
@@ -521,7 +530,7 @@ private struct C64DisplayWorkspace: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if showsStatusBar {
-                    C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage)
+                    C64StatusBar(status: status, romStatusMessage: emulator.romStatusMessage, warpEnabled: emulator.warpEnabled)
                 }
             }
         }
@@ -610,10 +619,15 @@ private struct WindowFullScreenObserver: NSViewRepresentable {
 private struct C64StatusBar: View {
     let status: C64.EmulationStatus
     let romStatusMessage: String
+    let warpEnabled: Bool
 
     var body: some View {
         HStack(spacing: 14) {
             StatusPill(title: "Mode", value: status.trueDriveMode == .off ? "Fast Load" : status.trueDriveMode.displayName, systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
+            if warpEnabled {
+                StatusPill(title: "Speed", value: "Warp", systemImage: "hare")
+                    .foregroundStyle(Color.accentColor)
+            }
             StatusPill(title: "Disk", value: status.mountedDiskName ?? "none", systemImage: "opticaldiscdrive")
             StatusPill(title: "Drive", value: "LED \(onOff(status.drive.ledOn))  Motor \(onOff(status.drive.motorOn))", systemImage: status.drive.ledOn ? "record.circle.fill" : "circle")
 
@@ -1176,6 +1190,8 @@ private struct C64InspectorView: View {
                     ), in: 0...1)
                 }
                 .disabled(!emulator.crtShaderEnabled)
+                InspectorRow("Palette", emulator.paletteName, systemImage: "paintpalette")
+                InspectorRow("Speed", emulator.warpEnabled ? "Warp" : "Real time", systemImage: emulator.warpEnabled ? "hare" : "tortoise")
             }
         }
     }
@@ -1423,6 +1439,10 @@ final class EmulatorController: ObservableObject {
     @Published var displayFramesPerSecond = MachineProfile.palC64.displayFramesPerSecond
     @Published var crtShaderEnabled = false
     @Published var crtShaderIntensity: Float = 0.65
+    @Published var paletteName = ColorPalette.Preset.pepto.displayName
+    @Published private(set) var warpEnabled = false
+    @Published private(set) var connectedControllerNames: [String] = []
+    private var gamepads: GamepadInputManager?
 
     var suggestedModifiedD64Name: String {
         guard let name = c64.emulationStatus.mountedDiskName else {
@@ -1539,6 +1559,7 @@ final class EmulatorController: ObservableObject {
     init() {
         c64.vic.recordsBusAccessTraces = false
         migrateLegacyPreferencesIfNeeded()
+        setupGamepads()
         applyEmulationPreferences(reset: false, powerDrive: false)
         applyDisplayPreferences()
         reloadROMs(reset: false)
@@ -1547,6 +1568,27 @@ final class EmulatorController: ObservableObject {
         setupAudio()
         audioValidation?.scheduleReport(controller: self)
         refreshStatus()
+    }
+
+    private func setupGamepads() {
+        let manager = GamepadInputManager(joystick: c64.joystick)
+        manager.onControllersChanged = { [weak self] names in
+            self?.connectedControllerNames = names
+        }
+        connectedControllerNames = manager.controllerNames
+        gamepads = manager
+    }
+
+    /// Run as fast as possible with the speaker muted, or return to real time.
+    func setWarp(_ enabled: Bool) {
+        guard warpEnabled != enabled else { return }
+        warpEnabled = enabled
+        renderer?.warpEnabled = enabled
+        audioOutput?.setMuted(enabled)
+    }
+
+    func toggleWarp() {
+        setWarp(!warpEnabled)
     }
 
     func refreshStatus() {
@@ -1758,6 +1800,7 @@ final class EmulatorController: ObservableObject {
         displayFramesPerSecond = profile.profile.displayFramesPerSecond
         c64.trueDriveEmulationMode = mode.mode
         c64.joystick.routing = joystickRouting.routing
+        gamepads?.routing = joystickRouting.routing
         if reset {
             c64.reset()
         }
@@ -1775,6 +1818,16 @@ final class EmulatorController: ObservableObject {
         crtShaderIntensity = Float(min(max(storedIntensity, 0.0), 1.0))
         renderer?.crtShaderEnabled = crtShaderEnabled
         renderer?.crtShaderIntensity = crtShaderIntensity
+
+        let paletteID = defaults.string(forKey: PreferenceKey.palette) ?? ColorPalette.Preset.pepto.rawValue
+        let palette = ColorPalette.Preset(rawValue: paletteID) ?? .pepto
+        paletteName = palette.displayName
+        if let renderer {
+            // The VIC reads the palette without locking; swap it between frames.
+            renderer.perform(onEmulationThread: { ColorPalette.apply(palette) })
+        } else {
+            ColorPalette.apply(palette)
+        }
     }
 
     func powerDriveIfNeeded() {
@@ -2082,6 +2135,7 @@ struct MetalView: NSViewRepresentable {
         context.coordinator.renderer = renderer
         renderer?.crtShaderEnabled = emulator.crtShaderEnabled
         renderer?.crtShaderIntensity = emulator.crtShaderIntensity
+        renderer?.warpEnabled = emulator.warpEnabled
 
         // Set up keyboard event monitoring
         context.coordinator.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in

@@ -927,8 +927,8 @@ public final class C64 {
         updateTapeSignal()
 
         // Update joystick state on CIA1
-        cia1.joystickPort2 = joystick.port2
-        cia1.joystickPort1 = joystick.port1
+        cia1.joystickPort2 = joystick.effectivePort2
+        cia1.joystickPort1 = joystick.effectivePort1
 
         if driveTickPlacement != .beforeC64 {
             tickDriveForCurrentC64Cycle()

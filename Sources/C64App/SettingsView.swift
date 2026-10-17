@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import C64Core
 
 struct SettingsView: View {
     @ObservedObject var emulator: EmulatorController
@@ -16,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.driveROMPath) private var driveROMPath = ""
     @AppStorage(PreferenceKey.crtShaderEnabled) private var crtShaderEnabled = false
     @AppStorage(PreferenceKey.crtShaderIntensity) private var crtShaderIntensity = 0.65
+    @AppStorage(PreferenceKey.palette) private var palette = ColorPalette.Preset.pepto.rawValue
     @AppStorage(PreferenceKey.showInspector) private var showInspector = false
     @AppStorage(PreferenceKey.showStatusBar) private var showStatusBar = true
     @AppStorage(PreferenceKey.romAssistantDismissed) private var romAssistantDismissed = false
@@ -88,6 +90,18 @@ struct SettingsView: View {
                             Text(routing.title).tag(routing.rawValue)
                         }
                     }
+
+                    LabeledContent("Game Controllers") {
+                        if emulator.connectedControllerNames.isEmpty {
+                            Text("None connected. Numpad 8/2/4/6 moves, 0 or Enter fires.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(emulator.connectedControllerNames.joined(separator: ", "))
+                        }
+                    }
+                    Text("The first controller follows the joystick routing above; a second controller takes the other port. D-pad or left stick moves, A/B or the shoulder buttons fire.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -162,6 +176,15 @@ struct SettingsView: View {
             .tag("roms")
 
             Form {
+                Section("Colors") {
+                    Picker("Palette", selection: $palette) {
+                        ForEach(ColorPalette.Preset.allCases, id: \.rawValue) { preset in
+                            Text(preset.displayName).tag(preset.rawValue)
+                        }
+                    }
+                    PaletteSwatchRow(preset: ColorPalette.Preset(rawValue: palette) ?? .pepto)
+                }
+
                 Section("CRT") {
                     Toggle("CRT Shader", isOn: $crtShaderEnabled)
 
@@ -325,6 +348,21 @@ struct SettingsView: View {
         case PreferenceKey.driveROMBookmark: return PreferenceKey.driveROMPath
         default: return bookmarkKey
         }
+    }
+}
+
+private struct PaletteSwatchRow: View {
+    let preset: ColorPalette.Preset
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(preset.colors.enumerated()), id: \.offset) { _, rgb in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color(red: Double(rgb.r) / 255, green: Double(rgb.g) / 255, blue: Double(rgb.b) / 255))
+                    .frame(height: 18)
+            }
+        }
+        .accessibilityLabel("\(preset.displayName) palette swatches")
     }
 }
 

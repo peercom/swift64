@@ -9,7 +9,7 @@ Latest packaged macOS release: [Swift64 0.4.3](https://github.com/peercom/swift6
 ## Status
 
 - Boots to the C64 BASIC screen
-- Keyboard input, joystick (numpad)
+- Keyboard input, joystick (numpad or game controllers), warp mode, selectable VIC palettes
 - Audio output with selectable SID model and fast/compatibility synthesis modes
 - Loads PRG, D64, G64, NIB, NBZ, P64, T64, TAP, standard CRT cartridge files, Action Replay, KCS Power, Atomic Power/Nordic Power, Action Replay 3, Action Replay 4, Final Cartridge I, Final Cartridge Plus, Final Cartridge III, Simon's BASIC, Super Games, C64 Game System/System 3, Warp Speed, Stardos, Game Killer, Prophet64, EXOS, Freeze Frame, Freeze Machine, Snapshot64, Super Explode V5, Super Snapshot V5, MACH 5, Dinamic, Zaxxon/Super Zaxxon, COMAL-80, Structured BASIC, Ross, Dela EP64, Dela EP7x8, Dela EP256, Rex EP256, Mikro Assembler, Magic Formel, Magic Desk, Ocean type 1, Fun Play/Power Play, Epyx FastLoad, Westermann Learning, Rex Utility, and EasyFlash CRTs
 - Fast Kernal-trap disk loading plus compatibility true-drive 1541 emulation
@@ -118,6 +118,14 @@ Detailed local, opt-in, compatibility, CPU conformance, milestone, and performan
 ### Keyboard
 
 The Mac keyboard maps to the C64 keyboard layout. Escape maps to RUN/STOP, and Page Up or F12 act as RESTORE keys that trigger NMI. Joystick port 2 is mapped to the numpad (8/2/4/6 for directions, 0 or Enter for fire).
+
+### Game controllers
+
+Any controller recognised by macOS (Xbox, PlayStation, MFi, Switch Pro) works without configuration. The first controller follows the joystick routing in Settings, and a second controller takes the other port. D-pad or left stick moves; A, B, or the shoulder buttons fire.
+
+### Warp mode
+
+Cmd+Shift+W, the toolbar hare button, or Emulation > Warp Mode runs the machine as fast as the Mac allows with audio muted, for skipping long loads and decrunchers. Switch it off to return to real-time, properly paced playback.
 
 ## Debugger
 

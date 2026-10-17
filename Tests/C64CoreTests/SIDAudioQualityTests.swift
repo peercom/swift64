@@ -146,6 +146,40 @@ final class SIDAudioQualityTests: XCTestCase {
         }
     }
 
+    func testMutedSpeakerIsSilentAndResumesFromFreshSamples() {
+        let sid = SID()
+        let output = SIDAudioOutput(sid: sid, startupTarget: 64)
+        var block = [Float](repeating: 1, count: 64)
+
+        // Normal playback has started.
+        for index in 0..<64 { sid.writeSample(Int32(index * 100)) }
+        block.withUnsafeMutableBufferPointer { output.render(into: $0) }
+        XCTAssertGreaterThan(block.last!, 0)
+
+        // Warp: whatever the SID produces is dropped and the speaker is silent.
+        output.setMuted(true)
+        XCTAssertTrue(output.isMuted)
+        for _ in 0..<500 { sid.writeSample(20_000) }
+        block.withUnsafeMutableBufferPointer { output.render(into: $0) }
+        XCTAssertTrue(block.allSatisfy { $0 == 0 })
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 0)
+        XCTAssertEqual(output.statistics.underrunFrames, 0, "silence under warp is not an underrun")
+
+        // Samples produced before unmuting are stale and must not be replayed;
+        // playback waits for a fresh startup fill instead.
+        for _ in 0..<32 { sid.writeSample(20_000) }
+        output.setMuted(false)
+        XCTAssertFalse(output.isMuted)
+        block.withUnsafeMutableBufferPointer { output.render(into: $0) }
+        XCTAssertTrue(block.allSatisfy { $0 == 0 })
+        XCTAssertEqual(sid.availableAudioSamplesForPlayback(), 0)
+        XCTAssertEqual(output.statistics.startupFrames, 64)
+
+        for index in 0..<64 { sid.writeSample(Int32(index * 100)) }
+        block.withUnsafeMutableBufferPointer { output.render(into: $0) }
+        XCTAssertGreaterThan(block.last!, 0)
+    }
+
     func testSpeakerOutputRecoversWithoutRepeatedPrebufferAndFadesEmptyCallbacks() {
         let sid = SID()
         let output = SIDAudioOutput(sid: sid, startupTarget: 128)

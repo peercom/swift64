@@ -25,6 +25,8 @@ public final class SIDAudioOutput {
     private var lastOutput: Float = 0
     private var counters = Statistics()
     private let statisticsLock = NSLock()
+    private var muted = false
+    private var resumeAfterMute = false
 
     public init(sid: SID, startupTarget: Int = 4096) {
         self.sid = sid
@@ -39,11 +41,45 @@ public final class SIDAudioOutput {
         return result
     }
 
+    /// Silence the speaker while the emulator runs faster than real time.
+    /// Unmuting discards the stale queue and waits for a fresh startup fill.
+    public func setMuted(_ enabled: Bool) {
+        statisticsLock.lock()
+        defer { statisticsLock.unlock() }
+        if muted && !enabled { resumeAfterMute = true }
+        muted = enabled
+    }
+
+    public var isMuted: Bool {
+        statisticsLock.lock()
+        defer { statisticsLock.unlock() }
+        return muted
+    }
+
     /// Call from one audio consumer only. No allocation or file I/O occurs here.
     public func render(into output: UnsafeMutableBufferPointer<Float>) {
         guard !output.isEmpty else { return }
         var delta = Statistics()
         delta.renderedFrames = UInt64(output.count)
+        statisticsLock.lock()
+        let mutedNow = muted
+        let resuming = resumeAfterMute
+        resumeAfterMute = false
+        statisticsLock.unlock()
+        if resuming {
+            sid.discardBufferedAudioSamples()
+            waitingForStartup = true
+            recovering = true
+            lastOutput = 0
+        }
+        if mutedNow {
+            // Keep the queue from filling with samples we will never play.
+            sid.discardBufferedAudioSamples()
+            output.update(repeating: 0)
+            lastOutput = 0
+            record(delta)
+            return
+        }
         if waitingForStartup && sid.availableAudioSamplesForPlayback() < startupTarget {
             output.update(repeating: 0)
             delta.startupFrames = UInt64(output.count)

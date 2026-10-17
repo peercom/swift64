@@ -28,6 +28,29 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var emulationThread: Thread?
     var running = true
 
+    /// Run emulation as fast as the host allows instead of pacing to the
+    /// machine's frame rate. The speaker is muted separately by the controller.
+    var warpEnabled = false
+
+    /// Work to run on the emulation thread between frames, for state that the
+    /// VIC reads without locking (such as the active palette).
+    private var pendingWork: [() -> Void] = []
+    private let pendingWorkLock = NSLock()
+
+    func perform(onEmulationThread work: @escaping () -> Void) {
+        pendingWorkLock.lock()
+        pendingWork.append(work)
+        pendingWorkLock.unlock()
+    }
+
+    private func drainPendingWork() {
+        pendingWorkLock.lock()
+        let work = pendingWork
+        pendingWork.removeAll(keepingCapacity: true)
+        pendingWorkLock.unlock()
+        for item in work { item() }
+    }
+
     private static let shaderSource = """
     #include <metal_stdlib>
     using namespace metal;
@@ -176,6 +199,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
         while running {
             guard let c64 = c64 else { break }
+            drainPendingWork()
 
             // If debugger is paused, produce snapshots but don't run
             if c64.debugger.paused {
@@ -226,6 +250,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 snapshotLock.lock()
                 debugSnapshot = c64.debugger.takeSnapshot(memoryStart: debugMemoryPage)
                 snapshotLock.unlock()
+            }
+
+            if warpEnabled {
+                // No pacing: the next frame starts immediately. Keep the
+                // deadline fresh so leaving warp does not trigger catch-up.
+                pacer.reset(now: ProcessInfo.processInfo.systemUptime)
+                continue
             }
 
             // Pace against an absolute deadline. Sleeping relative to the end

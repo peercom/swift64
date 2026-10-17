@@ -144,6 +144,12 @@ struct C64App: App {
                         emulator.setTrueDriveMode(enabled ? .compat1541 : .off)
                     }
                 ))
+
+                Toggle("Warp Mode", isOn: Binding(
+                    get: { emulator.warpEnabled },
+                    set: { emulator.setWarp($0) }
+                ))
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .toolbar) {

@@ -1146,6 +1146,15 @@ public final class SID {
         return sampleBufferedCount
     }
 
+    /// Drop every buffered sample without touching synthesis state. Used when
+    /// playback resumes after warp mode so stale audio is not replayed.
+    public func discardBufferedAudioSamples() {
+        sampleBufferLock.lock()
+        defer { sampleBufferLock.unlock() }
+        sampleReadPos = sampleWritePos
+        sampleBufferedCount = 0
+    }
+
     /// Samples overwritten before the speaker consumed them, since SID reset.
     public var audioOverrunFrames: UInt64 {
         sampleBufferLock.lock()

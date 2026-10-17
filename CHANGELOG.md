@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added warp mode (toolbar, Emulation menu, Cmd+Shift+W). The emulation thread drops frame pacing and the speaker is muted; leaving warp discards the stale audio queue and refills before playback resumes. The status bar and inspector show the current speed.
+- Added game controller support through the GameController framework. The first controller follows the joystick routing preference, a second controller takes the other port; D-pad or left stick moves and A/B or the shoulder buttons fire. Controller and keyboard joystick state are merged, so either works alone. Connected controllers are listed in Settings > General.
+- Added selectable VIC palettes in Settings > Display: Pepto (C64 Wiki, the previous fixed table), Pepto PAL (VICE), and Colodore, with a swatch preview. The palette swaps between emulated frames so VIC rendering never reads a half-updated table.
+- Added regressions for merged joystick ports reaching CIA1, muted-speaker silence and resume, and palette presets reaching VIC output. No VIC, CIA, SID synthesis, or drive timing changes are included.
+
 ## 0.4.3 - 2026-10-16
 
 - Corrected CIA timer pipelines and CPU interrupt sampling used by VIC raster synchronizers. Blackmail FLI, side-border sprite probes, and the PAL IRQ-acknowledgement program now pass unchanged.

@@ -12,6 +12,7 @@
 		0C7BA180E37360E6FFE568D6 /* DebuggerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86A4DFB898B876FC77D7709 /* DebuggerView.swift */; };
 		0E0ABC6CD6C8A0ADD9CB2D3D /* ColorPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */; };
 		12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CA3D09FA940CA84F595C9C /* SID.swift */; };
+		1B2CB2A35B2D90CD4CAF25F8 /* GamepadInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF1BB5DCC357EB4316FDE25D /* GamepadInput.swift */; };
 		237804E7A0DB0B5647CDF6DE /* DiskDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */; };
 		25175430DCA1161C4BC2FE30 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D077744C5E6F9AA3F0C18429 /* CompatibilityManifest.swift */; };
 		265046B932FB1B4566FBAC25 /* VIC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 118A9E70995FB663B124F661 /* VIC.swift */; };
@@ -50,6 +51,7 @@
 		CD69B15FA2CD5D3256B51A21 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80192F6E6D4256FB1246016 /* ContentView.swift */; };
 		D50F9121748726FFCD25D246 /* KernalTraps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61ADFC557D655CE2C63F112B /* KernalTraps.swift */; };
 		DB3E30025ACCA5876A7E5593 /* MachineProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1ED263F1FD419DE817455C /* MachineProfile.swift */; };
+		E0862CD77B29C35601B1B624 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4D2FB0EE8A45043570D73910 /* GameController.framework */; };
 		FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5238177200FD6BB810A221 /* PRGLoader.swift */; };
 		FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0544971F445D40AAACADAB98 /* MemoryMap.swift */; };
 /* End PBXBuildFile section */
@@ -95,6 +97,7 @@
 		2DCA5949F8CA7D9CEE00B959 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		300DE71EBF779617B43AA9E1 /* C64App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64App.swift; sourceTree = "<group>"; };
 		4769B97731BB5103DAF2CF61 /* C64Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = C64Preferences.swift; sourceTree = "<group>"; };
+		4D2FB0EE8A45043570D73910 /* GameController.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GameController.framework; path = System/Library/Frameworks/GameController.framework; sourceTree = SDKROOT; };
 		54132BA620E1EB972F64D612 /* C64App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = C64App.entitlements; sourceTree = "<group>"; };
 		61ADFC557D655CE2C63F112B /* KernalTraps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernalTraps.swift; sourceTree = "<group>"; };
 		659477ADC4A3FCCEE22AE8A2 /* ColorPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorPalette.swift; sourceTree = "<group>"; };
@@ -126,6 +129,7 @@
 		F3EAFE976F27217801A0897F /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		FD1ED263F1FD419DE817455C /* MachineProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineProfile.swift; sourceTree = "<group>"; };
 		FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		FF1BB5DCC357EB4316FDE25D /* GamepadInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GamepadInput.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -136,6 +140,7 @@
 				AABF89F7D759F9092859665C /* libC64Core.a in Frameworks */,
 				BC59583138E19882E60906CA /* libEmu6502.a in Frameworks */,
 				92FADFA59D78C284A969B874 /* AVFoundation.framework in Frameworks */,
+				E0862CD77B29C35601B1B624 /* GameController.framework in Frameworks */,
 				AE216B608D3761CF75910FAF /* Metal.framework in Frameworks */,
 				757762D6A8621E5A0CCDAE9C /* MetalKit.framework in Frameworks */,
 			);
@@ -170,6 +175,7 @@
 			isa = PBXGroup;
 			children = (
 				F3EAFE976F27217801A0897F /* AVFoundation.framework */,
+				4D2FB0EE8A45043570D73910 /* GameController.framework */,
 				2DCA5949F8CA7D9CEE00B959 /* Metal.framework */,
 				677BA4C907BF97D425E001A0 /* MetalKit.framework */,
 			);
@@ -232,6 +238,7 @@
 				4769B97731BB5103DAF2CF61 /* C64Preferences.swift */,
 				D80192F6E6D4256FB1246016 /* ContentView.swift */,
 				A86A4DFB898B876FC77D7709 /* DebuggerView.swift */,
+				FF1BB5DCC357EB4316FDE25D /* GamepadInput.swift */,
 				A1F02EA636B5026B5622417D /* MetalRenderer.swift */,
 				FE2E280EF10C0A6CA869B0BA /* SettingsView.swift */,
 				F2C2AAEBB43A419685C51891 /* Resources */,
@@ -407,6 +414,7 @@
 				62D96E6F7720E06AFBAF547B /* C64Preferences.swift in Sources */,
 				CD69B15FA2CD5D3256B51A21 /* ContentView.swift in Sources */,
 				0C7BA180E37360E6FFE568D6 /* DebuggerView.swift in Sources */,
+				1B2CB2A35B2D90CD4CAF25F8 /* GamepadInput.swift in Sources */,
 				326E85E04717EA1ABA30CA35 /* MetalRenderer.swift in Sources */,
 				B9287A3B7540B4732F403CD4 /* SettingsView.swift in Sources */,
 			);

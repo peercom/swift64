@@ -42,6 +42,7 @@ targets:
       - target: C64Core
       - target: Emu6502
       - sdk: AVFoundation.framework
+      - sdk: GameController.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
     entitlements:

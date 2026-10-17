@@ -14,6 +14,16 @@ public final class Joystick {
     /// Bit 0 = Up, 1 = Down, 2 = Left, 3 = Right, 4 = Fire
     public var port1: UInt8 = 0xFF
     public var port2: UInt8 = 0xFF
+
+    /// Active-low state driven by external game controllers. It is merged
+    /// with the keyboard-driven ports so either input source can act alone.
+    public var externalPort1: UInt8 = 0xFF
+    public var externalPort2: UInt8 = 0xFF
+
+    /// Combined keyboard and controller state seen by CIA1.
+    public var effectivePort1: UInt8 { port1 & externalPort1 }
+    public var effectivePort2: UInt8 { port2 & externalPort2 }
+
     public var routing: JoystickRouting = .both
     public var mirrorPort2ToPort1: Bool {
         get { routing == .both }
