@@ -93,6 +93,75 @@ final class CIATimerPipelineTests: XCTestCase {
         }
     }
 
+    func testMaskClearedDuringInterruptDelayStillAssertsInterrupt() {
+        // `cia-icr-test2`: Timer A = 9 raises its flag in the clock before
+        // the mask is cleared; the 6526 still asserts IRQ one clock later and
+        // the next ICR read returns $81.
+        let cia = CIA(isCIA1: true)
+        cia.writeRegister(4, value: 9)
+        cia.writeRegister(5, value: 0)
+        cia.writeRegister(0x0D, value: 0x81)
+        cia.writeRegister(0x0E, value: 0x19)
+        // Force load + start: the underflow is in the twelfth clock.
+        for _ in 0..<12 { cia.tick() }
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x01)
+        XCTAssertFalse(cia.interruptActive)
+        cia.writeRegister(0x0D, value: 0x01)
+        XCTAssertFalse(cia.interruptActive)
+        cia.tick()
+        XCTAssertTrue(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x81)
+        XCTAssertFalse(cia.interruptActive)
+
+        // One clock later the flag is raised with the mask already off: no IRQ.
+        let late = CIA(isCIA1: true)
+        late.writeRegister(4, value: 10)
+        late.writeRegister(5, value: 0)
+        late.writeRegister(0x0D, value: 0x81)
+        late.writeRegister(0x0E, value: 0x19)
+        for _ in 0..<12 { late.tick() }
+        late.writeRegister(0x0D, value: 0x01)
+        for _ in 0..<3 { late.tick() }
+        XCTAssertFalse(late.interruptActive)
+        XCTAssertEqual(late.readRegister(0x0D), 0x01)
+    }
+
+    func testTimerBFlagRaisedInTheCycleOfAnICRReadIsLostButTimerAFlagSurvives() {
+        // `cia-timer` old dump, `ciavarious` cia3 K: the 6526 drops a Timer B
+        // flag set in the same cycle the ICR is read; its interrupt still
+        // fires, so the handler reads $80. Timer A keeps the flag.
+        for timer in 0..<2 {
+            for maskOn in [false, true] {
+                let cia = CIA(isCIA1: true)
+                cia.writeRegister(UInt16(4 + 2 * timer), value: 3)
+                cia.writeRegister(UInt16(5 + 2 * timer), value: 0)
+                if maskOn { cia.writeRegister(0x0D, value: 0x80 | UInt8(1 << timer)) }
+                cia.writeRegister(UInt16(0x0E + timer), value: 0x11)
+                // Force load + start: the underflow is in the sixth clock.
+                for _ in 0..<5 { cia.tick() }
+                XCTAssertEqual(cia.readRegister(0x0D), 0, "timer \(timer)")
+                cia.tick()
+                let flag = cia.debugRegisterValue(0x0D) & 0x03
+                XCTAssertEqual(flag, timer == 0 ? 0x01 : 0x00, "timer \(timer) mask \(maskOn)")
+                XCTAssertFalse(cia.interruptActive)
+                cia.tick()
+                XCTAssertEqual(cia.interruptActive, maskOn, "timer \(timer) mask \(maskOn)")
+                let expected: UInt8 = (maskOn ? 0x80 : 0) | (timer == 0 ? 0x01 : 0x00)
+                XCTAssertEqual(cia.readRegister(0x0D), expected, "timer \(timer) mask \(maskOn)")
+
+                // A read one clock earlier does not touch the flag.
+                let early = CIA(isCIA1: true)
+                early.writeRegister(UInt16(4 + 2 * timer), value: 3)
+                early.writeRegister(UInt16(5 + 2 * timer), value: 0)
+                early.writeRegister(UInt16(0x0E + timer), value: 0x11)
+                for _ in 0..<4 { early.tick() }
+                XCTAssertEqual(early.readRegister(0x0D), 0)
+                for _ in 0..<2 { early.tick() }
+                XCTAssertEqual(early.debugRegisterValue(0x0D) & 0x03, UInt8(1 << timer), "timer \(timer)")
+            }
+        }
+    }
+
     func testCPUStoreThenCounterReadObservesDelayedStartAndForceLoad() {
         for profile: MachineProfile in [.palC64, .ntscC64] {
             for control: UInt8 in [1, 0x11] {

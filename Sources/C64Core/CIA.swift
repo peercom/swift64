@@ -96,7 +96,14 @@ public final class CIA {
     private var timerBPipeline = TimerPipeline()
     private var cntPulsePending = false
     private var cntPulseSampled = false
-    private var pendingTimerInterrupts: UInt8 = 0
+    /// 6526 interrupt pipeline: a timer flag that is enabled when it is
+    /// raised asserts the line one clock later, whatever the mask does in
+    /// between (`cia-icr-test2`); an ICR read in that clock cancels it.
+    private var interruptArmed = false
+    /// The CPU read the ICR in this cycle. On the 6526 a Timer B flag raised
+    /// in the same cycle is lost, although its interrupt still fires
+    /// (`cia-timer` old dump, `ciavarious` cia3/3a/4/8 old data).
+    private var interruptControlReadThisCycle = false
 
     // MARK: - Interrupt
 
@@ -238,7 +245,8 @@ public final class CIA {
         timerAUnderflowedLastTick = false
         cntPulsePending = false
         cntPulseSampled = false
-        pendingTimerInterrupts = 0
+        interruptArmed = false
+        interruptControlReadThisCycle = false
 
         interruptMask = 0x00
         interruptData = 0x00
@@ -305,9 +313,9 @@ public final class CIA {
     /// Advance one system clock cycle.
     public func tick() {
         expireTimerOutputPulses()
-        if pendingTimerInterrupts != 0 {
-            pendingTimerInterrupts = 0
-            checkInterrupt()
+        if interruptArmed {
+            interruptArmed = false
+            assertInterrupt()
         }
         clockSerialOutputPipeline()
 
@@ -333,40 +341,41 @@ public final class CIA {
         cntPulsePending = false
 
         tickTOD()
+        interruptControlReadThisCycle = false
     }
 
     func timerAUnderflow() {
         updateTimerAOutput()
         shiftSerialOutputBit()
 
-        // Set interrupt flag
-        interruptData |= 0x01
-        pendingTimerInterrupts |= 0x01
+        raiseTimerFlag(0x01)
     }
 
     func timerBUnderflow() {
         updateTimerBOutput()
-
-        interruptData |= 0x02
-        pendingTimerInterrupts |= 0x02
+        raiseTimerFlag(0x02, lostOnSameCycleRead: true)
     }
 
-    func checkInterrupt() {
-        let wasActive = interruptActive
-        let isActive = interruptActive || (interruptData & interruptMask & ~pendingTimerInterrupts & 0x1F) != 0
+    func raiseTimerFlag(_ bit: UInt8, lostOnSameCycleRead: Bool = false) {
+        if !(lostOnSameCycleRead && interruptControlReadThisCycle) {
+            interruptData |= bit
+        }
+        if interruptMask & bit != 0 && !interruptActive {
+            interruptArmed = true
+        }
+    }
 
-        if isActive {
-            interruptData |= 0x80  // Set IR bit
-            interruptActive = true
-            if !wasActive {
-                onInterrupt?(true)
-            }
-        } else {
-            interruptData &= 0x7F
-            interruptActive = false
-            if wasActive {
-                onInterrupt?(false)
-            }
+    func assertInterrupt() {
+        interruptData |= 0x80  // Set IR bit
+        guard !interruptActive else { return }
+        interruptActive = true
+        onInterrupt?(true)
+    }
+
+    /// Immediate sources (mask writes, FLAG, TOD alarm, serial port).
+    func checkInterrupt() {
+        if (interruptData & interruptMask & 0x1F) != 0 {
+            assertInterrupt()
         }
     }
 
@@ -726,7 +735,8 @@ public final class CIA {
             // Interrupt control — reading clears
             let val = interruptData
             interruptData = 0
-            pendingTimerInterrupts = 0
+            interruptArmed = false
+            interruptControlReadThisCycle = true
             let wasActive = interruptActive
             interruptActive = false
             if wasActive {
