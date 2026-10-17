@@ -106,6 +106,13 @@ public final class C64 {
         }
     }
 
+    /// Optional CIA revision override. When nil, the machine profile selects it.
+    public var ciaModelOverride: CIA.Model? {
+        didSet {
+            applyMachineProfile()
+        }
+    }
+
     /// Selects between Kernal traps and hardware-level 1541 emulation.
     public var trueDriveEmulationMode: TrueDriveEmulationMode = .off {
         didSet {
@@ -333,6 +340,8 @@ public final class C64 {
         vic.videoStandard = machineProfile.videoStandard
         sid.model = sidModelOverride ?? machineProfile.sidModel
         sid.clockRate = machineProfile.sidClockHz
+        cia1.model = ciaModelOverride ?? machineProfile.ciaModel
+        cia2.model = ciaModelOverride ?? machineProfile.ciaModel
         cia1.configureTOD(
             fiftyHzCyclesPerTenth: machineProfile.ciaTod50HzCyclesPerTenth,
             sixtyHzCyclesPerTenth: machineProfile.ciaTod60HzCyclesPerTenth,

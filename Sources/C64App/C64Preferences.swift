@@ -6,6 +6,7 @@ enum PreferenceKey {
     static let trueDriveMode = "c64.trueDriveMode"
     static let sidModel = "c64.sid.model"
     static let sidAccuracyMode = "c64.sid.accuracyMode"
+    static let ciaModel = "c64.cia.model"
     static let joystickRouting = "c64.input.joystickRouting"
     static let basicROMPath = "c64.rom.basicPath"
     static let kernalROMPath = "c64.rom.kernalPath"
@@ -285,6 +286,30 @@ enum SIDModelPreference: String, CaseIterable, Identifiable {
         case .profileDefault: return nil
         case .mos6581: return .mos6581
         case .mos8580: return .mos8580
+        }
+    }
+}
+
+enum CIAModelPreference: String, CaseIterable, Identifiable {
+    case profileDefault
+    case mos6526
+    case mos6526A
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .profileDefault: return "Profile Default"
+        case .mos6526: return "MOS 6526 (C64)"
+        case .mos6526A: return "MOS 6526A / 8521 (C64C)"
+        }
+    }
+
+    var model: CIA.Model? {
+        switch self {
+        case .profileDefault: return nil
+        case .mos6526: return .mos6526
+        case .mos6526A: return .mos6526A
         }
     }
 }

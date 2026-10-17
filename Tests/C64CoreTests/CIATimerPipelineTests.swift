@@ -162,6 +162,66 @@ final class CIATimerPipelineTests: XCTestCase {
         }
     }
 
+    func test6526AAssertsInTheFlagClockAndKeepsTimerBFlagOnSameClockRead() {
+        // `irqdelay-new`, `cia-timer-newcias`: the 6526A/8521 has no clock
+        // between the flag and the line, and an ICR read in the Timer B
+        // underflow clock does not drop the flag.
+        for timer in 0..<2 {
+            let cia = CIA(isCIA1: true)
+            cia.model = .mos6526A
+            cia.writeRegister(UInt16(4 + 2 * timer), value: 3)
+            cia.writeRegister(UInt16(5 + 2 * timer), value: 0)
+            cia.writeRegister(0x0D, value: 0x80 | UInt8(1 << timer))
+            cia.writeRegister(UInt16(0x0E + timer), value: 0x11)
+            for _ in 0..<5 { cia.tick() }
+            XCTAssertFalse(cia.interruptActive, "timer \(timer)")
+            cia.tick()
+            XCTAssertTrue(cia.interruptActive, "timer \(timer): line follows the flag at once")
+            XCTAssertEqual(cia.readRegister(0x0D), 0x80 | UInt8(1 << timer), "timer \(timer)")
+            XCTAssertFalse(cia.interruptActive)
+
+            // Read in the underflow clock: the flag survives on the 6526A.
+            let raced = CIA(isCIA1: true)
+            raced.model = .mos6526A
+            raced.writeRegister(UInt16(4 + 2 * timer), value: 3)
+            raced.writeRegister(UInt16(5 + 2 * timer), value: 0)
+            raced.writeRegister(UInt16(0x0E + timer), value: 0x11)
+            for _ in 0..<5 { raced.tick() }
+            XCTAssertEqual(raced.readRegister(0x0D), 0, "timer \(timer)")
+            raced.tick()
+            XCTAssertEqual(raced.debugRegisterValue(0x0D) & 0x03, UInt8(1 << timer), "timer \(timer)")
+
+            // With the mask on, that read precedes the flag and does not
+            // acknowledge it: the line asserts in the same clock and the next
+            // read returns the flag with IR (`cia-timer` new dump).
+            let racedIRQ = CIA(isCIA1: true)
+            racedIRQ.model = .mos6526A
+            racedIRQ.writeRegister(UInt16(4 + 2 * timer), value: 3)
+            racedIRQ.writeRegister(UInt16(5 + 2 * timer), value: 0)
+            racedIRQ.writeRegister(0x0D, value: 0x80 | UInt8(1 << timer))
+            racedIRQ.writeRegister(UInt16(0x0E + timer), value: 0x11)
+            for _ in 0..<5 { racedIRQ.tick() }
+            XCTAssertEqual(racedIRQ.readRegister(0x0D), 0, "timer \(timer)")
+            racedIRQ.tick()
+            XCTAssertTrue(racedIRQ.interruptActive, "timer \(timer)")
+            XCTAssertEqual(racedIRQ.readRegister(0x0D), 0x80 | UInt8(1 << timer), "timer \(timer)")
+            XCTAssertFalse(racedIRQ.interruptActive)
+        }
+
+        // Enabling the mask for a flag raised in the previous clock asserts
+        // immediately instead of one clock later.
+        let masked = CIA(isCIA1: true)
+        masked.model = .mos6526A
+        masked.writeRegister(4, value: 3)
+        masked.writeRegister(5, value: 0)
+        masked.writeRegister(0x0E, value: 0x11)
+        for _ in 0..<6 { masked.tick() }
+        XCTAssertEqual(masked.debugRegisterValue(0x0D) & 0x01, 0x01)
+        XCTAssertFalse(masked.interruptActive)
+        masked.writeRegister(0x0D, value: 0x81)
+        XCTAssertTrue(masked.interruptActive)
+    }
+
     func testNewLatchAfterZeroLatchRunCountsFromTheCycleAfterTheReload() {
         // `reload0`: timer loaded with 0 and started with force load
         // underflows every cycle; a new latch written during that run is

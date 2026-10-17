@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.trueDriveMode) private var trueDriveMode = TrueDriveModePreference.off.rawValue
     @AppStorage(PreferenceKey.sidModel) private var sidModel = SIDModelPreference.profileDefault.rawValue
     @AppStorage(PreferenceKey.sidAccuracyMode) private var sidAccuracyMode = SIDAccuracyModePreference.fast.rawValue
+    @AppStorage(PreferenceKey.ciaModel) private var ciaModel = CIAModelPreference.profileDefault.rawValue
     @AppStorage(PreferenceKey.joystickRouting) private var joystickRouting = JoystickRoutingPreference.both.rawValue
     @AppStorage(PreferenceKey.basicROMPath) private var basicROMPath = ""
     @AppStorage(PreferenceKey.kernalROMPath) private var kernalROMPath = ""
@@ -82,6 +83,12 @@ struct SettingsView: View {
                     Picker("SID Accuracy", selection: $sidAccuracyMode) {
                         ForEach(SIDAccuracyModePreference.allCases) { mode in
                             Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+
+                    Picker("CIA Chips", selection: $ciaModel) {
+                        ForEach(CIAModelPreference.allCases) { model in
+                            Text(model.title).tag(model.rawValue)
                         }
                     }
 

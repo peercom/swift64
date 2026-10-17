@@ -86,6 +86,29 @@ final class MachineProfileTests: XCTestCase {
         XCTAssertEqual(ntscC64CWith1541II.driveClockRatio, 1.0)
     }
 
+    func testC64CProfilesSelect8521CIAAndOverrideWinsForBothCIAs() {
+        XCTAssertEqual(MachineProfile.palC64.ciaModel, .mos6526)
+        XCTAssertEqual(MachineProfile.ntscC64.ciaModel, .mos6526)
+        XCTAssertEqual(MachineProfile.palC64With1541II.ciaModel, .mos6526)
+        for profile in [MachineProfile.palC64C, .palC64CWith1541II, .ntscC64C, .ntscC64CWith1541II] {
+            XCTAssertEqual(profile.ciaModel, .mos6526A, profile.name)
+        }
+
+        let c64 = C64()
+        XCTAssertEqual(c64.cia1.model, .mos6526)
+        XCTAssertEqual(c64.cia2.model, .mos6526)
+        c64.machineProfile = .palC64C
+        XCTAssertEqual(c64.cia1.model, .mos6526A)
+        XCTAssertEqual(c64.cia2.model, .mos6526A)
+        c64.ciaModelOverride = .mos6526
+        XCTAssertEqual(c64.cia1.model, .mos6526)
+        XCTAssertEqual(c64.cia2.model, .mos6526)
+        c64.reset()
+        XCTAssertEqual(c64.cia1.model, .mos6526)
+        c64.ciaModelOverride = nil
+        XCTAssertEqual(c64.cia2.model, .mos6526A)
+    }
+
     func testSIDModelOverrideSurvivesProfileApplicationPowerOnAndReset() {
         let c64 = C64(machineProfile: .palC64)
         XCTAssertEqual(c64.sid.model, .mos6581)

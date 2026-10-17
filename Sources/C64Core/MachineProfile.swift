@@ -32,6 +32,9 @@ public struct MachineProfile: Equatable {
     public let driveModel: Drive1541.DriveModel
     public let driveClockHz: Double
     public let memoryPowerOnPattern: MemoryPowerOnPattern
+    /// CIA revision on the board: 6526 in the original C64, 8521 (6526A
+    /// behaviour) in the C64C.
+    public let ciaModel: CIA.Model
 
     public init(
         name: String,
@@ -42,7 +45,8 @@ public struct MachineProfile: Equatable {
         sidClockHz: Double,
         driveModel: Drive1541.DriveModel,
         driveClockHz: Double,
-        memoryPowerOnPattern: MemoryPowerOnPattern = .alternating64ByteBlocks
+        memoryPowerOnPattern: MemoryPowerOnPattern = .alternating64ByteBlocks,
+        ciaModel: CIA.Model = .mos6526
     ) {
         self.name = name
         self.videoStandard = videoStandard
@@ -53,6 +57,7 @@ public struct MachineProfile: Equatable {
         self.driveModel = driveModel
         self.driveClockHz = driveClockHz
         self.memoryPowerOnPattern = memoryPowerOnPattern
+        self.ciaModel = ciaModel
     }
 
     public var standardDriveClockRatio: Double {
@@ -118,7 +123,8 @@ public struct MachineProfile: Equatable {
         sidModel: .mos8580,
         sidClockHz: 985_248,
         driveModel: .model1541C,
-        driveClockHz: 1_000_000
+        driveClockHz: 1_000_000,
+        ciaModel: .mos6526A
     )
 
     public static let palC64With1541II = MachineProfile(
@@ -140,7 +146,8 @@ public struct MachineProfile: Equatable {
         sidModel: .mos8580,
         sidClockHz: 985_248,
         driveModel: .model1541II,
-        driveClockHz: 1_000_000
+        driveClockHz: 1_000_000,
+        ciaModel: .mos6526A
     )
 
     public static let ntscC64 = MachineProfile(
@@ -173,7 +180,8 @@ public struct MachineProfile: Equatable {
         sidModel: .mos8580,
         sidClockHz: 1_022_727,
         driveModel: .model1541C,
-        driveClockHz: 1_000_000
+        driveClockHz: 1_000_000,
+        ciaModel: .mos6526A
     )
 
     public static let ntscC64CWith1541II = MachineProfile(
@@ -184,6 +192,7 @@ public struct MachineProfile: Equatable {
         sidModel: .mos8580,
         sidClockHz: 1_022_727,
         driveModel: .model1541II,
-        driveClockHz: 1_000_000
+        driveClockHz: 1_000_000,
+        ciaModel: .mos6526A
     )
 }

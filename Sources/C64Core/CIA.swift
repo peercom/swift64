@@ -3,6 +3,29 @@ import Foundation
 /// MOS 6526 CIA (Complex Interface Adapter) emulation.
 /// Two instances: CIA1 ($DC00, IRQ) and CIA2 ($DD00, NMI).
 public final class CIA {
+    /// Chip revision. The 6526A and the 8521 used in the C64C share the
+    /// software-visible interrupt behaviour that the public `cia-new`
+    /// programs measure: a timer flag asserts the line in the clock it is
+    /// raised, and a Timer B flag is not lost to an ICR read in that clock.
+    public enum Model: String, Codable, Equatable, CaseIterable {
+        case mos6526
+        case mos6526A
+
+        public var displayName: String {
+            switch self {
+            case .mos6526: return "MOS 6526"
+            case .mos6526A: return "MOS 6526A / 8521"
+            }
+        }
+
+        /// Clocks between a timer flag being raised and the line asserting.
+        var interruptDelayClocks: Int { self == .mos6526 ? 1 : 0 }
+        /// A Timer B flag raised in the clock of an ICR read is dropped.
+        var losesTimerBFlagOnSameClockRead: Bool { self == .mos6526 }
+    }
+
+    /// Selected chip revision. Changing it does not disturb running timers.
+    public var model: Model = .mos6526
     static let palCyclesPerTodTenth = 98_525
     public var cyclesPerTodTenth = CIA.palCyclesPerTodTenth
     public var tod50HzCyclesPerTenth = CIA.palCyclesPerTodTenth
@@ -409,7 +432,7 @@ public final class CIA {
 
     func timerBUnderflow() {
         updateTimerBOutput()
-        raiseTimerFlag(0x02, lostOnSameCycleRead: true)
+        raiseTimerFlag(0x02, lostOnSameCycleRead: model.losesTimerBFlagOnSameClockRead)
     }
 
     func raiseTimerFlag(_ bit: UInt8, lostOnSameCycleRead: Bool = false) {
@@ -417,7 +440,14 @@ public final class CIA {
         if !(lostOnSameCycleRead && interruptControlReadThisCycle) {
             interruptData |= bit
         }
-        if interruptMask & bit != 0 && !interruptActive && !interruptControlClearWriteThisCycle {
+        guard interruptMask & bit != 0 && !interruptActive && !interruptControlClearWriteThisCycle else { return }
+        if model.interruptDelayClocks == 0 {
+            // 6526A: the line follows the flag in the same clock. An ICR read
+            // in this clock happened before the flag, so it returns the old
+            // value and does not acknowledge it (`cia-timer` new dump,
+            // columns where the underflow meets a read).
+            assertInterrupt()
+        } else {
             interruptArmed = true
         }
     }
@@ -933,7 +963,7 @@ public final class CIA {
             }
             // Flags raised in the previous clock keep their one-clock delay.
             let enabled = interruptData & interruptMask & 0x1F
-            if enabled & ~flagsRaisedLastClock != 0 {
+            if model.interruptDelayClocks == 0 || enabled & ~flagsRaisedLastClock != 0 {
                 checkInterrupt()
             } else if enabled != 0 && !interruptActive {
                 interruptArmed = true

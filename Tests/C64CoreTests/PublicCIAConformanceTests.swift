@@ -12,9 +12,9 @@ import XCTest
 /// `ghosting`, `transactor/ciatest64`) need key presses and are not run.
 ///
 /// Programs are never patched and completion is never inferred from a PC scan.
-/// The upstream old/new CIA tagging is carried as metadata only: Swift64 has a
-/// single 6526 model, so both variants run and the scoreboard records which
-/// revision the current behaviour matches.
+/// The upstream old/new CIA tagging selects the emulated revision: `cia-old`
+/// programs run on the 6526, `cia-new` programs on the 6526A/8521, untagged
+/// programs on the profile default (6526).
 final class PublicCIAConformanceTests: XCTestCase {
     /// Upstream `cia-old` / `cia-new` tag of a program (6526 vs 6526A/8521).
     enum CIARevision: String {
@@ -256,6 +256,11 @@ final class PublicCIAConformanceTests: XCTestCase {
                 let program = try Data(contentsOf: programURL)
                 let c64 = C64(machineProfile: fixture.profile)
                 try c64.loadROMsValidated(basic: basic, kernal: kernal, charset: charset)
+                switch fixture.revision {
+                case .old: c64.ciaModelOverride = .mos6526
+                case .new: c64.ciaModelOverride = .mos6526A
+                case .any: c64.ciaModelOverride = nil
+                }
                 c64.trueDriveEmulationMode = .off
                 c64.kernalTraps.enabled = false
                 c64.powerOn()
