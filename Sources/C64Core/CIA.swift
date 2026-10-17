@@ -126,6 +126,21 @@ public final class CIA {
     /// in the same cycle is lost, although its interrupt still fires
     /// (`cia-timer` old dump, `ciavarious` cia3/3a/4/8 old data).
     private var interruptControlReadThisCycle = false
+    // ICR read acknowledge, from `dd0dtest`: a read clears the flags and
+    // drops the line at once, but the IR bit outlives the read by one cycle,
+    // so a read in the very next cycle (the dummy and real read of a
+    // read-modify-write) still returns it. An arm that lands in a read's
+    // cycle does not assert the line; its IR bit is only seen by such a
+    // consecutive read.
+    private var interruptControlReadLastCycle = false
+    private var interruptControlReadIRBit = false
+    private var interruptBlockedIRBit = false
+    /// Timer flags raised in the previous clock: a mask write enabling one
+    /// of them asserts on the arm path, not at once.
+    private var flagsRaisedThisClock: UInt8 = 0
+    private var flagsRaisedLastClock: UInt8 = 0
+    /// A clear-mode ICR write in the clock a flag is raised prevents arming.
+    private var interruptControlClearWriteThisCycle = false
 
     // MARK: - Interrupt
 
@@ -269,6 +284,12 @@ public final class CIA {
         cntPulseSampled = false
         interruptArmed = false
         interruptControlReadThisCycle = false
+        interruptControlReadLastCycle = false
+        interruptControlReadIRBit = false
+        interruptBlockedIRBit = false
+        flagsRaisedThisClock = 0
+        flagsRaisedLastClock = 0
+        interruptControlClearWriteThisCycle = false
 
         interruptMask = 0x00
         interruptData = 0x00
@@ -337,7 +358,11 @@ public final class CIA {
         expireTimerOutputPulses()
         if interruptArmed {
             interruptArmed = false
-            assertInterrupt()
+            if interruptControlReadThisCycle {
+                interruptBlockedIRBit = true
+            } else {
+                assertInterrupt()
+            }
         }
         clockSerialOutputPipeline()
 
@@ -363,7 +388,16 @@ public final class CIA {
         cntPulsePending = false
 
         tickTOD()
+        if !interruptControlReadThisCycle {
+            // No read this cycle: the previous read's IR bit is gone.
+            interruptControlReadIRBit = false
+            interruptBlockedIRBit = false
+        }
+        interruptControlReadLastCycle = interruptControlReadThisCycle
         interruptControlReadThisCycle = false
+        interruptControlClearWriteThisCycle = false
+        flagsRaisedLastClock = flagsRaisedThisClock
+        flagsRaisedThisClock = 0
     }
 
     func timerAUnderflow() {
@@ -379,10 +413,11 @@ public final class CIA {
     }
 
     func raiseTimerFlag(_ bit: UInt8, lostOnSameCycleRead: Bool = false) {
+        flagsRaisedThisClock |= bit
         if !(lostOnSameCycleRead && interruptControlReadThisCycle) {
             interruptData |= bit
         }
-        if interruptMask & bit != 0 && !interruptActive {
+        if interruptMask & bit != 0 && !interruptActive && !interruptControlClearWriteThisCycle {
             interruptArmed = true
         }
     }
@@ -754,11 +789,16 @@ public final class CIA {
             return serialData
 
         case 0x0D:
-            // Interrupt control — reading clears
-            let val = interruptData
+            // Interrupt control: reading clears. A read in the cycle right
+            // after another one still sees that read's IR bit.
+            var val = interruptData
+            if interruptControlReadLastCycle && (interruptControlReadIRBit || interruptBlockedIRBit) {
+                val |= 0x80
+            }
             interruptData = 0
-            interruptArmed = false
             interruptControlReadThisCycle = true
+            interruptControlReadIRBit = val & 0x80 != 0
+            interruptBlockedIRBit = false
             let wasActive = interruptActive
             interruptActive = false
             if wasActive {
@@ -874,8 +914,15 @@ public final class CIA {
             } else {
                 // Clear bits
                 interruptMask &= ~(value & 0x1F)
+                interruptControlClearWriteThisCycle = true
             }
-            checkInterrupt()
+            // Flags raised in the previous clock keep their one-clock delay.
+            let enabled = interruptData & interruptMask & 0x1F
+            if enabled & ~flagsRaisedLastClock != 0 {
+                checkInterrupt()
+            } else if enabled != 0 && !interruptActive {
+                interruptArmed = true
+            }
 
         case 0x0E:
             // Timer A control

@@ -189,6 +189,106 @@ final class CIATimerPipelineTests: XCTestCase {
         }
     }
 
+    /// Timer A latch 5, one-shot with force load and start: the flag is
+    /// raised in the eighth clock after the control write and the line
+    /// follows one clock later; the timer then stops.
+    private func startTimerAWithLatch5(_ cia: CIA, clocksBeforeFlag: Int = 7) {
+        cia.writeRegister(4, value: 5)
+        cia.writeRegister(5, value: 0)
+        cia.writeRegister(0x0D, value: 0x81)
+        cia.writeRegister(0x0E, value: 0x19)
+        for _ in 0..<clocksBeforeFlag { cia.tick() }
+    }
+
+    func testICRReadInArmClockBlocksLine() {
+        // `dd0dtest` 0B: a read in the clock the line would assert returns
+        // the flag and clears it; the line never asserts.
+        let cia = CIA(isCIA1: false)
+        startTimerAWithLatch5(cia)
+        cia.tick()                                   // flag clock U
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x01)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x01) // cycle U+1
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x00)
+        cia.tick()                                   // arm clock: blocked
+        XCTAssertFalse(cia.interruptActive)
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x00)
+        for _ in 0..<4 { cia.tick() }
+        XCTAssertFalse(cia.interruptActive)
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x00)
+    }
+
+    func testConsecutiveICRReadStillSeesTheIRBit() {
+        // `dd0dtest` 0C: INC $dd0d,X reads the ICR in two consecutive cycles
+        // starting in the arm clock; the second read sees the IR bit alone,
+        // nothing asserts, and the mask writes that follow ($80, $81) leave
+        // the mask alone.
+        let cia = CIA(isCIA1: false)
+        startTimerAWithLatch5(cia)
+        cia.tick()                                   // U
+        XCTAssertEqual(cia.readRegister(0x0D), 0x01) // dummy read, U+1
+        cia.tick()
+        XCTAssertFalse(cia.interruptActive)
+        XCTAssertEqual(cia.readRegister(0x0D), 0x80) // real read, U+2
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x00)
+        cia.tick()
+        cia.writeRegister(0x0D, value: 0x80)         // dummy write of the value read
+        cia.tick()
+        cia.writeRegister(0x0D, value: 0x81)
+        cia.tick()
+        XCTAssertEqual(cia.debugRegisterValue(0x0D), 0x00)
+        XCTAssertEqual(cia.interruptMask & 0x03, 0x01)
+        XCTAssertFalse(cia.interruptActive)
+        for _ in 0..<3 { cia.tick() }
+        XCTAssertFalse(cia.interruptActive)
+
+        // `dd0dtest` 0D and 19: the same reads one clock later find the line
+        // asserted; the first read drops it and clears the flag, the second
+        // still reads the IR bit.
+        let late = CIA(isCIA1: false)
+        startTimerAWithLatch5(late)
+        late.tick()                                   // U
+        late.tick()                                   // line asserts
+        XCTAssertTrue(late.interruptActive)
+        XCTAssertEqual(late.readRegister(0x0D), 0x81) // dummy read, U+2
+        XCTAssertFalse(late.interruptActive)
+        late.tick()
+        XCTAssertEqual(late.readRegister(0x0D), 0x80) // real read, U+3
+        late.tick()
+        late.tick()
+        XCTAssertEqual(late.debugRegisterValue(0x0D), 0x00)
+        XCTAssertFalse(late.interruptActive)
+
+        // Two clocks apart, the second read sees a cleared register.
+        let apart = CIA(isCIA1: false)
+        startTimerAWithLatch5(apart)
+        apart.tick()
+        apart.tick()
+        XCTAssertEqual(apart.readRegister(0x0D), 0x81)
+        apart.tick()
+        apart.tick()
+        XCTAssertEqual(apart.readRegister(0x0D), 0x00)
+    }
+
+    func testClearModeMaskWriteInFlagClockPreventsArming() {
+        // `dd0dtest` 11 versus 10: INC's dummy write ($00, clear mode) in the
+        // flag clock stops the interrupt, while the same write one clock
+        // later does not.
+        for writeInFlagClock in [true, false] {
+            let cia = CIA(isCIA1: false)
+            startTimerAWithLatch5(cia)
+            if writeInFlagClock { cia.writeRegister(0x0D, value: 0x00) }
+            cia.tick()                                   // U
+            if !writeInFlagClock { cia.writeRegister(0x0D, value: 0x00) }
+            XCTAssertFalse(cia.interruptActive, "no immediate assert for a fresh flag")
+            cia.tick()                                   // U+1
+            XCTAssertEqual(cia.interruptActive, !writeInFlagClock, "write in flag clock \(writeInFlagClock)")
+            cia.writeRegister(0x0D, value: 0x01)         // INC's result clears the mask
+            cia.tick()
+            XCTAssertEqual(cia.interruptActive, !writeInFlagClock)
+            XCTAssertEqual(cia.debugRegisterValue(0x0D), writeInFlagClock ? 0x01 : 0x81)
+        }
+    }
+
     func testCPUStoreThenCounterReadObservesDelayedStartAndForceLoad() {
         for profile: MachineProfile in [.palC64, .ntscC64] {
             for control: UInt8 in [1, 0x11] {
