@@ -4,7 +4,7 @@ A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, ru
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
 
-Latest packaged macOS release: [Swift64 0.4.3](https://github.com/peercom/swift64/releases/tag/v0.4.3). ROMs and commercial media are not included.
+Latest packaged macOS release: [Swift64 0.5.0](https://github.com/peercom/swift64/releases/tag/v0.5.0). ROMs and commercial media are not included.
 
 ## Status
 
@@ -26,7 +26,7 @@ Latest packaged macOS release: [Swift64 0.4.3](https://github.com/peercom/swift6
 | 6502 CPU | Phase 2 complete: cycle-stepped, 222 opcodes including undocumented, RDY/SO/interrupt edge coverage, decimal edge coverage, and opt-in public conformance runners |
 | VIC-II | PAL/NTSC beam sampling, clocked graphics counters/color latches, active/inactive sprite fetches and shifters, phased register effects, shared-bus and Ultimax ROMH fetches, bad-line and sprite BA/AEC phases, raster/collision IRQs, and software light-pen/timer synchronization; 144 of 146 public programs pass, including IRQ acknowledgement, sprite-X/reload and cycle-stealing checks, and 135 exact visual fixtures for cartridge mapping, FLD/line-crunch/Blackmail FLI, late display entry and screen/color alignment, text/bitmap open borders, side-border sprites, sprite-register splits, PAL mode splits, sprite crunch and raster IRQ holdoff, and PAL/NTSC display-enable boundaries, DMA-delay scrolling, sprite enable/expansion, and graphics fetches. Two mid-line graphics-mode comparisons still fail; broader game/demo and chip-revision validation remain open |
 | SID | 3 voices with 6581/8580 model selection, fast/compatibility modes, ADSR delay/exponential behavior, sync/ring/noise, model-aware combined waveform approximations, OSC3/ENV3/POT readback, data-bus latch behavior, audio signatures, and a bounded routed filter/output-stage foundation |
-| CIA 1 & 2 | Pipelined timer start/stop/reload, CNT and cascaded counting, latched interrupts with CPU IRQ/NMI wiring, keyboard matrix, joystick |
+| CIA 1 & 2 | Pipelined timer start/stop/reload, CNT and cascaded counting, serial shift register, latched interrupts with CPU IRQ/NMI wiring, selectable 6526 (C64) or 6526A/8521 (C64C) revision, keyboard matrix, joystick; 119 of 143 public CIA programs pass, with only TOD cases open |
 | Memory | Full ROM banking (BASIC/Kernal/Char ROM, I/O) |
 | Disk Drive | D64/G64 via Kernal traps, read-only raw and compressed NIBTOOLS NIB/NBZ plus first-stage P64 import for the true-drive path, high-level D64 PRG SAVE with exportable modified image bytes, plus true-drive 1541 read path and first-stage low-level GCR write-head/erase plumbing with IEC/VIA/GCR emulation |
 | Tape | T64 and TAP container formats, raw TAP pulse playback, stock CBM TAP decode diagnostics, cassette signal/motor/sense plumbing, virtual T64 SAVE output, and TAP/T64 export surfaces |

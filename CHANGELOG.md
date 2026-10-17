@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-10-17
 
 - Added warp mode (toolbar, Emulation menu, Cmd+Shift+W). The emulation thread drops frame pacing and the speaker is muted; leaving warp discards the stale audio queue and refills before playback resumes. The status bar and inspector show the current speed.
 - Added game controller support through the GameController framework. The first controller follows the joystick routing preference, a second controller takes the other port; D-pad or left stick moves and A/B or the shoulder buttons fire. Controller and keyboard joystick state are merged, so either works alone. Connected controllers are listed in Settings > General.
 - Added selectable VIC palettes in Settings > Display: Pepto (C64 Wiki, the previous fixed table), Pepto PAL (VICE), and Colodore, with a swatch preview. The palette swaps between emulated frames so VIC rendering never reads a half-updated table.
 - Added regressions for merged joystick ports reaching CIA1, muted-speaker silence and resume, and palette presets reaching VIC output. No VIC, CIA, SID synthesis, or drive timing changes are included.
+- Added the opt-in public CIA conformance runner (143 VICE test programs), then fixed five CIA defects it found: serial shift register timing, ICR state around timer underflow, timer reload from a zero counter, interrupt acknowledge for indexed and read-modify-write ICR reads, and TOD hour/digit counting. The scoreboard went from 53 to 102 of 143 with the VIC runner unchanged at 144 of 146.
+- Added a selectable CIA revision: C64 profiles emulate the 6526, C64C profiles the 8521 (6526A behaviour), with an override in Settings > General. The 6526A asserts a timer interrupt in the flag's own clock and keeps a Timer B flag raised during an ICR read. The runner now applies the upstream old/new tag per program; the CIA scoreboard is 119 of 143, with only TOD programs left failing.
 
 ## 0.4.3 - 2026-10-16
 
