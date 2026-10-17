@@ -663,54 +663,65 @@ public final class CIA {
         incrementTODTenth()
     }
 
+    // The TOD digits are binary counters whose carries come from comparing
+    // the digit value (public `fix-*` programs): a ones digit carries at 9,
+    // the seconds and minutes tens digit at 5, and other values count up
+    // through their width and wrap without carrying.
     func incrementTODTenth() {
-        todTenths &+= 1
-        if todTenths < 10 {
-            checkTODAlarm()
-            return
+        if todTenths == 9 {
+            todTenths = 0
+            incrementTODSeconds()
+        } else {
+            todTenths = (todTenths &+ 1) & 0x0F
         }
-
-        todTenths = 0
-        incrementTODSeconds()
         checkTODAlarm()
     }
 
     func incrementTODSeconds() {
-        todSeconds = incrementBCD(todSeconds, wrappingAt: 0x60)
-        if todSeconds == 0 {
+        if let next = incrementSexagesimal(todSeconds) {
+            todSeconds = next
+        } else {
+            todSeconds = 0
             incrementTODMinutes()
         }
     }
 
     func incrementTODMinutes() {
-        todMinutes = incrementBCD(todMinutes, wrappingAt: 0x60)
-        if todMinutes == 0 {
+        if let next = incrementSexagesimal(todMinutes) {
+            todMinutes = next
+        } else {
+            todMinutes = 0
             incrementTODHours()
         }
     }
 
+    /// Seconds and minutes: a 4-bit ones digit carrying at 9 into a 3-bit
+    /// tens digit that wraps to 0 (with carry out) only from 5.
+    func incrementSexagesimal(_ value: UInt8) -> UInt8? {
+        let ones = value & 0x0F
+        let tens = (value >> 4) & 0x07
+        if ones != 9 {
+            return (tens << 4) | ((ones &+ 1) & 0x0F)
+        }
+        if tens == 5 { return nil }
+        return (((tens &+ 1) & 0x07) << 4)
+    }
+
+    /// Hours: 11 becomes 12 and flips AM/PM, 12 becomes 1, the ones digit
+    /// carries at 9 only while the tens digit is 0 (`hour-test`, `fix-hour`).
     func incrementTODHours() {
         let pm = todHours & 0x80
         let hour = todHours & 0x1F
-
         switch hour {
-        case 0x00:
-            todHours = pm | 0x01
         case 0x11:
             todHours = (pm ^ 0x80) | 0x12
         case 0x12:
             todHours = pm | 0x01
+        case 0x09:
+            todHours = pm | 0x10
         default:
-            todHours = pm | incrementBCD(hour == 0 ? 1 : hour, wrappingAt: 0x13)
+            todHours = pm | (hour & 0x10) | ((hour &+ 1) & 0x0F)
         }
-    }
-
-    func incrementBCD(_ value: UInt8, wrappingAt limit: UInt8) -> UInt8 {
-        var next = value &+ 1
-        if next & 0x0F >= 0x0A {
-            next = (next & 0xF0) &+ 0x10
-        }
-        return next >= limit ? 0 : next
     }
 
     func checkTODAlarm() {
@@ -888,9 +899,13 @@ public final class CIA {
             if todWriteAlarm { todAlarmMinutes = value & 0x7F }
             else { todMinutes = value & 0x7F }
         case 0x0B:
-            if todWriteAlarm { todAlarmHours = value & 0x9F }
+            // Writing hour 12 flips AM/PM (`hour-test`, `ampmtest`): $12
+            // reads back as $92 and $92 as $12.
+            var hours = value & 0x9F
+            if hours & 0x1F == 0x12 { hours ^= 0x80 }
+            if todWriteAlarm { todAlarmHours = hours }
             else {
-                todHours = value & 0x9F
+                todHours = hours
                 todStoppedForWrite = true
             }
 

@@ -429,6 +429,54 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(irqStates, [true, false])
     }
 
+    func testTODHourWriteOfTwelveFlipsAMPM() {
+        // `hour-test`: writing $12 stores $92 and $92 stores $12; other
+        // hours are stored with bits 5 and 6 dropped.
+        let cia = CIA(isCIA1: false)
+        for (written, stored): (UInt8, UInt8) in [(0x12, 0x92), (0x92, 0x12), (0x11, 0x11), (0x91, 0x91), (0x72, 0x12 ^ 0x80), (0x3F, 0x1F)] {
+            cia.writeRegister(0x0B, value: written)
+            XCTAssertEqual(cia.readRegister(0x0B), stored, String(format: "written $%02X", written))
+            _ = cia.readRegister(0x08)
+        }
+        cia.writeRegister(0x0F, value: 0x80)
+        cia.writeRegister(0x0B, value: 0x12)
+        XCTAssertEqual(cia.todAlarmHours, 0x92)
+    }
+
+    func testTODDigitsCountAsBinaryWithCompareCarries() {
+        // Rows of the public `fix-hour`/`fix-sec`/`fix-tsec` programs: the
+        // value after the next carry into the register.
+        let hourCases: [(UInt8, UInt8)] = [(0x00, 0x01), (0x09, 0x10), (0x0A, 0x0B), (0x0F, 0x00), (0x10, 0x11), (0x11, 0x92), (0x92, 0x81), (0x13, 0x14), (0x19, 0x1A), (0x1F, 0x10), (0x91, 0x12)]
+        for (before, after) in hourCases {
+            let cia = CIA(isCIA1: false)
+            cia.todHours = before
+            cia.todMinutes = 0x59
+            cia.todSeconds = 0x59
+            cia.todTenths = 9
+            cia.incrementTODTenth()
+            XCTAssertEqual(cia.todHours, after, String(format: "hour $%02X", before))
+            XCTAssertEqual(cia.todMinutes, 0)
+            XCTAssertEqual(cia.todSeconds, 0)
+        }
+        let secondCases: [(UInt8, UInt8, UInt8)] = [(0x00, 0x01, 0), (0x09, 0x10, 0), (0x0A, 0x0B, 0), (0x0F, 0x00, 0), (0x59, 0x00, 1), (0x69, 0x70, 0), (0x79, 0x00, 0), (0x5F, 0x50, 0), (0x7F, 0x70, 0)]
+        for (before, after, minuteCarry) in secondCases {
+            let cia = CIA(isCIA1: false)
+            cia.todSeconds = before
+            cia.todTenths = 9
+            cia.incrementTODTenth()
+            XCTAssertEqual(cia.todSeconds, after, String(format: "seconds $%02X", before))
+            XCTAssertEqual(cia.todMinutes, minuteCarry, String(format: "seconds $%02X", before))
+        }
+        let tenthCases: [(UInt8, UInt8, UInt8)] = [(0, 1, 0), (9, 0, 1), (0x0A, 0x0B, 0), (0x0F, 0x00, 0)]
+        for (before, after, secondCarry) in tenthCases {
+            let cia = CIA(isCIA1: false)
+            cia.todTenths = before
+            cia.incrementTODTenth()
+            XCTAssertEqual(cia.todTenths, after, "tenths \(before)")
+            XCTAssertEqual(cia.todSeconds, secondCarry, "tenths \(before)")
+        }
+    }
+
     func testTODFrequencySelectionUsesControlRegisterBit7() {
         let cia = CIA(isCIA1: true)
         cia.configureTOD(fiftyHzCyclesPerTenth: 5, sixtyHzCyclesPerTenth: 6, selectedCyclesPerTenth: 5)
