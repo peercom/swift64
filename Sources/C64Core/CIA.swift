@@ -70,11 +70,32 @@ public final class CIA {
         var forceLoadNext = false
         var forceLoadRequested = false
         var oneShotPrevious = false
+        var reloadedLastClock = false
 
         mutating func clock(counter: inout UInt16, latch: UInt16,
                             control: inout UInt8, input: Bool) -> Bool {
-            if countNow { counter &-= 1 }
-            let underflow = counter == 0 && countNext
+            var underflow = false
+            var swallowNextCount = forceLoadNext
+            if countNow && counter == 0 {
+                // A count arriving at a counter that is already zero is
+                // itself the underflow: the reload takes its place and the
+                // following count is not swallowed (`reload0`: a latch of 0
+                // then a new latch counts from the cycle after the reload).
+                underflow = true
+            } else {
+                let decremented = countNow
+                if countNow { counter &-= 1 }
+                if counter == 0 && countNext {
+                    // The counter would pass zero on the next count: reload
+                    // now instead and swallow that count (the timer never
+                    // reads 0 and holds the latch for one cycle). A counter
+                    // that was loaded with zero in the previous clock
+                    // reloads without taking the count away, so a run with
+                    // latch 0 keeps counting into a new latch (`reload0`).
+                    underflow = true
+                    if decremented || !reloadedLastClock { swallowNextCount = true }
+                }
+            }
             let reload = forceLoadNext || underflow
             if reload { counter = latch }
             if underflow && (control & 0x08 != 0 || oneShotPrevious) {
@@ -82,7 +103,8 @@ public final class CIA {
             }
             // A reload removes the next count, not the continuously arriving
             // clock input. START/STOP and source changes cross both stages.
-            countNow = reload ? false : countNext
+            countNow = swallowNextCount ? false : countNext
+            reloadedLastClock = reload
             countNext = input && control & 0x01 != 0
             forceLoadNext = forceLoadRequested
             forceLoadRequested = false

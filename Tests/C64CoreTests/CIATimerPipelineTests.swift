@@ -162,6 +162,33 @@ final class CIATimerPipelineTests: XCTestCase {
         }
     }
 
+    func testNewLatchAfterZeroLatchRunCountsFromTheCycleAfterTheReload() {
+        // `reload0`: timer loaded with 0 and started with force load
+        // underflows every cycle; a new latch written during that run is
+        // loaded on the underflow of the write cycle and counts down from
+        // the very next cycle (a4 = b4 - 5 for the write/read spacing of
+        // the test), whereas a normal underflow reload holds for a cycle.
+        for timer in 0..<2 {
+            for (newLatch, expected) in [(UInt8(0x14), UInt8(0x0F)), (6, 1), (5, 0), (4, 4), (3, 2), (2, 0), (1, 0), (0, 0)] {
+                let cia = CIA(isCIA1: true)
+                let low = UInt16(4 + 2 * timer), control = UInt16(0x0E + timer)
+                cia.writeRegister(low, value: 0)
+                cia.writeRegister(low + 1, value: 0)
+                cia.writeRegister(control, value: 0x10)
+                for _ in 0..<4 { cia.tick() }
+                cia.writeRegister(control, value: 0x11)          // cycle C
+                for _ in 0..<6 { cia.tick() }
+                cia.writeRegister(low, value: newLatch)          // C+6
+                for _ in 0..<4 { cia.tick() }
+                cia.writeRegister(control, value: 0x00)          // C+10 stop
+                for _ in 0..<4 { cia.tick() }
+                let counter = timer == 0 ? cia.timerA : cia.timerB   // read at C+14
+                XCTAssertEqual(UInt8(counter & 0xFF), expected, "timer \(timer) latch \(newLatch)")
+                XCTAssertEqual(cia.debugRegisterValue(0x0D) & 0x03, UInt8(1 << timer), "timer \(timer) latch \(newLatch)")
+            }
+        }
+    }
+
     func testCPUStoreThenCounterReadObservesDelayedStartAndForceLoad() {
         for profile: MachineProfile in [.palC64, .ntscC64] {
             for control: UInt8 in [1, 0x11] {
