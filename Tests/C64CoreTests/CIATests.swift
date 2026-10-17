@@ -672,7 +672,7 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(cia.readRegister(0x0C), 0b1010_0101)
     }
 
-    func testSerialOutputShiftsMSBFirstOnTimerAUnderflowsAndRaisesInterrupt() {
+    func testSerialOutputShiftsMSBFirstOnEveryOtherTimerAUnderflow() {
         let cia = CIA(isCIA1: true)
 
         cia.writeRegister(0x04, value: 0x01)
@@ -681,50 +681,38 @@ final class CIATests: XCTestCase {
         cia.writeRegister(0x0E, value: 0x41)
         cia.writeRegister(0x0C, value: 0b1010_0101)
 
+        // A bit is placed on SP on the first underflow and then on every
+        // second one; the underflows in between are the rising CNT edges.
         var shiftedBits: [Bool] = []
-        for _ in 0..<7 {
+        for underflow in 0..<16 {
             tickTimerAUnderflow(cia)
-            shiftedBits.append(cia.spLineHigh)
-            XCTAssertFalse(cia.interruptActive)
+            if underflow % 2 == 0 { shiftedBits.append(cia.spLineHigh) }
+            XCTAssertFalse(cia.interruptActive, "underflow \(underflow)")
         }
-
-        tickTimerAUnderflow(cia)
-        shiftedBits.append(cia.spLineHigh)
-
         XCTAssertEqual(shiftedBits, [true, false, true, false, false, true, false, true])
-        XCTAssertTrue(cia.interruptActive)
-        XCTAssertEqual(cia.readRegister(0x0D), 0x89)
-        XCTAssertFalse(cia.interruptActive)
     }
 
-    func testSerialOutputWrittenBeforeOutputModeStartsWhenModeEnabled() {
+    func testSerialOutputWrittenBeforeOutputModeIsTakenOnFirstUnderflowAfterEnable() {
         let cia = CIA(isCIA1: true)
 
         cia.writeRegister(0x04, value: 0x01)
         cia.writeRegister(0x05, value: 0x00)
-        cia.writeRegister(0x0D, value: 0x88)
         cia.writeRegister(0x0C, value: 0b1100_0011)
-
+        cia.writeRegister(0x0E, value: 0x01)
+        for _ in 0..<10 { cia.tick() }
         XCTAssertEqual(cia.serialOutputBitsRemaining, 0)
+        XCTAssertTrue(cia.serialOutputPending)
 
         cia.writeRegister(0x0E, value: 0x41)
-
-        XCTAssertEqual(cia.serialOutputBitsRemaining, 8)
+        XCTAssertEqual(cia.serialOutputBitsRemaining, 0, "the shifter loads on the next clock, not on the mode write")
 
         var shiftedBits: [Bool] = []
-        for _ in 0..<7 {
+        for underflow in 0..<16 {
             tickTimerAUnderflow(cia)
-            shiftedBits.append(cia.spLineHigh)
-            XCTAssertFalse(cia.interruptActive)
+            if underflow % 2 == 0 { shiftedBits.append(cia.spLineHigh) }
         }
-
-        tickTimerAUnderflow(cia)
-        shiftedBits.append(cia.spLineHigh)
-
         XCTAssertEqual(shiftedBits, [true, true, false, false, false, false, true, true])
-        XCTAssertTrue(cia.interruptActive)
-        XCTAssertEqual(cia.readRegister(0x0D), 0x89)
-        XCTAssertFalse(cia.interruptActive)
+        XCTAssertFalse(cia.serialOutputPending)
     }
 
     func testSerialOutputCallbackReportsEveryShiftedSPBit() {
@@ -736,18 +724,163 @@ final class CIATests: XCTestCase {
 
         cia.writeRegister(0x04, value: 0x01)
         cia.writeRegister(0x05, value: 0x00)
-        cia.writeRegister(0x0D, value: 0x88)
         cia.writeRegister(0x0E, value: 0x41)
         cia.writeRegister(0x0C, value: 0b1100_0011)
 
-        for _ in 0..<8 {
+        for _ in 0..<16 {
             tickTimerAUnderflow(cia)
         }
 
         XCTAssertEqual(outputBits, [true, true, false, false, false, false, true, true])
         XCTAssertEqual(clockPulses, 8)
         XCTAssertEqual(cia.spLineHigh, true)
-        XCTAssertTrue(cia.interruptActive)
+    }
+
+    // Timing measured with the public `cia-sdr-init`/`cia-sdr-delay` programs
+    // and the `cia-sdr-icr` per-cycle references: with Timer A latch L the
+    // n-th underflow is L + 2 + (n - 1)(L + 1) clocks after the start write,
+    // and the SDR flag follows the 15th underflow (the eighth output edge)
+    // four clocks later.
+    func testSerialOutputFlagFollowsFifteenthUnderflowByFourClocks() {
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x04, value: 50)
+        cia.writeRegister(0x05, value: 0)
+        cia.writeRegister(0x0E, value: 0x51)
+        cia.writeRegister(0x0C, value: 0x55)
+
+        var timerAFlagClock: Int?
+        var serialFlagClock: Int?
+        for clock in 1...800 {
+            cia.tick()
+            if timerAFlagClock == nil && cia.debugRegisterValue(0x0D) & 0x01 != 0 { timerAFlagClock = clock }
+            if serialFlagClock == nil && cia.debugRegisterValue(0x0D) & 0x08 != 0 { serialFlagClock = clock }
+        }
+        // Clock k here is the k-th tick after the start write, so the first
+        // underflow (52 clocks after the write) lands on clock 53.
+        XCTAssertEqual(timerAFlagClock, 53)
+        XCTAssertEqual(serialFlagClock, 53 + 14 * 51 + 4)
+    }
+
+    func testSerialOutputFlagForLatchesBelowThreeStartsOnTheSecondUnderflow() {
+        // The byte reaches the shifter one clock after the SDR write, so
+        // with latches 1 and 2 the first underflow passes before it and the
+        // flag lands one period later than the 15-underflow rule suggests.
+        // As in the programs, the SDR is written four clocks after CRA.
+        for (latch, expected) in [(UInt8(1), 3 + 1 + 15 * 2 + 4), (2, 3 + 2 + 15 * 3 + 4), (3, 3 + 3 + 14 * 4 + 4), (4, 3 + 4 + 14 * 5 + 4)] {
+            let cia = CIA(isCIA1: false)
+            cia.writeRegister(0x04, value: latch)
+            cia.writeRegister(0x05, value: 0)
+            cia.writeRegister(0x0E, value: 0x51)
+            for _ in 0..<4 { cia.tick() }
+            cia.writeRegister(0x0C, value: 0x55)
+            var serialFlagClock: Int?
+            for clock in 5...200 {
+                cia.tick()
+                if serialFlagClock == nil && cia.debugRegisterValue(0x0D) & 0x08 != 0 { serialFlagClock = clock }
+            }
+            XCTAssertEqual(serialFlagClock, expected, "latch \(latch)")
+        }
+    }
+
+    func testSerialOutputQueuedByteStartsOnTheClosingEdgeOfThePreviousByte() {
+        // `cia-sdr-load`: two bytes written back to back are sent without a
+        // gap; the second flag is 15 underflows after the first byte's
+        // closing edge, plus the same four clocks.
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x04, value: 50)
+        cia.writeRegister(0x05, value: 0)
+        cia.writeRegister(0x0E, value: 0x51)
+        cia.writeRegister(0x0C, value: 0xAA)
+        cia.tick()
+        cia.writeRegister(0x0C, value: 0x55)
+
+        var flagClocks: [Int] = []
+        for clock in 2...1600 {
+            cia.tick()
+            if cia.debugRegisterValue(0x0D) & 0x08 != 0 {
+                flagClocks.append(clock)
+                _ = cia.readRegister(0x0D)
+            }
+        }
+        let firstFlag = 53 + 14 * 51 + 4
+        XCTAssertEqual(flagClocks, [firstFlag, 53 + 15 * 51 + 14 * 51 + 4])
+    }
+
+    func testSerialOutputZeroLatchShiftsOnlyOnceUntilModeIsSwitched() {
+        // Underflows every cycle never drop the underflow signal, so only the
+        // first one is a shift edge: no byte completes, but the shifter has
+        // started with CNT low, so switching the mode off and on raises the
+        // flag each time (`cia-sdr-icr-0` first screen 1, second screen 9).
+        let cia = CIA(isCIA1: false)
+        cia.writeRegister(0x04, value: 0)
+        cia.writeRegister(0x05, value: 0)
+        cia.writeRegister(0x0E, value: 0x51)
+        cia.writeRegister(0x0C, value: 0x55)
+        for _ in 0..<200 {
+            cia.tick()
+            XCTAssertEqual(cia.debugRegisterValue(0x0D) & 0x08, 0)
+        }
+        XCTAssertEqual(cia.readRegister(0x0D) & 0x01, 0x01)
+        cia.writeRegister(0x0E, value: 0x00)
+        XCTAssertEqual(cia.readRegister(0x0D) & 0x08, 0x08)
+        cia.writeRegister(0x0E, value: 0x51)
+        XCTAssertEqual(cia.readRegister(0x0D) & 0x08, 0x08)
+    }
+
+    func testSerialOutputAbortedByModeSwitchRaisesFlagOnceShifterStarted() {
+        // `cia-sdr-icr-test2`: clearing CRA bit 6 mid-byte raises the flag,
+        // but only from four clocks after the first bit was placed on SP.
+        for (clocksAfterFirstEdge, expectFlag) in [(0, false), (3, false), (4, true), (60, true)] {
+            let cia = CIA(isCIA1: false)
+            cia.writeRegister(0x04, value: 39)
+            cia.writeRegister(0x05, value: 0)
+            cia.writeRegister(0x0E, value: 0x51)
+            cia.writeRegister(0x0C, value: 0x55)
+            // The first output edge is the 42nd clock after the start write.
+            for _ in 0..<(42 + clocksAfterFirstEdge) { cia.tick() }
+            _ = cia.readRegister(0x0D)
+            cia.writeRegister(0x0E, value: 0x00)
+            XCTAssertEqual(cia.debugRegisterValue(0x0D) & 0x08 != 0, expectFlag, "\(clocksAfterFirstEdge) clocks")
+        }
+
+        // An idle shifter is not affected.
+        let idle = CIA(isCIA1: false)
+        idle.writeRegister(0x04, value: 39)
+        idle.writeRegister(0x05, value: 0)
+        idle.writeRegister(0x0E, value: 0x51)
+        for _ in 0..<100 { idle.tick() }
+        idle.writeRegister(0x0E, value: 0x00)
+        XCTAssertEqual(idle.debugRegisterValue(0x0D) & 0x08, 0)
+    }
+
+    func testSerialOutputReenableRaisesFlagWhenCNTWasFrozenLow() {
+        // `cia-sdr-icr` second screen: after an output edge CNT is seen low
+        // from the first clock on, with a one-clock bounce high on the
+        // second; after a rising edge it stays low for three clocks.
+        let outputEdgeCases: [(Int, Bool)] = [(0, false), (1, true), (2, false), (3, true), (10, true), (39, true)]
+        let risingEdgeCases: [(Int, Bool)] = [(0, true), (3, true), (4, false), (20, false)]
+        for (afterRisingEdge, cases) in [(false, outputEdgeCases), (true, risingEdgeCases)] {
+            for (clocks, expectFlag) in cases {
+                let cia = CIA(isCIA1: false)
+                cia.writeRegister(0x04, value: 39)
+                cia.writeRegister(0x05, value: 0)
+                cia.writeRegister(0x0E, value: 0x51)
+                cia.writeRegister(0x0C, value: 0x55)
+                // First output edge is the 42nd clock, the rising edge 40 later.
+                for _ in 0..<(42 + (afterRisingEdge ? 40 : 0) + clocks) { cia.tick() }
+                cia.writeRegister(0x0E, value: 0x00)
+                for _ in 0..<50 { cia.tick() }
+                _ = cia.readRegister(0x0D)
+                cia.writeRegister(0x0E, value: 0x51)
+                XCTAssertEqual(cia.debugRegisterValue(0x0D) & 0x08 != 0, expectFlag,
+                               "\(clocks) clocks after \(afterRisingEdge ? "rising" : "output") edge")
+                // The restart drives CNT high: a second enable does nothing.
+                _ = cia.readRegister(0x0D)
+                cia.writeRegister(0x0E, value: 0x00)
+                cia.writeRegister(0x0E, value: 0x51)
+                XCTAssertEqual(cia.debugRegisterValue(0x0D) & 0x08, 0)
+            }
+        }
     }
 
     private func tickTODTenth(_ cia: CIA) {

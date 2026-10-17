@@ -92,6 +92,7 @@ public final class CIA {
     }
 
     private var timerAPipeline = TimerPipeline()
+    private var timerAUnderflowedLastTick = false
     private var timerBPipeline = TimerPipeline()
     private var cntPulsePending = false
     private var cntPulseSampled = false
@@ -180,9 +181,32 @@ public final class CIA {
     public private(set) var spLineHigh: Bool = true
     var serialInputShift: UInt8 = 0
     var serialInputBitsReceived: Int = 0
+
+    // Output mode (CRA bit 6). Timer A underflows alternate between output
+    // edges (a bit is placed on SP, CNT falls) and rising CNT edges; a byte
+    // takes 15 underflows and the SDR flag follows the last output edge after
+    // a short pipeline. Measured with the public `cia-sdr-*` programs.
+    /// Shift register contents while a byte is being sent.
     var serialOutputShift: UInt8 = 0
+    /// Bits still to be placed on SP; 0 means the shifter is idle.
     var serialOutputBitsRemaining: Int = 0
+    /// SDR holds a byte the shifter has not taken yet.
     var serialOutputPending: Bool = false
+    /// SDR written into an idle shifter: loaded on the next clock.
+    var serialOutputLoadPending: Bool = false
+    /// The loaded byte has not had its first edge yet.
+    var serialOutputFreshlyLoaded: Bool = false
+    /// The next underflow places a bit on SP (otherwise it is a rising CNT edge).
+    var serialOutputNextEdgeIsOutput: Bool = true
+    /// The shifter has been busy long enough for a mode switch to abort a byte.
+    var serialOutputStarted: Bool = false
+    var serialOutputStartedCountdown: Int = 0
+    /// Ticks until the transfer-complete flag is raised (0 = none pending).
+    var serialOutputFlagCountdown: Int = 0
+    /// Internal CNT level in output mode, with its pipeline of pending changes.
+    var serialCNTLow: Bool = false
+    var serialCNTLowCountdowns: [Int] = []
+    var serialCNTHighCountdowns: [Int] = []
 
     // MARK: - Init
 
@@ -211,6 +235,7 @@ public final class CIA {
         timerBPulseCyclesRemaining = 0
         timerAPipeline = TimerPipeline()
         timerBPipeline = TimerPipeline()
+        timerAUnderflowedLastTick = false
         cntPulsePending = false
         cntPulseSampled = false
         pendingTimerInterrupts = 0
@@ -250,6 +275,15 @@ public final class CIA {
         serialOutputShift = 0
         serialOutputBitsRemaining = 0
         serialOutputPending = false
+        serialOutputLoadPending = false
+        serialOutputFreshlyLoaded = false
+        serialOutputNextEdgeIsOutput = true
+        serialOutputStarted = false
+        serialOutputStartedCountdown = 0
+        serialOutputFlagCountdown = 0
+        serialCNTLow = false
+        serialCNTLowCountdowns = []
+        serialCNTHighCountdowns = []
 
         onPortAWrite?(portA)
         notifyPortBPinsChanged()
@@ -275,11 +309,16 @@ public final class CIA {
             pendingTimerInterrupts = 0
             checkInterrupt()
         }
+        clockSerialOutputPipeline()
 
         let underflowA = timerAPipeline.clock(counter: &timerA, latch: timerALatch,
                                              control: &timerAControl,
                                              input: timerAControl & 0x20 == 0 || cntPulseSampled)
         if underflowA { timerAUnderflow() }
+        timerAUnderflowedLastTick = underflowA
+        // A byte written into an idle shifter is taken after this clock's
+        // underflow, so an underflow in the write cycle is not its edge.
+        if serialOutputLoadPending { loadSerialOutputShifter() }
         let inputB: Bool
         switch timerBControl & 0x60 {
         case 0x00: inputB = true
@@ -413,19 +452,123 @@ public final class CIA {
         }
     }
 
+    /// Timer A underflow in output mode: an output edge or a rising CNT edge.
     func shiftSerialOutputBit() {
-        guard serialOutputMode, serialOutputBitsRemaining > 0 else { return }
-
-        onSerialClockPulse?()
-        spLineHigh = serialOutputShift & 0x80 != 0
-        onSerialOutputBit?(spLineHigh)
-        serialOutputShift <<= 1
-        serialOutputBitsRemaining -= 1
+        guard serialOutputMode else { return }
+        // The shifter clocks on the edge of the underflow signal: with a
+        // latch of 0 the signal never drops, so after the first edge of a
+        // freshly loaded byte no further underflow of such a run shifts
+        // (`cia-sdr-icr` latch 0 references).
+        guard !timerAUnderflowedLastTick || serialOutputFreshlyLoaded else { return }
 
         if serialOutputBitsRemaining == 0 {
-            serialOutputPending = false
-            interruptData |= 0x08
-            checkInterrupt()
+            // A byte waiting behind a busy shifter starts on the underflow
+            // after the byte completes, even on the closing rising edge.
+            if serialOutputPending {
+                loadSerialOutputShifter()
+            } else if serialOutputNextEdgeIsOutput {
+                return
+            }
+        }
+        serialOutputFreshlyLoaded = false
+
+        serialOutputEdge()
+    }
+
+    /// One CNT edge of the output shifter: a bit out, or the rising edge.
+    func serialOutputEdge() {
+        if serialOutputNextEdgeIsOutput {
+            onSerialClockPulse?()
+            spLineHigh = serialOutputShift & 0x80 != 0
+            onSerialOutputBit?(spLineHigh)
+            serialOutputShift <<= 1
+            serialOutputBitsRemaining -= 1
+            if !serialOutputStarted && serialOutputStartedCountdown == 0 {
+                serialOutputStartedCountdown = 4
+            }
+            if serialOutputBitsRemaining == 0 {
+                // Last bit out: the flag follows four cycles later and the
+                // CNT level is only seen low from the third cycle on.
+                serialOutputFlagCountdown = 4
+                serialCNTLowCountdowns.append(3)
+            } else {
+                // CNT falls after one cycle, with a one-cycle bounce high.
+                serialCNTLowCountdowns.append(1)
+                serialCNTHighCountdowns.append(2)
+                serialCNTLowCountdowns.append(3)
+            }
+        } else {
+            // Rising edge.
+            serialCNTHighCountdowns.append(4)
+        }
+        serialOutputNextEdgeIsOutput.toggle()
+    }
+
+    func loadSerialOutputShifter() {
+        serialOutputShift = serialData
+        serialOutputPending = false
+        serialOutputLoadPending = false
+        serialOutputBitsRemaining = 8
+        serialOutputNextEdgeIsOutput = true
+        serialOutputFreshlyLoaded = true
+    }
+
+    /// One system clock of the output shifter's delayed effects.
+    func clockSerialOutputPipeline() {
+        if serialOutputStartedCountdown > 0 {
+            serialOutputStartedCountdown -= 1
+            if serialOutputStartedCountdown == 0 { serialOutputStarted = true }
+        }
+        if serialOutputFlagCountdown > 0 {
+            serialOutputFlagCountdown -= 1
+            if serialOutputFlagCountdown == 0 { raiseSerialFlag() }
+        }
+        if !serialCNTHighCountdowns.isEmpty {
+            var due = false
+            for index in serialCNTHighCountdowns.indices {
+                serialCNTHighCountdowns[index] -= 1
+                if serialCNTHighCountdowns[index] == 0 { due = true }
+            }
+            serialCNTHighCountdowns.removeAll { $0 == 0 }
+            if due { serialCNTLow = false }
+        }
+        if !serialCNTLowCountdowns.isEmpty {
+            var due = false
+            for index in serialCNTLowCountdowns.indices {
+                serialCNTLowCountdowns[index] -= 1
+                if serialCNTLowCountdowns[index] == 0 { due = true }
+            }
+            serialCNTLowCountdowns.removeAll { $0 == 0 }
+            if due { serialCNTLow = true }
+        }
+    }
+
+    func raiseSerialFlag() {
+        interruptData |= 0x08
+        checkInterrupt()
+    }
+
+    /// CRA bit 6 cleared: a byte in flight is abandoned, which raises the
+    /// flag once the shifter had started, and the CNT level freezes.
+    func serialOutputModeDisabled() {
+        if serialOutputBitsRemaining > 0 && serialOutputStarted {
+            raiseSerialFlag()
+        }
+        serialOutputBitsRemaining = 0
+        serialOutputFreshlyLoaded = false
+        serialOutputStarted = false
+        serialOutputStartedCountdown = 0
+        serialOutputNextEdgeIsOutput = true
+        serialCNTLowCountdowns = []
+        serialCNTHighCountdowns = []
+    }
+
+    /// CRA bit 6 set: re-enabling output with CNT frozen low raises the flag
+    /// and drives CNT high again.
+    func serialOutputModeEnabled() {
+        if serialCNTLow {
+            raiseSerialFlag()
+            serialCNTLow = false
         }
     }
 
@@ -681,9 +824,15 @@ public final class CIA {
 
         case 0x0C:
             serialData = value
-            serialOutputShift = value
-            serialOutputPending = true
-            serialOutputBitsRemaining = serialOutputMode ? 8 : 0
+            if serialOutputMode && serialOutputBitsRemaining == 0 {
+                // An empty shifter takes the byte on the next clock; a
+                // second write while it is busy waits in the SDR
+                // (`cia-sdr-load`).
+                serialOutputLoadPending = true
+                serialOutputPending = false
+            } else {
+                serialOutputPending = true
+            }
 
         case 0x0D:
             // Interrupt control
@@ -701,16 +850,15 @@ public final class CIA {
             let forceLoad = value & 0x10 != 0
             let startRisingEdge = timerAControl & 0x01 == 0 && value & 0x01 != 0
             let serialOutputRisingEdge = timerAControl & 0x40 == 0 && value & 0x40 != 0
+            let serialOutputFallingEdge = timerAControl & 0x40 != 0 && value & 0x40 == 0
             timerAControl = value & ~0x10  // bit 4 is strobe only
             updateTODFrequencyFromControl()
             if startRisingEdge {
                 timerAOutputHigh = true
                 timerAPulseCyclesRemaining = 0
             }
-            if serialOutputRisingEdge && serialOutputPending {
-                serialOutputShift = serialData
-                serialOutputBitsRemaining = 8
-            }
+            if serialOutputFallingEdge { serialOutputModeDisabled() }
+            if serialOutputRisingEdge { serialOutputModeEnabled() }
             if forceLoad {
                 timerAPipeline.forceLoadRequested = true
                 timerAHighLatched = nil
