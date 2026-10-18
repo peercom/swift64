@@ -1277,3 +1277,16 @@ Recorded 2026-10-17 (development validation). `C64.saveState()` serializes the m
 - `testBootedTrueDriveMachineSnapshotContinuesIdentically` (skipped without local ROMs) boots BASIC with the compatibility true drive and a blank D64, types a PRINT, snapshots mid-instruction, and checks 300,000 further cycles match on both the C64 and the drive CPU.
 
 This is a format-level proof of restore fidelity on the covered subsystems, not a compatibility claim: a snapshot taken during a protected loader's custom timing has the same fidelity as the emulation itself. Snapshots are tied to the format version; there is no migration from earlier versions yet.
+
+## Milestone harness unit expectations
+
+### Realignment record: 2026-10-18
+
+Six `LocalDiskMatrixTests` cases (`testMilestoneResultLogRoundTripsPassedEntriesForResume`, `testMilestoneRunSummaryWritesAggregateJSON`, `testNamedMilestoneCanMatchCIARegisters`, `testNamedMilestoneCanMatchVICBusState`, `testNamedMilestoneCanMatchVICState`, `testNamedMilestoneRequiresVICBusState`) had been failing since the 0.4.0 VIC timing work (`9e6d1d2`) and the 0.4.3 CIA timer pipeline (`708eced`); the SID filter calibration found them already failing on its parent commit `9ad3717`. Each was checked against the chip model that the public runners validate, and in every case the core is right and the unit expectation had drifted, so only the expectations changed. No VIC, CIA or SID code was touched.
+
+- **Sprite pointer slot at raster cycle 0.** A fresh machine sits in raster cycle 0, which is hardware cycle 1, the p-access for sprite 3; pointer fetches run on every line whether or not sprite DMA is active (`VICSpriteFetchTests`, public sprite programs). The result-log and run-summary records therefore report `spritePointer(sprite:3)`, not `idle`.
+- **Matrix fetch column.** Matrix (c-)accesses occupy hardware cycles 15-54, raster cycles 14-53, with the g-access for the same column one cycle later in phi1 (`VICBeamTimingTests`, the public FLD/FLI images). After one tick from raster cycle 14 the harness reports cycle 15 as `badLineCharacterFetch(column:1)` with `displayData(column:0)`, and the executed cycle's trace holds the column 0 c-access (`$0400`, color RAM `$0000`), which the mismatch strings now spell out.
+- **Line-buffer base.** The first c-access of a matrix row latches VCBASE as the line-buffer base, so a bad line entered mid-row reports the current VCBASE (80), not a stale value.
+- **CIA timer start.** A 6526 start with force load reads old, latch, latch, latch − 1 over the first four cycles (`CIATimerPipelineTests.testControlWriteReadbackMatchesFirstFourHardwareCycles`, Lorenz's tables, `timerbasics`), so `$DC04` reaches `$33` in the fourth cycle; the milestone allows four cycles instead of one.
+
+Measured sequential Release run (`swift test -c release -j 2 --filter LocalDiskMatrixTests`): **111 tests, 6 opt-in skips (the six `...WhenEnabled` cases), 0 failures**. Before the change the same six cases failed with 15 assertions.
