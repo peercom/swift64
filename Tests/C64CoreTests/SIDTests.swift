@@ -892,8 +892,9 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(state.volumeFilter, 0)
         XCTAssertEqual(state.volume, 0)
         XCTAssertEqual(state.normalizedFilterCutoffValue, 0x07FF)
-        XCTAssertEqual(state.normalizedFilterCutoff, 0.183, accuracy: 0.000_001)
-        XCTAssertEqual(state.filterDamping, 0.775, accuracy: 0.000_001)
+        // FC $7FF on the 6581 is the published 18 kHz reference top; RES 15 is Q 1.7.
+        XCTAssertEqual(state.normalizedFilterCutoff, 2 * sin(.pi * 18_000 / sid.clockRate), accuracy: 0.000_001)
+        XCTAssertEqual(state.filterDamping, 1 / 1.7, accuracy: 0.000_001)
         XCTAssertFalse(state.voice1FilterEnabled)
         XCTAssertFalse(state.voice2FilterEnabled)
         XCTAssertFalse(state.voice3FilterEnabled)
@@ -2362,14 +2363,13 @@ final class SIDTests: XCTestCase {
         sid8580.model = .mos8580
         sid8580.accuracyMode = .compatibility
 
-        let shaped6581 = sid6581.applyOutputStage(input: 16_000)
-        let shaped8580 = sid8580.applyOutputStage(input: 16_000)
-
-        XCTAssertNotEqual(shaped6581, 16_000)
-        XCTAssertNotEqual(shaped8580, 16_000)
-        XCTAssertGreaterThan(shaped6581, 16_000)
-        XCTAssertLessThan(shaped8580, 16_000)
-        XCTAssertGreaterThan(shaped6581, shaped8580)
+        // The output buffer is linear inside the rails on both chips; the
+        // 6581's level-dependent behaviour lives in the filter, not here.
+        XCTAssertEqual(sid6581.applyOutputStage(input: 16_000), 16_000)
+        XCTAssertEqual(sid8580.applyOutputStage(input: 16_000), 16_000)
+        XCTAssertEqual(sid6581.applyOutputStage(input: -16_000), -16_000)
+        XCTAssertEqual(sid6581.applyOutputStage(input: 40_000), 32_767)
+        XCTAssertEqual(sid8580.applyOutputStage(input: -40_000), -32_768)
     }
 
     func testSIDAnalogCompatibilityProfilesAreModelSpecific() {
@@ -2379,12 +2379,14 @@ final class SIDTests: XCTestCase {
         let sid8580 = SID()
         sid8580.model = .mos8580
 
-        XCTAssertGreaterThan(sid6581.analogProfile.outputPositiveDrive, sid8580.analogProfile.outputPositiveDrive)
-        XCTAssertLessThan(sid6581.analogProfile.outputNegativeDrive, 1.0)
-        XCTAssertGreaterThan(sid6581.analogProfile.filterInputDrive, sid8580.analogProfile.filterInputDrive)
-        XCTAssertGreaterThan(sid6581.analogProfile.filterInputDCBleed, sid8580.analogProfile.filterInputDCBleed)
+        // Published 6581 mixer offset: about -1/18 of one voice's range in
+        // total, carried here as -1/54 per routed voice. One voice spans
+        // 2 * 32768 / 4 = 16384 mixer units.
+        XCTAssertEqual(sid6581.analogProfile.filterInputDCOffsetPerSource, -16_384.0 / 54, accuracy: 0.001)
+        XCTAssertEqual(sid8580.analogProfile.filterInputDCOffsetPerSource, 0)
+        XCTAssertGreaterThan(sid6581.analogProfile.filterCutoffDistortion, 0)
+        XCTAssertEqual(sid8580.analogProfile.filterCutoffDistortion, 0)
         XCTAssertGreaterThan(sid6581.analogProfile.externalInputGain, sid8580.analogProfile.externalInputGain)
-        XCTAssertLessThan(sid6581.analogProfile.outputSmoothingCoefficient, sid8580.analogProfile.outputSmoothingCoefficient)
     }
 
     func testCompatibilityAccuracyModeAffectsGeneratedSamples() {
@@ -2414,23 +2416,39 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.audioOutputState, 0)
     }
 
-    func testCompatibilityAccuracyModeSmoothsSampleOutputBySIDModel() {
-        let sid6581 = SID()
-        sid6581.model = .mos6581
-        sid6581.accuracyMode = .compatibility
+    func testCompatibilityAccuracyModeRunsBoardOutputNetworkPerCycle() {
+        for model in [SID.Model.mos6581, .mos8580] {
+            let fast = SID()
+            fast.model = model
+            fast.accuracyMode = .fast
+            XCTAssertEqual(fast.applyExternalFilter(input: 20_000), 20_000, "\(model)")
+            XCTAssertEqual(fast.externalFilterLowPassState, 0, "\(model)")
 
-        let sid8580 = SID()
-        sid8580.model = .mos8580
-        sid8580.accuracyMode = .compatibility
+            let compatibility = SID()
+            compatibility.model = model
+            compatibility.accuracyMode = .compatibility
 
-        let output6581 = sid6581.sampleOutput(20_000)
-        let output8580 = sid8580.sampleOutput(20_000)
+            // 16 kHz RC low-pass: one cycle at 985 kHz charges about 10%.
+            let first = compatibility.applyExternalFilter(input: 20_000)
+            XCTAssertEqual(Double(first), 20_000 * (1 - exp(-SID.externalFilterLowPassRate / compatibility.clockRate)), accuracy: 120, "\(model)")
 
-        XCTAssertGreaterThan(output6581, 0)
-        XCTAssertLessThan(output6581, 20_000)
-        XCTAssertGreaterThan(output8580, output6581)
-        XCTAssertEqual(sid6581.audioOutputState, Double(output6581), accuracy: 0.5)
-        XCTAssertEqual(sid8580.audioOutputState, Double(output8580), accuracy: 0.5)
+            // The low-pass settles within a few dozen cycles; the 16 Hz
+            // coupling high-pass then drains the DC over about 10 ms.
+            var settled: Int32 = 0
+            for _ in 0..<60 { settled = compatibility.applyExternalFilter(input: 20_000) }
+            XCTAssertGreaterThan(settled, 19_000, "\(model)")
+            var drained: Int32 = settled
+            for _ in 0..<Int(compatibility.clockRate * 0.05) { drained = compatibility.applyExternalFilter(input: 20_000) }
+            XCTAssertLessThan(drained, 200, "\(model)")
+        }
+    }
+
+    func testWrittenSamplesRecordTheLastAudioOutputState() {
+        let sid = SID()
+        sid.writeSample(12_345)
+
+        XCTAssertEqual(sid.audioOutputState, 12_345)
+        XCTAssertEqual(sid.sampleBuffer[0], 12_345.0 / 32_768.0, accuracy: 0.000_001)
     }
 
     func testFastAccuracyModeLeavesFilterInputLinear() {
@@ -2453,13 +2471,22 @@ final class SIDTests: XCTestCase {
         sid8580.accuracyMode = .compatibility
         sid8580.writeRegister(0x18, value: 0x0F)
 
-        let shaped6581 = sid6581.filterInputDrive(16_000)
-        let shaped8580 = sid8580.filterInputDrive(16_000)
+        // Nothing routed: the filter input is linear on both chips.
+        XCTAssertEqual(sid6581.filterInputDrive(16_000), 16_000, accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterInputDrive(16_000), 16_000, accuracy: 0.0001)
 
-        XCTAssertGreaterThan(shaped6581, 16_000)
-        XCTAssertLessThan(shaped8580, 16_000)
-        XCTAssertGreaterThan(shaped6581, shaped8580)
-        XCTAssertEqual(sid6581.filterInputDrive(0), 0)
+        // Each 6581 voice routed into the filter brings its DC level along;
+        // the 8580 has no DC offsets.
+        let perVoice = sid6581.analogProfile.filterInputDCOffsetPerSource
+        sid6581.writeRegister(0x17, value: 0x01)
+        sid8580.writeRegister(0x17, value: 0x01)
+        XCTAssertEqual(sid6581.filterInputDrive(16_000), 16_000 + perVoice, accuracy: 0.0001)
+        XCTAssertEqual(sid6581.filterInputDrive(0), perVoice, accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterInputDrive(16_000), 16_000, accuracy: 0.0001)
+
+        sid6581.writeRegister(0x17, value: 0x0F)
+        XCTAssertEqual(sid6581.filterInputDrive(0), 3 * perVoice, accuracy: 0.0001, "EXT IN carries no voice DC")
+        XCTAssertLessThan(perVoice, 0)
     }
 
     func testCompatibilityAccuracyModeAffectsFilteredAudioSignature() {
@@ -2488,8 +2515,12 @@ final class SIDTests: XCTestCase {
         let fastSignature = fast.recentAudioSignature(sampleCount: 16)
         let compatibilitySignature = compatibility.recentAudioSignature(sampleCount: 16)
 
+        // Compatibility mode integrates per cycle, adds the 6581's routed-voice
+        // DC and the board output network, so the signatures differ; neither
+        // mode is systematically louder.
         XCTAssertNotEqual(fastSignature.sum, compatibilitySignature.sum)
-        XCTAssertGreaterThan(compatibilitySignature.absoluteSum, fastSignature.absoluteSum)
+        XCTAssertNotEqual(fastSignature.absoluteSum, compatibilitySignature.absoluteSum)
+        XCTAssertGreaterThan(compatibilitySignature.absoluteSum, 0)
     }
 
     func test6581FilterDoesNotSelfChargeFromVolumeDACWhenNoInputIsRouted() {
@@ -2606,13 +2637,15 @@ final class SIDTests: XCTestCase {
         sid.filterCutoff = 0xFFFF
 
         XCTAssertEqual(sid.normalizedFilterCutoffValue(sid.filterCutoff), 0x07FF)
-        XCTAssertEqual(sid.normalizedFilterCutoff, 0.284, accuracy: 0.000_001)
+        XCTAssertEqual(sid.filterCutoffFrequency, 12_500, accuracy: 0.000_001)
+        XCTAssertEqual(sid.normalizedFilterCutoff, 2 * sin(.pi * 12_500 / sid.clockRate), accuracy: 0.000_001)
 
         sid.model = .mos6581
         sid.filterCutoff = 0x0800
 
         XCTAssertEqual(sid.normalizedFilterCutoffValue(sid.filterCutoff), 0)
-        XCTAssertEqual(sid.normalizedFilterCutoff, 0.003, accuracy: 0.000_001)
+        XCTAssertEqual(sid.filterCutoffFrequency, 220, accuracy: 0.000_001)
+        XCTAssertEqual(sid.normalizedFilterCutoff, 2 * sin(.pi * 220 / sid.clockRate), accuracy: 0.000_001)
     }
 
     func testFilterResonanceDampingDiffersBySIDModel() {
@@ -2625,8 +2658,16 @@ final class SIDTests: XCTestCase {
         sid8580.writeRegister(0x17, value: 0xF1)
 
         XCTAssertGreaterThan(sid6581.filterDamping, sid8580.filterDamping)
-        XCTAssertEqual(sid6581.filterDamping, 0.775, accuracy: 0.0001)
-        XCTAssertEqual(sid8580.filterDamping, 0.275, accuracy: 0.0001)
+        XCTAssertEqual(sid6581.filterDamping, 1 / 1.7, accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterDamping, 1 / 4.0, accuracy: 0.0001)
+        XCTAssertEqual(sid6581.filterQ, 1.7, accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterQ, 4.0, accuracy: 0.0001)
+
+        // RES 0 is the ideal Butterworth two-integrator loop on both chips.
+        sid6581.writeRegister(0x17, value: 0x01)
+        sid8580.writeRegister(0x17, value: 0x01)
+        XCTAssertEqual(sid6581.filterDamping, 2.0.squareRoot(), accuracy: 0.0001)
+        XCTAssertEqual(sid8580.filterDamping, 2.0.squareRoot(), accuracy: 0.0001)
     }
 
     func testRoutedVoiceIsSilentWhenNoFilterModeIsSelected() {

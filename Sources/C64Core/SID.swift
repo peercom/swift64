@@ -114,14 +114,19 @@ public final class SID {
         public let waveformDACHoldCyclesRemaining: Int
     }
 
+    /// Compatibility-mode analog behaviour that differs between the two chips.
+    /// Values marked "model parameter" are not measurements; see TESTING.md.
     struct AnalogProfile: Equatable {
-        let outputPositiveDrive: Double
-        let outputNegativeDrive: Double
-        let outputPostDrive: Double
-        let filterInputDrive: Double
-        let filterInputDCBleed: Double
+        /// DC entering the filter for every voice routed into it, in mixer
+        /// units. The published 6581 mixer offset is about -1/18 of one voice's
+        /// range in total; splitting it evenly over three voices is ours.
+        let filterInputDCOffsetPerSource: Double
+        /// Relative cutoff rise when the low-pass integrator sits at full
+        /// scale. Published descriptions of the 6581 agree the cutoff drifts
+        /// upward with signal level; the magnitude is a model parameter.
+        let filterCutoffDistortion: Double
+        /// EXT IN gain into the mixer (approximation, not measured).
         let externalInputGain: Double
-        let outputSmoothingCoefficient: Double
     }
 
     // MARK: - Constants
@@ -205,49 +210,154 @@ public final class SID {
     var analogProfile: AnalogProfile {
         switch model {
         case .mos6581:
+            // One voice spans 2 * 32768 / voiceMixDivisor mixer units; the
+            // published total mixer offset (-0.06 V of a 1.05 V voice range,
+            // measured between volume 0 and 15) is about -1/18 of that.
+            let voiceRange = 2.0 * 32768.0 / Double(Self.voiceMixDivisor)
             return AnalogProfile(
-                outputPositiveDrive: 1.18,
-                outputNegativeDrive: 0.94,
-                outputPostDrive: 1.20,
-                filterInputDrive: 1.35,
-                filterInputDCBleed: 0.10,
-                externalInputGain: 1.12,
-                outputSmoothingCoefficient: 0.90
+                filterInputDCOffsetPerSource: -voiceRange / 18 / 3,
+                filterCutoffDistortion: 0.6,
+                externalInputGain: 1.12
             )
         case .mos8580:
+            // "No DC offsets in the MOS8580"; its filter behaves near-ideally.
             return AnalogProfile(
-                outputPositiveDrive: 1.0,
-                outputNegativeDrive: 1.0,
-                outputPostDrive: 1.03,
-                filterInputDrive: 1.05,
-                filterInputDCBleed: 0,
-                externalInputGain: 0.72,
-                outputSmoothingCoefficient: 0.96
+                filterInputDCOffsetPerSource: 0,
+                filterCutoffDistortion: 0,
+                externalInputGain: 0.72
             )
         }
     }
-    var normalizedFilterCutoff: Double {
-        let normalized = Double(normalizedFilterCutoffValue(filterCutoff)) / 2047.0
+
+    // MARK: - Filter calibration
+    //
+    // The SID filter is a two-integrator-loop biquad (confirmed by its
+    // designer). Its cutoff is set by FETs used as voltage-controlled
+    // resistors driven by the 11-bit FC DAC, so the FC-to-frequency curve is
+    // an analog property that differs per chip. The anchors below are
+    // published measurements; interpolation, the 6581 range scaling and the
+    // 8580 resonance endpoint are this project's own model choices.
+
+    /// Published 6581 cutoff measurement (Dag Lem, reSID 0.16 documentation):
+    /// a 6581 R4AR with 470 pF filter capacitors runs from about 220 Hz at
+    /// FC 0 to about 18 kHz at FC 2047, tanh-shaped on a logarithmic frequency
+    /// axis. That chip's FC DAC also steps from 6.0 kHz to 4.6 kHz at FC 1024;
+    /// the kink is chip-specific and averaged out here.
+    static let cutoffAnchors6581: [(fc: Int, hz: Double)] = [
+        (0, 220), (256, 250), (512, 420), (640, 780), (768, 1_600), (896, 3_200),
+        (1_024, 5_300), (1_152, 7_200), (1_280, 9_500), (1_408, 12_000),
+        (1_536, 14_500), (1_664, 16_000), (1_792, 17_100), (2_047, 18_000)
+    ]
+
+    /// Published 8580 cutoff measurement (reSID 0.16 documentation): close to
+    /// the datasheet's linear 11-bit control, reaching about 12.5 kHz at
+    /// FC 2047. The datasheet's 30 Hz lower bound replaces the measured
+    /// near-zero floor so the integrators never freeze.
+    static let cutoffAnchors8580: [(fc: Int, hz: Double)] = [
+        (0, 30), (128, 800), (256, 1_600), (512, 3_300), (768, 4_800),
+        (1_024, 6_500), (1_280, 8_400), (1_536, 9_800), (1_792, 11_000),
+        (2_047, 12_500)
+    ]
+
+    static let minimumCutoff6581 = 220.0
+    static let referenceMaximumCutoff6581 = 18_000.0
+    /// Published 6581 curves top out anywhere from about 8.6 kHz to over
+    /// 20 kHz at FC 2047; this is the supported range for
+    /// `filterMaximumCutoff6581`.
+    public static let filterMaximumCutoff6581Range: ClosedRange<Double> = 8_000...20_000
+
+    /// 6581 cutoff in Hz at FC 2047. The default is the published reference
+    /// chip; lower values model "darker" chips, higher values "brighter" ones.
+    /// The whole curve is rescaled on a logarithmic axis so FC 0 stays at the
+    /// measured 220 Hz floor.
+    public var filterMaximumCutoff6581: Double = SID.referenceMaximumCutoff6581 {
+        didSet {
+            let clamped = filterMaximumCutoff6581.clamped(to: Self.filterMaximumCutoff6581Range)
+            if clamped != filterMaximumCutoff6581 { filterMaximumCutoff6581 = clamped }
+            cutoffTable6581 = Self.cutoffTable6581(maximumCutoff: filterMaximumCutoff6581)
+        }
+    }
+    /// Cutoff in Hz per FC value for the current `filterMaximumCutoff6581`.
+    var cutoffTable6581 = SID.cutoffTable6581(maximumCutoff: SID.referenceMaximumCutoff6581)
+
+    static let referenceCutoffTable6581 = interpolatedCutoffTable(cutoffAnchors6581, logarithmic: true)
+    static let cutoffTable8580 = interpolatedCutoffTable(cutoffAnchors8580, logarithmic: false)
+
+    static func cutoffTable6581(maximumCutoff: Double) -> [Double] {
+        let exponent = log(maximumCutoff / minimumCutoff6581)
+            / log(referenceMaximumCutoff6581 / minimumCutoff6581)
+        return referenceCutoffTable6581.map { minimumCutoff6581 * pow($0 / minimumCutoff6581, exponent) }
+    }
+
+    /// Piecewise interpolation of measured anchors over all 2048 FC values,
+    /// linear in frequency for the 8580 and linear in log-frequency for the
+    /// 6581's exponential FET response.
+    static func interpolatedCutoffTable(_ anchors: [(fc: Int, hz: Double)], logarithmic: Bool) -> [Double] {
+        var table = [Double](repeating: anchors[0].hz, count: 2048)
+        for pair in zip(anchors, anchors.dropFirst()) {
+            let (start, end) = pair
+            for fc in start.fc...end.fc {
+                let position = Double(fc - start.fc) / Double(max(1, end.fc - start.fc))
+                table[fc] = logarithmic
+                    ? start.hz * pow(end.hz / start.hz, position)
+                    : start.hz + (end.hz - start.hz) * position
+            }
+        }
+        return table
+    }
+
+    /// Current filter cutoff frequency in Hz.
+    public var filterCutoffFrequency: Double {
+        filterCutoffFrequency(for: filterCutoff)
+    }
+
+    /// Filter cutoff frequency in Hz for an FC register value on this model.
+    public func filterCutoffFrequency(for cutoff: UInt16) -> Double {
+        let index = Int(normalizedFilterCutoffValue(cutoff))
         switch model {
         case .mos6581:
-            return Self.filterCutoff6581[Int(normalizedFilterCutoffValue(filterCutoff))]
+            return cutoffTable6581[index]
         case .mos8580:
-            return 0.004 + normalized * 0.28
+            return Self.cutoffTable8580[index]
         }
+    }
+
+    /// Integrator coefficient per SID clock cycle for the state-variable
+    /// filter in `applyFilter`: 2 sin(pi f / fclk), which places the filter's
+    /// resonant frequency at `filterCutoffFrequency`.
+    var normalizedFilterCutoff: Double {
+        2 * sin(.pi * filterCutoffFrequency / clockRate)
     }
 
     func normalizedFilterCutoffValue(_ cutoff: UInt16) -> UInt16 {
         cutoff & 0x07FF
     }
+
+    /// Q at RES 15. Both chips are Butterworth (Q = 1/sqrt 2) at RES 0. The
+    /// 6581 endpoint is the published approximate range [0.707, 1.7] with 1/Q
+    /// linear in RES. The 8580's far stronger peak is widely reported but no
+    /// published numeric measurement was found, so Q = 4 is a model parameter.
+    static let maximumQ6581 = 1.7
+    static let maximumQ8580 = 4.0
+
+    /// 1/Q of the filter, linear in RES between the Butterworth value and
+    /// the model's maximum Q.
     var filterDamping: Double {
-        let resonance = Double(filterResonance)
-        switch model {
-        case .mos6581:
-            return max(0.42, 1.45 - resonance * 0.045)
-        case .mos8580:
-            return max(0.25, 1.25 - resonance * 0.065)
-        }
+        let maximumQ = model == .mos6581 ? Self.maximumQ6581 : Self.maximumQ8580
+        let maximumDamping = 2.0.squareRoot()
+        let minimumDamping = 1 / maximumQ
+        return maximumDamping - (maximumDamping - minimumDamping) * Double(filterResonance & 0x0F) / 15
     }
+
+    public var filterQ: Double { 1 / filterDamping }
+
+    /// C64 board output network, identical for both chips: a 10 kOhm /
+    /// 1000 pF low-pass (about 16 kHz) buffered into a 1 kOhm / 10 uF
+    /// high-pass (about 16 Hz). Rates are 1/RC in radians per second.
+    static let externalFilterLowPassRate = 1 / (10_000.0 * 1_000e-12)
+    static let externalFilterHighPassRate = 1 / (1_000.0 * 10e-6)
+    public static var externalFilterLowPassCorner: Double { externalFilterLowPassRate / (2 * .pi) }
+    public static var externalFilterHighPassCorner: Double { externalFilterHighPassRate / (2 * .pi) }
     var filterModeSelected: Bool {
         filterLP || filterBP || filterHP
     }
@@ -268,6 +378,14 @@ public final class SID {
     var filterLow: Double = 0
     var filterBand: Double = 0
     var filterHigh: Double = 0
+    /// Board output network state (compatibility mode), in mixer units.
+    var externalFilterLowPassState: Double = 0
+    var externalFilterHighPassState: Double = 0
+    /// Tracked magnitude of the low-pass integrator voltage that drives the
+    /// 6581's level-dependent cutoff (compatibility mode), in mixer units.
+    var filterLevelState: Double = 0
+    /// Time constant of that level tracker in seconds (model parameter).
+    static let filterLevelTimeConstant = 0.005
     var oscillator3Readback: UInt8 = 0
     var oscillator3ReadbackValid = false
     var envelope3Readback: UInt8 = 0
@@ -352,10 +470,7 @@ public final class SID {
     ]
 
     // Exact tabulation of the existing approximation, not a new chip model.
-    // These curves depend only on register values, never on elapsed cycles.
-    private static let filterCutoff6581 = (0...2047).map {
-        0.003 + pow(Double($0) / 2047, 1.7) * 0.18
-    }
+    // This curve depends only on register values, never on elapsed cycles.
     private static let envelopeDAC6581 = (0...255).map {
         UInt16((pow(Double($0) / 255, 0.92) * 255).rounded())
     }
@@ -412,6 +527,9 @@ public final class SID {
         filterLow = 0
         filterBand = 0
         filterHigh = 0
+        externalFilterLowPassState = 0
+        externalFilterHighPassState = 0
+        filterLevelState = 0
         oscillator3Readback = 0
         oscillator3ReadbackValid = false
         envelope3Readback = 0
@@ -1088,6 +1206,7 @@ public final class SID {
         output = (output * Int32(volume)) / 15
         output += volumeDACOffset
         output = applyOutputStage(input: output)
+        output = applyExternalFilter(input: output, elapsedCycles: filterElapsedCycles)
         lastDirectOutput = directOutput
         lastFilterInput = filterInput
         lastFilterOutput = filterOutput
@@ -1124,6 +1243,7 @@ public final class SID {
 
         // Clamp and convert to float
         let clamped = max(-32768, min(32767, output))
+        audioOutputState = Double(clamped)
         let sample = Float(clamped) / 32768.0
 
         // Write to ring buffer
@@ -1203,35 +1323,43 @@ public final class SID {
         return readCount
     }
 
+    /// The host-sample stage is a plain pass-through: the board's output
+    /// network is modelled per cycle in `applyExternalFilter`, and the speaker
+    /// path adds its own DC removal.
     func sampleOutput(_ input: Int32) -> Int32 {
-        guard accuracyMode == .compatibility else { return input }
-
-        let target = Double(input).clamped(to: -32768...32767)
-        audioOutputState += (target - audioOutputState) * analogProfile.outputSmoothingCoefficient
-        return Int32(audioOutputState.rounded().clamped(to: -32768...32767))
+        input
     }
 
+    /// AUDIO OUT is an open-source buffer into the board's 1 kOhm load,
+    /// rated at about 3 V peak-to-peak around a 6 V DC level. Published
+    /// measurements place the 6581's audible nonlinearity in the filter
+    /// integrators and describe the 8580 output as near-ideal, so neither
+    /// model applies extra waveshaping here; the signal only clamps at the
+    /// rails.
     func applyOutputStage(input: Int32) -> Int32 {
+        max(-32768, min(32767, input))
+    }
+
+    /// C64 board output network (compatibility mode only): the 16 kHz RC
+    /// low-pass followed by the 16 Hz coupling high-pass, integrated in steps
+    /// of at most one SID cycle.
+    func applyExternalFilter(input: Int32, elapsedCycles: Double = 1) -> Int32 {
         guard accuracyMode == .compatibility else { return input }
 
-        let normalized = Double(input).clamped(to: -32768...32767) / 32768.0
-        let shaped: Double
-        let profile = analogProfile
-        switch model {
-        case .mos6581:
-            // A bounded approximation of the 6581's less-linear output stage.
-            // It intentionally gives positive and negative excursions slightly
-            // different gain so audio signatures can distinguish the model.
-            let asymmetricDrive = normalized >= 0
-                ? normalized * profile.outputPositiveDrive
-                : normalized * profile.outputNegativeDrive
-            shaped = tanh(asymmetricDrive * profile.outputPostDrive)
-        case .mos8580:
-            // The 8580 output stage is cleaner; retain a mild soft limit so
-            // compatibility signatures are deterministic near the rails.
-            shaped = tanh(normalized * profile.outputPostDrive)
+        let inputDouble = Double(input)
+        let boundedElapsedCycles = max(1, elapsedCycles)
+        let substepCount = Int(ceil(boundedElapsedCycles))
+        let secondsPerSubstep = boundedElapsedCycles / Double(substepCount) / clockRate
+        let lowPassStep = Self.externalFilterLowPassRate * secondsPerSubstep
+        let highPassStep = Self.externalFilterHighPassRate * secondsPerSubstep
+
+        for _ in 0..<substepCount {
+            externalFilterLowPassState += lowPassStep * (inputDouble - externalFilterLowPassState)
+            externalFilterHighPassState += highPassStep * (externalFilterLowPassState - externalFilterHighPassState)
         }
-        return Int32((shaped * 32768.0).clamped(to: -32768...32767))
+
+        let output = externalFilterLowPassState - externalFilterHighPassState
+        return Int32(output.rounded().clamped(to: -32768...32767))
     }
 
     func applyFilter(input: Int32, elapsedCycles: Double = 1) -> Int32 {
@@ -1240,6 +1368,13 @@ public final class SID {
         let inputDouble = filterInputDrive(input)
         let cutoff = normalizedFilterCutoff
         let damping = filterDamping
+        // 6581 only, compatibility mode: the FET voltage-controlled resistors
+        // and NMOS-inverter op-amps let the effective cutoff drift upward as
+        // the signal level grows (published qualitative mechanism). The level
+        // is the tracked magnitude of the low-pass integrator voltage; the
+        // gain `AnalogProfile.filterCutoffDistortion` and the tracker's time
+        // constant are model parameters, not measurements.
+        let distortion = accuracyMode == .compatibility ? analogProfile.filterCutoffDistortion : 0
 
         let boundedElapsedCycles = max(1, elapsedCycles)
         // A resonant two-integrator filter cannot use the exponential shortcut
@@ -1247,11 +1382,17 @@ public final class SID {
         let substepCount = Int(ceil(boundedElapsedCycles))
         let cyclesPerSubstep = boundedElapsedCycles / Double(substepCount)
         let substepCutoff = cutoff * cyclesPerSubstep
+        let levelStep = cyclesPerSubstep / (Self.filterLevelTimeConstant * clockRate)
 
         for _ in 0..<substepCount {
-            filterLow += substepCutoff * filterBand
+            var stepCutoff = substepCutoff
+            if distortion != 0 {
+                filterLevelState += (abs(filterLow) - filterLevelState) * levelStep
+                stepCutoff *= 1 + distortion * min(1, filterLevelState / 32768)
+            }
+            filterLow += stepCutoff * filterBand
             filterHigh = inputDouble - filterLow - damping * filterBand
-            filterBand += substepCutoff * filterHigh
+            filterBand += stepCutoff * filterHigh
 
             filterLow = filterLow.clamped(to: -32768...32767)
             filterBand = filterBand.clamped(to: -32768...32767)
@@ -1265,25 +1406,18 @@ public final class SID {
         return Int32(output.clamped(to: -32768...32767))
     }
 
+    /// Signal entering the filter. In compatibility mode every voice routed
+    /// through FILT1-3 also brings its DC level with it (6581 only), so
+    /// low-pass output carries that offset and routing changes click as on
+    /// the chip. The mixer path itself is linear; the 6581's level-dependent
+    /// behaviour is the cutoff modulation in `applyFilter`.
     func filterInputDrive(_ input: Int32) -> Double {
         let clamped = Double(input).clamped(to: -32768...32767)
-        guard clamped != 0 else { return 0 }
         guard accuracyMode == .compatibility else { return clamped }
 
-        let normalized = clamped / 32768.0
-        let profile = analogProfile
-        switch model {
-        case .mos6581:
-            // The 6581 filter input is intentionally rougher than the 8580.
-            // Keep this bounded and deterministic until we can calibrate it
-            // against measured chip captures.
-            let driven = tanh(normalized * profile.filterInputDrive) * 32768.0
-            let dcBleed = Double(volumeDACOffset) * profile.filterInputDCBleed
-            return (driven + dcBleed).clamped(to: -32768...32767)
-        case .mos8580:
-            let driven = tanh(normalized * profile.filterInputDrive) * 32768.0
-            return driven.clamped(to: -32768...32767)
-        }
+        let routedVoices = Double((filterControl & 0x07).nonzeroBitCount)
+        let offset = routedVoices * analogProfile.filterInputDCOffsetPerSource
+        return (clamped + offset).clamped(to: -32768...32767)
     }
 
     var filterInputEnabled: Bool {
@@ -1501,7 +1635,7 @@ public final class SID {
 // MARK: - Snapshot state
 
 extension SID {
-    public static let snapshotStoredPropertyCount = 41
+    public static let snapshotStoredPropertyCount = 46
 
     /// The audio sample queue is not part of the state; it is flushed on restore.
     func saveState(to w: inout StateWriter) {
@@ -1514,6 +1648,8 @@ extension SID {
         w.write(paddleScanCounter); w.write(continuousPaddleScanEnabled)
         w.write(dataBusLatch); w.write(dataBusLatchCyclesRemaining)
         w.write(filterLow); w.write(filterBand); w.write(filterHigh)
+        w.write(externalFilterLowPassState); w.write(externalFilterHighPassState); w.write(filterLevelState)
+        w.write(filterMaximumCutoff6581)
         w.write(oscillator3Readback); w.write(oscillator3ReadbackValid)
         w.write(envelope3Readback); w.write(envelope3ReadbackValid)
         w.write(sampleCycleCounter); w.write(audioAccumulator); w.write(audioAccumulatorCount); w.write(audioOutputState)
@@ -1534,6 +1670,12 @@ extension SID {
         paddleScanCounter = try r.read(); continuousPaddleScanEnabled = try r.read()
         dataBusLatch = try r.read(); dataBusLatchCyclesRemaining = try r.read()
         filterLow = try r.read(); filterBand = try r.read(); filterHigh = try r.read()
+        externalFilterLowPassState = try r.read(); externalFilterHighPassState = try r.read(); filterLevelState = try r.read()
+        let savedMaximumCutoff: Double = try r.read()
+        guard Self.filterMaximumCutoff6581Range.contains(savedMaximumCutoff) else {
+            throw MachineStateError.invalidValue("SID 6581 filter range")
+        }
+        filterMaximumCutoff6581 = savedMaximumCutoff  // rebuilds the cutoff table
         oscillator3Readback = try r.read(); oscillator3ReadbackValid = try r.read()
         envelope3Readback = try r.read(); envelope3ReadbackValid = try r.read()
         sampleCycleCounter = try r.read(); audioAccumulator = try r.read(); audioAccumulatorCount = try r.read(); audioOutputState = try r.read()

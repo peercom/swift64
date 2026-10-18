@@ -253,15 +253,26 @@ final class SIDAudioQualityTests: XCTestCase {
         XCTAssertEqual(interrupted.statistics.clippedFrames, continuous.statistics.clippedFrames)
     }
 
-    func testFilterAndEnvelopeLookupTablesPreserveTheAnalogApproximation() {
+    func testFilterAndEnvelopeLookupTablesMatchTheirDocumentedCurves() {
         let sid = SID()
         for level in 0...255 {
             let expected = UInt16((pow(Double(level) / 255, 0.92) * 255).rounded())
             XCTAssertEqual(sid.envelopeDACLevel(UInt8(level)), expected)
         }
-        for cutoff in 0...2047 {
-            sid.filterCutoff = UInt16(cutoff)
-            XCTAssertEqual(sid.normalizedFilterCutoff, 0.003 + pow(Double(cutoff) / 2047, 1.7) * 0.18)
+        // The cutoff tables are the documented interpolation of the published
+        // anchors: log-linear for the 6581, linear for the 8580.
+        for model in [SID.Model.mos6581, .mos8580] {
+            sid.model = model
+            let anchors = model == .mos6581 ? SID.cutoffAnchors6581 : SID.cutoffAnchors8580
+            for (start, end) in zip(anchors, anchors.dropFirst()) {
+                for cutoff in start.fc...end.fc {
+                    let position = Double(cutoff - start.fc) / Double(max(1, end.fc - start.fc))
+                    let expected = model == .mos6581
+                        ? start.hz * pow(end.hz / start.hz, position)
+                        : start.hz + (end.hz - start.hz) * position
+                    XCTAssertEqual(sid.filterCutoffFrequency(for: UInt16(cutoff)), expected, accuracy: 0.001, "\(model) FC \(cutoff)")
+                }
+            }
         }
     }
 }
