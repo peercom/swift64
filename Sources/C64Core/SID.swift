@@ -147,7 +147,12 @@ public final class SID {
         var sustainRelease: UInt8 = 0   // $D406
 
         // Internal state
-        var accumulator: UInt32 = 0
+        /// Direct assignment (register-level tests, snapshot restore, sync and
+        /// TEST resets) also re-latches `previousPhase`; only `clockOscillator`
+        /// leaves the one-cycle-old phase in place.
+        var accumulator: UInt32 = 0 {
+            didSet { previousPhase = UInt16(accumulator >> 12) }
+        }
         var shiftRegister: UInt32 = 0x7FFFF8
         var envelopeCounter: UInt32 = 0
         var envelopeLevel: UInt8 = 0
@@ -159,6 +164,10 @@ public final class SID {
         var rateCounter: UInt16 = 0
         var waveformDACOutput: UInt16 = 0
         var waveformDACHoldCyclesRemaining: Int = 0
+        /// Top 12 accumulator bits before this cycle's increment. The 6581
+        /// pulse comparator works from this one-cycle-old phase; after a sync
+        /// or TEST reset it is the reset phase (a model choice, not measured).
+        var previousPhase: UInt16 = 0
 
         var waveTriangle: Bool { control & 0x10 != 0 }
         var waveSawtooth: Bool { control & 0x20 != 0 }
@@ -434,7 +443,15 @@ public final class SID {
     static let dataBusLatchLeakStepCycles = 0x0200
     static let envelopeRateCounterMask: UInt16 = 0x7FFF
     static let waveformDACHoldCycles = 128
-    static let waveformDACLeakStepCycles = 32
+    /// Cycles between leak steps of a floating waveform DAC (no waveform
+    /// selected, TEST clear). With the per-step decrements in
+    /// `leakedWaveformDACOutput` the full-scale value drains in about 2.2 s
+    /// on the 6581 and 15 s on the 8580. The public `osc3-wave0` program
+    /// bounds these: the 6581 must read zero within 256 PAL frames, the
+    /// 8580 variant allows six times that. The exact curves are not measured.
+    static func waveformDACLeakStepCycles(for model: Model) -> Int {
+        model == .mos6581 ? 12_000 : 150_000
+    }
     static let paddleScanCycles = 512
     static let voiceMixDivisor: Int32 = 4
 
@@ -772,6 +789,7 @@ public final class SID {
 
     func clockOscillator(_ v: Int) {
         var voice = voices[v]
+        let phaseBeforeClock = UInt16(voice.accumulator >> 12)
         let prevMSB = voice.accumulator & 0x800000
         let prevNoiseClock = voice.accumulator & 0x080000
         let wasNoiseCombined = voice.waveNoise &&
@@ -783,6 +801,7 @@ public final class SID {
         } else {
             voice.accumulator = (voice.accumulator + UInt32(voice.frequency)) & 0xFFFFFF
         }
+        voice.previousPhase = phaseBeforeClock
 
         let newMSB = voice.accumulator & 0x800000
         oscillatorMSBRose[v] = prevMSB == 0 && newMSB != 0
@@ -823,7 +842,7 @@ public final class SID {
         } else if voices[v].waveformDACOutput > 0 {
             voices[v].waveformDACOutput = leakedWaveformDACOutput(voices[v].waveformDACOutput)
             if voices[v].waveformDACOutput > 0 {
-                voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACLeakStepCycles
+                voices[v].waveformDACHoldCyclesRemaining = Self.waveformDACLeakStepCycles(for: model)
             }
         }
     }
@@ -1077,15 +1096,18 @@ public final class SID {
         UInt16(voices[v].accumulator >> 12)
     }
 
+    /// The pulse comparator outputs all ones while the accumulator's top 12
+    /// bits are at or above the pulse width. PW 0 is therefore a constant
+    /// high and PW $FFF a constant low except for the single top phase; the
+    /// public `osc3-wave0` program verifies both levels on real 6581 and 8580
+    /// chips (OSC3 reads $FF for PW 0 and $00 for PW $FFF at phase 0).
+    ///
+    /// The public `oscsample1` OSC3 dumps show the 6581 pulse edge one cycle
+    /// after the sawtooth reaches the pulse width, while the 8580 edge is in
+    /// the same cycle, so the 6581 compares the previous cycle's phase.
     func pulseWaveformOutput(_ v: Int) -> UInt16 {
         let pulseWidth = normalizedPulseWidth(voices[v].pulseWidth)
-        if pulseWidth == 0 {
-            return 0
-        }
-        if pulseWidth == 0x0FFF {
-            return 0xFFF
-        }
-        let phase = UInt16(voices[v].accumulator >> 12)
+        let phase = model == .mos6581 ? voices[v].previousPhase : UInt16(voices[v].accumulator >> 12)
         return phase >= pulseWidth ? 0xFFF : 0
     }
 
@@ -1694,6 +1716,7 @@ extension SID.Voice {
         w.write(envelopeState.snapshotValue)
         w.write(exponentialCounter); w.write(exponentialPeriod); w.write(holdZero); w.write(gate)
         w.write(rateCounter); w.write(waveformDACOutput); w.write(waveformDACHoldCyclesRemaining)
+        w.write(previousPhase)
     }
 
     mutating func restoreState(from r: inout StateReader) throws {
@@ -1702,6 +1725,7 @@ extension SID.Voice {
         envelopeState = try SID.EnvelopeState(snapshotValue: try r.read())
         exponentialCounter = try r.read(); exponentialPeriod = try r.read(); holdZero = try r.read(); gate = try r.read()
         rateCounter = try r.read(); waveformDACOutput = try r.read(); waveformDACHoldCyclesRemaining = try r.read()
+        previousPhase = try r.read()
     }
 }
 

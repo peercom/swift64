@@ -1562,18 +1562,56 @@ final class SIDTests: XCTestCase {
         XCTAssertNotEqual(sid.noiseWaveformOutput(0), 0)
     }
 
-    func testPulseWaveformWidthZeroIsSilentAndMaxIsHigh() {
-        let sid = SID()
-        sid.voices[0].control = 0x40
-        sid.voices[0].accumulator = 0xFFFFFF
-        sid.voices[0].pulseWidth = 0
+    func testPulseWaveformWidthZeroIsHighAndMaxIsLowExceptTopPhase() {
+        // Verified on real chips by the public osc3-wave0 program: at phase 0,
+        // OSC3 reads $FF for PW 0 and $00 for PW $FFF.
+        for model in [SID.Model.mos6581, .mos8580] {
+            let sid = SID()
+            sid.model = model
+            sid.voices[0].control = 0x40
+            sid.voices[0].frequency = 0
+            func setPhase(_ accumulator: UInt32) {
+                sid.voices[0].accumulator = accumulator
+                sid.clockOscillator(0)  // frequency 0: phase and previous phase agree
+            }
+            setPhase(0)
+            sid.voices[0].pulseWidth = 0
+            XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF, "\(model)")
+            setPhase(0xFFFFFF)
+            XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF, "\(model)")
 
-        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+            setPhase(0)
+            sid.voices[0].pulseWidth = 0x0FFF
+            XCTAssertEqual(sid.oscillatorOutput(0), 0, "\(model)")
+            setPhase(0xFFE000)
+            XCTAssertEqual(sid.oscillatorOutput(0), 0, "\(model)")
+            setPhase(0xFFF000)
+            XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF, "\(model)")
+        }
+    }
 
-        sid.voices[0].accumulator = 0
-        sid.voices[0].pulseWidth = 0x0FFF
-
-        XCTAssertEqual(sid.oscillatorOutput(0), 0xFFF)
+    func test6581PulseEdgeLagsSawtoothByOneCycleWhile8580DoesNot() {
+        // Public oscsample1 dumps: with FREQ $1000 and PW $100 the 8580 OSC3
+        // reads $FF in the cycle the sawtooth reaches $100, the 6581 one
+        // cycle later.
+        for model in [SID.Model.mos6581, .mos8580] {
+            let sid = SID()
+            sid.model = model
+            sid.voices[2].control = 0x40
+            sid.voices[2].frequency = 0x1000
+            sid.voices[2].pulseWidth = 0x100
+            var firstHighCycle: Int?
+            for cycle in 1...600 {
+                sid.clockOscillator(2)
+                let phase = UInt16(sid.voices[2].accumulator >> 12)
+                if sid.oscillatorOutput(2) == 0xFFF {
+                    firstHighCycle = cycle
+                    XCTAssertEqual(phase, model == .mos6581 ? 0x101 : 0x100, "\(model)")
+                    break
+                }
+            }
+            XCTAssertEqual(firstHighCycle, model == .mos6581 ? 0x101 : 0x100, "\(model)")
+        }
     }
 
     func testPulseWaveformComparesTopTwelveAccumulatorBits() {
@@ -2167,7 +2205,7 @@ final class SIDTests: XCTestCase {
 
         XCTAssertLessThan(sid.voices[0].waveformDACOutput, 0xF00)
         XCTAssertGreaterThan(sid.voices[0].waveformDACOutput, 0)
-        XCTAssertEqual(sid.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles)
+        XCTAssertEqual(sid.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles(for: .mos6581))
         XCTAssertGreaterThan(sid.waveformOutput(0), 0)
     }
 
@@ -2184,8 +2222,8 @@ final class SIDTests: XCTestCase {
         sid8580.clockOscillator(0)
 
         XCTAssertGreaterThan(sid6581.voices[0].waveformDACOutput, sid8580.voices[0].waveformDACOutput)
-        XCTAssertEqual(sid6581.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles)
-        XCTAssertEqual(sid8580.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles)
+        XCTAssertEqual(sid6581.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles(for: .mos6581))
+        XCTAssertEqual(sid8580.voices[0].waveformDACHoldCyclesRemaining, SID.waveformDACLeakStepCycles(for: .mos8580))
     }
 
     func testFloatingWaveformDACEventuallySettlesToSilence() {
@@ -2193,7 +2231,8 @@ final class SIDTests: XCTestCase {
         sid.voices[0].waveformDACOutput = 0xF00
         sid.voices[0].envelopeLevel = 0xFF
 
-        for _ in 0..<20_000 {
+        // About 2.2 s on the 6581; the public osc3-wave0 program allows 256 frames.
+        for _ in 0..<3_000_000 {
             sid.clockOscillator(0)
         }
 
@@ -2961,5 +3000,51 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
         XCTAssertNotEqual(sid.oscillatorOutput(0), 0)
+    }
+
+    /// The public `osc3-wave0` program (verified on a C64 with a 6581 and a
+    /// C64C with an 8580): pulse with PW $FFF reads $00, PW 0 reads $FF,
+    /// deselecting every waveform keeps the last value, and the floating DAC
+    /// then decays to zero within 256 PAL frames on the 6581 (six times that
+    /// is allowed for the 8580).
+    func testOscillator3ReadbackFollowsPublicWaveZeroProgram() {
+        for model in [SID.Model.mos6581, .mos8580] {
+            let sid = SID()
+            sid.model = model
+            for register in 0...0x18 { sid.writeRegister(UInt16(register), value: 0) }
+
+            sid.writeRegister(0x10, value: 0xFF)
+            sid.writeRegister(0x11, value: 0xFF)
+            sid.writeRegister(0x12, value: 0x40)
+            for _ in 0..<4 { sid.tick() }
+            XCTAssertEqual(sid.readRegister(0x1B), 0x00, "\(model) PW $FFF")
+
+            sid.writeRegister(0x10, value: 0x00)
+            sid.writeRegister(0x11, value: 0x00)
+            sid.writeRegister(0x12, value: 0x40)
+            for _ in 0..<4 { sid.tick() }
+            XCTAssertEqual(sid.readRegister(0x1B), 0xFF, "\(model) PW 0")
+
+            sid.writeRegister(0x12, value: 0x00)
+            for _ in 0..<4 { sid.tick() }
+            XCTAssertEqual(sid.readRegister(0x1B), 0xFF, "\(model) retains the last DAC value")
+
+            let frameCycles = 19_656
+            let frameLimit = model == .mos6581 ? 256 : 6 * 256
+            var framesUntilZero: Int?
+            var sawIntermediate = false
+            for frame in 1...frameLimit {
+                for _ in 0..<frameCycles { sid.tick() }
+                let value = sid.readRegister(0x1B)
+                if value == 0 { framesUntilZero = frame; break }
+                if value != 0xFF { sawIntermediate = true }
+            }
+            XCTAssertNotNil(framesUntilZero, "\(model) floating DAC never reached zero")
+            XCTAssertGreaterThan(framesUntilZero ?? 0, 10, "\(model) decay is slower than a few frames")
+            XCTAssertTrue(sawIntermediate, "\(model) decays through intermediate values")
+            if model == .mos8580, let frames = framesUntilZero {
+                XCTAssertGreaterThan(frames, 256, "the 8580 DAC floats longer than the 6581 window")
+            }
+        }
     }
 }
