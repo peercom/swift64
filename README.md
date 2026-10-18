@@ -4,7 +4,7 @@ A Commodore 64 emulator written in Swift, targeting macOS. It boots to BASIC, ru
 
 There is also an NES emulator sharing the same 6502 CPU core, in even earlier stages.
 
-Latest packaged macOS release: [Swift64 0.5.0](https://github.com/peercom/swift64/releases/tag/v0.5.0). ROMs and commercial media are not included.
+Latest packaged macOS release: [Swift64 0.6.0](https://github.com/peercom/swift64/releases/tag/v0.6.0). ROMs and commercial media are not included.
 
 ## Status
 
