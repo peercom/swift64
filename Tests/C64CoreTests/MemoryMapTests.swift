@@ -47,15 +47,20 @@ final class MemoryMapTests: XCTestCase {
         memory.ram[0x0000] = 0xAA
         memory.ram[0x0001] = 0xBB
 
+        // The 6510 does not drive the data bus for a port write; the RAM
+        // underneath latches the bus value of that cycle (`cpuport` probe).
+        memory.cpuDataBus = 0x5C
         memory.write(0x0000, value: 0x12)
+        memory.cpuDataBus = 0x6D
         memory.write(0x0001, value: 0x23)
+        XCTAssertEqual(memory.cpuDataBus, 0x6D, "a port write leaves the bus as it was")
 
         XCTAssertEqual(memory.portDirection, 0x12)
         XCTAssertEqual(memory.portData, 0x23)
         XCTAssertEqual(memory.read(0x0000), 0x12)
         XCTAssertEqual(memory.read(0x0001), 0x27)
-        XCTAssertEqual(memory.ram[0x0000], 0xAA)
-        XCTAssertEqual(memory.ram[0x0001], 0xBB)
+        XCTAssertEqual(memory.ram[0x0000], 0x5C)
+        XCTAssertEqual(memory.ram[0x0001], 0x6D)
     }
 
     func testCPUInternalPortReadsIgnoreUnderlyingRAMAfterDirectRAMMutation() {
@@ -77,12 +82,14 @@ final class MemoryMapTests: XCTestCase {
         memory.ram[0x0000] = 0xAA
         memory.ram[0x0001] = 0xBB
 
+        memory.cpuDataBus = 0xAA
         memory.write(0x0000, value: 0x12)
+        memory.cpuDataBus = 0xBB
         memory.write(0x0001, value: 0x23)
 
         XCTAssertEqual(memory.read(0x0000), 0x12)
         XCTAssertEqual(memory.read(0x0001), 0x27)
-        XCTAssertEqual(memory.vicRead(0x0000), 0xAA)
+        XCTAssertEqual(memory.vicRead(0x0000), 0xAA, "the VIC sees the bus byte latched under the port")
         XCTAssertEqual(memory.vicRead(0x0001), 0xBB)
     }
 

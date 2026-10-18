@@ -1290,3 +1290,27 @@ Six `LocalDiskMatrixTests` cases (`testMilestoneResultLogRoundTripsPassedEntries
 - **CIA timer start.** A 6526 start with force load reads old, latch, latch, latch − 1 over the first four cycles (`CIATimerPipelineTests.testControlWriteReadbackMatchesFirstFourHardwareCycles`, Lorenz's tables, `timerbasics`), so `$DC04` reaches `$33` in the fourth cycle; the milestone allows four cycles instead of one.
 
 Measured sequential Release run (`swift test -c release -j 2 --filter LocalDiskMatrixTests`): **111 tests, 6 opt-in skips (the six `...WhenEnabled` cases), 0 failures**. Before the change the same six cases failed with 15 assertions.
+
+## RAM Expansion Unit
+
+Recorded 2026-10-19 (development validation). `REU` models the 8726 REC and its DRAM behind IO2. Behaviour was taken from the REC programming reference and the public REU test programs, not from another emulator's code:
+
+- Registers `$DF00-$DF0A` mirror every 32 bytes through `$DFFF`; `$DF0B-$DF1F` read `$FF`; unused bits of the bank register (3-7 on units up to 512 KB, fewer on larger clones), interrupt mask (4-0) and address control (5-0) read as 1. Status bit 4 is set for every unit except the 1700. Reading the status clears the interrupt, end-of-block and fault bits.
+- A command write with EXECUTE and the FF00 bit starts the transfer at once; without the FF00 bit it arms the `$FF00` trigger, which any write to `$FF00` fires, including the dummy write of a read-modify-write instruction (`rmw-trigger` readme). The controller pulls /DMA from the cycle after the trigger: the 6510's reads stall on RDY and its writes are disconnected, so `INC $FF00`'s second write is lost.
+- Stash, fetch and verify move one byte per phi2 cycle, swap takes two (`xfertiming` readme). Transfers pause while the VIC holds BA low for bad lines or sprite DMA. DMA accesses bypass the 6510 port at `$0000/$0001` (`cpuport` readme) but otherwise use the PLA banking, so I/O registers and colour RAM are valid sources and targets (`ioglitch`, `colorram`).
+- After a transfer the length register holds 1, the C64 and REU addresses point past the last byte unless fixed, autoload reloads all three from their latches, EXECUTE clears and the FF00 bit sets; a verify fault stops after the mismatching byte with the remaining count in the length register. The first `misc/twoblocks` hardware line (`50 10 90 06 10 00 f8 01 00 1f 3f ff ff ff ff ff` after a 16-byte stash from `$0680`) is asserted byte for byte.
+- Banks wrap within the installed memory; the unpopulated banks 4-7 of a 1764 read `$FF` (floating bus, "mostly $ff" per the `floatingbus` readme). RAM powers up with the `$FF,$00,$00,$FF` pattern inverted in alternate 128 KB halves (`raminitpattern` readme, unconfirmed upstream). A C64 reset clears the registers and keeps RAM.
+
+`REUTests` holds twelve ROM-independent regressions for the points above, including DMA cycle counts, the BA pause, the lost RMW write, the interrupt path and a mid-DMA snapshot round-trip. The opt-in public runner fetches only the `REU/` directory of the pinned VICE-testprogs revision and runs every program that reports through `$D7FF`, with the unit size each readme expects:
+
+```sh
+sh script/fetch_reu_testprogs.sh
+SWIFT64_PUBLIC_REU_TESTPROGS_DIR=.build/reu-testprogs \
+  swift test -c release -j 2 --filter PublicREUConformanceTests
+```
+
+`SWIFT64_PUBLIC_REU_TEST_IDS`, `SWIFT64_PUBLIC_REU_RESULTS_FILE`, `SWIFT64_PUBLIC_REU_TEST_MAX_CYCLES` and `SWIFT64_PUBLIC_REU_ROM_DIR` work as for the CIA runner.
+
+Measured sequential Release results (2026-10-19): **69 programs complete except one timeout; 57 pass, 11 fail**. Failing: `floating-a` and the timed-out `floating3b` (floating-bus charge behaviour of unpopulated banks), `mirrors256k` (the 1764's unpopulated-bank detection), and nine `reutiming2` data comparisons: the eight-sprite stash cases `e`/`e3` and all swap variants `e4`-`e6`, `f3`/`f4`, `g3`/`g4`. The bad-line and single-sprite stash comparisons `e2`, `f`, `f2`, `g`, `g2` match their hardware references byte for byte, as do all other self-reporting programs including `cpuport`, `twoblocks`, `rmwtrigger`, `ioglitch`, `colorram`, `64ktransfer`, `wheels`, `bitfill` and every `mirrors` size but 256K. The visual timing programs (`reutiming`, `reutiming2`, `xfertiming-*`) are counted on their completion value only; their reference images were not compared, so the DMA start latency relative to VIC bad-line and sprite timing is not certified by this run. Interactive programs (`spriteba`, `bitfill`, `twoblocks` without `-auto`), `reudetect` (needs its demo data file), `floating2` (never terminates on hardware) and the RAMLink, C128 and QuickReuTest sets are not run.
+
+Diagnosis of the nine `reutiming2` failures, from diffing the transferred CIA timer bytes against both reference files: where the VIC pulls BA low for consecutive expanded sprites, the hardware performs one more REU access in the first BA-low cycle than this model, reading `$42` on the newer VIC reference and the true timer value on the breadbin reference, and the swap variants resume one cycle later than modelled after the pause. The bad-line and single-sprite stash programs do not show either effect, so the REU's BA sampling relative to sprite DMA and the swap read/write phasing are the open items; neither is calibrated here.

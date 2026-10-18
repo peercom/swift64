@@ -38,6 +38,7 @@
 		7625FE6D0F4D2D2AA0086F22 /* SIDRegisterTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */; };
 		7C527898C5FB1F00B5911383 /* Instructions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FCE7B1EFA4B960CF8646CF /* Instructions.swift */; };
 		80BC47C92ED182334E2EDD78 /* C64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D5E8A112118514B27CCE218 /* C64.swift */; };
+		8CE57C4914B08DB95F0BA8A0 /* REU.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40D9BBF76C208D45BAFAF6B /* REU.swift */; };
 		92DE108DF8221F3C31CC13AA /* Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2DF1EFA74DD2855CA6DD0E /* Types.swift */; };
 		92FADFA59D78C284A969B874 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3EAFE976F27217801A0897F /* AVFoundation.framework */; };
 		952FABD7E385142307C0B270 /* TapeUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05218A2819F982209E94FD95 /* TapeUnit.swift */; };
@@ -126,6 +127,7 @@
 		DD083F42D63C4E47DEB8CCC4 /* DiskDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskDrive.swift; sourceTree = "<group>"; };
 		DD6694B9ABFBCE58EFBE3A15 /* AudioFramePacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFramePacer.swift; sourceTree = "<group>"; };
 		DE2DF1EFA74DD2855CA6DD0E /* Types.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Types.swift; sourceTree = "<group>"; };
+		E40D9BBF76C208D45BAFAF6B /* REU.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = REU.swift; sourceTree = "<group>"; };
 		E456B9C65ADB4BA98BD92BB5 /* Cartridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cartridge.swift; sourceTree = "<group>"; };
 		E872D132D76715546D258507 /* GCRDisk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GCRDisk.swift; sourceTree = "<group>"; };
 		EFABA3AD3237026A30ACD089 /* libC64Core.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libC64Core.a; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -211,6 +213,7 @@
 				F6FE23CB28ECE8F58124EEDA /* MachineSnapshot.swift */,
 				0544971F445D40AAACADAB98 /* MemoryMap.swift */,
 				8C5238177200FD6BB810A221 /* PRGLoader.swift */,
+				E40D9BBF76C208D45BAFAF6B /* REU.swift */,
 				06CA3D09FA940CA84F595C9C /* SID.swift */,
 				8D30AB40077A95931A797FB0 /* SIDAudioOutput.swift */,
 				93EEC34C3002D59CAE639C16 /* SIDRegisterTrace.swift */,
@@ -463,6 +466,7 @@
 				2D932A0B5645857AAA90A880 /* MachineSnapshot.swift in Sources */,
 				FF0E159A505D2D4BF33A9311 /* MemoryMap.swift in Sources */,
 				FA604BAECDE3C583DBA20DA2 /* PRGLoader.swift in Sources */,
+				8CE57C4914B08DB95F0BA8A0 /* REU.swift in Sources */,
 				12A6333A898B12ADB9D6EBB6 /* SID.swift in Sources */,
 				5BD22DED10F918C5F17911AE /* SIDAudioOutput.swift in Sources */,
 				7625FE6D0F4D2D2AA0086F22 /* SIDRegisterTrace.swift in Sources */,

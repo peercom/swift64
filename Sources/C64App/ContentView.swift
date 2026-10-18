@@ -1126,6 +1126,7 @@ private struct C64InspectorView: View {
                 InspectorRow("Drive", status.trueDriveMode.displayName, systemImage: status.trueDriveMode == .off ? "bolt" : "externaldrive")
                 InspectorRow("SID", emulator.machineSummary.sid, systemImage: "waveform")
                 InspectorRow("CIA", emulator.c64.cia1.model.displayName, systemImage: "timer")
+                InspectorRow("REU", emulator.c64.reu?.model.displayName ?? "none", systemImage: "memorychip")
                 InspectorRow("Joystick", emulator.machineSummary.joystick, systemImage: "gamecontroller")
             }
 
@@ -1880,17 +1881,24 @@ final class EmulatorController: ObservableObject {
         let sidModelID = defaults.string(forKey: PreferenceKey.sidModel) ?? SIDModelPreference.profileDefault.rawValue
         let sidAccuracyModeID = defaults.string(forKey: PreferenceKey.sidAccuracyMode) ?? SIDAccuracyModePreference.fast.rawValue
         let ciaModelID = defaults.string(forKey: PreferenceKey.ciaModel) ?? CIAModelPreference.profileDefault.rawValue
+        let reuID = defaults.string(forKey: PreferenceKey.reuModel) ?? REUPreference.none.rawValue
         let joystickID = defaults.string(forKey: PreferenceKey.joystickRouting) ?? JoystickRoutingPreference.both.rawValue
         let profile = MachineProfilePreference(rawValue: profileID) ?? .palC64
         let mode = TrueDriveModePreference(rawValue: modeID) ?? .off
         let sidModel = SIDModelPreference(rawValue: sidModelID) ?? .profileDefault
         let sidAccuracyMode = SIDAccuracyModePreference(rawValue: sidAccuracyModeID) ?? .fast
         let ciaModel = CIAModelPreference(rawValue: ciaModelID) ?? .profileDefault
+        let reuPreference = REUPreference(rawValue: reuID) ?? .none
         let joystickRouting = JoystickRoutingPreference(rawValue: joystickID) ?? .both
 
         c64.machineProfile = profile.profile
         c64.sidModelOverride = sidModel.model
         c64.ciaModelOverride = ciaModel.model
+        if let reuModel = reuPreference.model {
+            c64.attachREU(reuModel)
+        } else {
+            c64.detachREU()
+        }
         c64.sid.accuracyMode = sidAccuracyMode.mode
         displayFramesPerSecond = profile.profile.displayFramesPerSecond
         c64.trueDriveEmulationMode = mode.mode
@@ -1903,7 +1911,7 @@ final class EmulatorController: ObservableObject {
             powerDriveIfNeeded()
         }
         refreshStatus()
-        print("Applied emulation settings: \(profile.title), \(mode.title), SID \(sidModel.title)/\(sidAccuracyMode.title), CIA \(ciaModel.title), joystick \(joystickRouting.title)")
+        print("Applied emulation settings: \(profile.title), \(mode.title), SID \(sidModel.title)/\(sidAccuracyMode.title), CIA \(ciaModel.title), REU \(reuPreference.title), joystick \(joystickRouting.title)")
     }
 
     func applyDisplayPreferences() {

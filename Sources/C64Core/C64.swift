@@ -106,6 +106,9 @@ public final class C64 {
         }
     }
 
+    /// Attached RAM expansion unit, if any.
+    public private(set) var reu: REU?
+
     /// Optional CIA revision override. When nil, the machine profile selects it.
     public var ciaModelOverride: CIA.Model? {
         didSet {
@@ -822,6 +825,7 @@ public final class C64 {
         sidRAMWindowRegisterWriteCounts = [UInt64](repeating: 0, count: 32)
 
         initializeRAMPowerOnPattern(machineProfile.memoryPowerOnPattern)
+        reu?.reset()
 
         // Set default CPU port
         memory.resetCPUPort()
@@ -852,6 +856,7 @@ public final class C64 {
         memory.resetCPUPort()
         tapeUnit.clearWriteCapture()
         memory.resetCartridge()
+        reu?.reset()
         updateIRQ()
         updateNMI()
         cpu.reset()
@@ -901,7 +906,9 @@ public final class C64 {
 
         // BA drives the 6510's RDY input: reads stop during the warning
         // interval, while pending writes may finish before AEC goes low.
-        let cpuStalledByVIC = vic.baLineLow
+        // /DMA from the REU also pulls RDY, and AEC with it.
+        let reuOwnsBus = reu?.dmaActive == true
+        let cpuStalledByVIC = vic.baLineLow || reuOwnsBus
         cpu.setRDYLine(high: !cpuStalledByVIC)
 
         // At instruction boundaries: trace, check traps and breakpoints
@@ -919,8 +926,14 @@ public final class C64 {
         feedKeyboardBufferIfPossible()
 
         vic.beginCycle()
-        cpu.setRDYLine(high: !vic.baLineLow)
-        cpu.tick(busAvailable: !vic.aecLineLow)
+        cpu.setRDYLine(high: !vic.baLineLow && !reuOwnsBus)
+        memory.cpuWritesDisconnected = reuOwnsBus
+        cpu.tick(busAvailable: !vic.aecLineLow && !reuOwnsBus)
+        memory.cpuWritesDisconnected = false
+        if reuOwnsBus, let reu, !vic.baLineLow {
+            // The controller transfers on phi2 cycles the VIC leaves free.
+            reu.performDMACycle(bus: memory)
+        }
         vic.endCycle()
 
         // CIA ticks
@@ -1162,7 +1175,32 @@ public final class C64 {
 
     func updateIRQ() {
         // IRQ is active if any source is asserting it
-        cpu.irqLine = cia1.interruptActive || (vic.interruptRegister & 0x80 != 0)
+        cpu.irqLine = cia1.interruptActive || (vic.interruptRegister & 0x80 != 0) || reu?.interruptActive == true
+    }
+
+    // MARK: - RAM expansion
+
+    /// Plug a RAM expansion into the expansion port. Its contents start with
+    /// the power-on pattern; attaching the same model again keeps the unit.
+    public func attachREU(_ model: REU.Model) {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+        if let existing = reu, existing.model == model { return }
+        let unit = REU(model: model)
+        unit.onInterrupt = { [weak self] _ in self?.updateIRQ() }
+        reu = unit
+        memory.reu = unit
+        memory.cpuWritesDisconnected = false
+        updateIRQ()
+    }
+
+    public func detachREU() {
+        machineLock.lock()
+        defer { machineLock.unlock() }
+        reu = nil
+        memory.reu = nil
+        memory.cpuWritesDisconnected = false
+        updateIRQ()
     }
 
     func initializeRAMPowerOnPattern(_ pattern: MemoryPowerOnPattern) {
@@ -1177,7 +1215,7 @@ public final class C64 {
 extension C64 {
     public static let snapshotMagic = "SW64SNAP"
     public static let snapshotFormatVersion: UInt16 = 1
-    public static let snapshotStoredPropertyCount = 46
+    public static let snapshotStoredPropertyCount = 47
 
     /// Serialize the complete machine, including mounted media, so that
     /// `restoreState(from:)` continues from exactly this clock cycle.
@@ -1201,6 +1239,9 @@ extension C64 {
         try writeChunk("DRV ", to: &w) { try drive1541.saveState(to: &$0) }
         try writeChunk("HDSK", to: &w) { try diskDrive.saveState(to: &$0) }
         try writeChunk("TAPE", to: &w) { try tapeUnit.saveState(to: &$0) }
+        if let reu {
+            writeChunk("REU ", to: &w) { reu.saveState(to: &$0) }
+        }
         return Data(w.bytes)
     }
 
@@ -1229,12 +1270,37 @@ extension C64 {
         try readChunk("DRV ", from: &r) { try drive1541.restoreState(from: &$0) }
         try readChunk("HDSK", from: &r) { try diskDrive.restoreState(from: &$0) }
         try readChunk("TAPE", from: &r) { try tapeUnit.restoreState(from: &$0) }
+        if r.isAtEnd {
+            detachREUWithoutLocking()
+        } else {
+            try readChunk("REU ", from: &r) { body in
+                // Peek at the model to attach the right unit, then let it read
+                // the whole chunk from the start.
+                var peek = body
+                let modelName: String = try peek.read()
+                guard let model = REU.Model(rawValue: modelName) else { throw MachineStateError.invalidValue("REU model") }
+                if reu?.model != model { attachREUWithoutLocking(model) }
+                try reu?.restoreState(from: &body)
+            }
+        }
 
         driveTickBudgetConsumedThisC64Cycle = false
         updateIRQ()
         updateNMI()
         // Host keys currently held replace the matrix captured at save time.
         keyboard.updateMatrix()
+    }
+
+    private func attachREUWithoutLocking(_ model: REU.Model) {
+        let unit = REU(model: model)
+        unit.onInterrupt = { [weak self] _ in self?.updateIRQ() }
+        reu = unit
+        memory.reu = unit
+    }
+
+    private func detachREUWithoutLocking() {
+        reu = nil
+        memory.reu = nil
     }
 
     private func writeChunk(_ tag: String, to w: inout StateWriter, _ body: (inout StateWriter) throws -> Void) rethrows {

@@ -126,6 +126,12 @@ public final class MemoryMap: Bus {
     public weak var cia1: CIA?
     public weak var cia2: CIA?
     public weak var debugger: Debugger?
+    /// Attached RAM expansion, answering IO2 reads and writes and $FF00 triggers.
+    public weak var reu: REU?
+
+    /// While the REU holds /DMA the 6510 is disconnected from the bus: its
+    /// reads stall on RDY and its writes never reach memory.
+    public var cpuWritesDisconnected = false
 
     // MARK: - Init
 
@@ -169,8 +175,33 @@ public final class MemoryMap: Bus {
             return finishRead(address, value: effectivePort)
         }
 
+        return finishRead(address, value: bankedRead(address))
+    }
+
+    /// A DMA read by an expansion-port bus master: it sees the PLA banking
+    /// but not the 6510's internal port (`cpuport` probe), drives the shared
+    /// data bus, and raises no CPU watchpoints.
+    public func dmaRead(_ address: UInt16) -> UInt8 {
+        let value = address <= 0x0001 ? ram[Int(address)] : bankedRead(address)
+        driveCPUDataBus(value)
+        return value
+    }
+
+    /// A DMA write by an expansion-port bus master; see `dmaRead`.
+    public func dmaWrite(_ address: UInt16, value: UInt8) {
+        driveCPUDataBus(value)
+        if address <= 0x0001 {
+            ram[Int(address)] = value
+            return
+        }
+        bankedWrite(address, value: value)
+    }
+
+    /// The PLA-decoded read for everything except the 6510 port.
+    func bankedRead(_ address: UInt16) -> UInt8 {
+        let addr = Int(address)
         if cartridge?.usesUltimaxMemoryMap == true {
-            return finishRead(address, value: readUltimax(address))
+            return readUltimax(address)
         }
 
         let value: UInt8
@@ -219,12 +250,24 @@ public final class MemoryMap: Bus {
             value = ram[addr]
         }
 
-        return finishRead(address, value: value)
+        return value
     }
 
     public func write(_ address: UInt16, value: UInt8) {
         let addr = Int(address)
-        driveCPUDataBus(value)
+        // A disconnected CPU still goes through its write cycle, but nothing
+        // reaches the bus (`rmw-trigger`: the second write of INC $FF00 is lost).
+        guard !cpuWritesDisconnected else { return }
+
+        // The 6510 runs a bus write cycle for its internal port registers
+        // but does not drive the data bus, so the RAM under $0000/$0001
+        // latches whatever the bus holds: the VIC's phi1 fetch of that cycle
+        // (the public `cpuport` probe reads it back through REU DMA).
+        if addr <= 0x0001 {
+            ram[addr] = cpuDataBus
+        } else {
+            driveCPUDataBus(value)
+        }
 
         if let dbg = debugger, !dbg.watchpoints.isEmpty {
             dbg.notifyWrite(address, value: value)
@@ -254,8 +297,15 @@ public final class MemoryMap: Bus {
             return
         }
 
+        bankedWrite(address, value: value)
+    }
+
+    /// The PLA-decoded write for everything except the 6510 port.
+    func bankedWrite(_ address: UInt16, value: UInt8) {
+        let addr = Int(address)
         if cartridge?.usesUltimaxMemoryMap == true {
             writeUltimax(UInt16(addr), value: value)
+            if address == 0xFF00 { reu?.writeFF00() }
             return
         }
 
@@ -276,6 +326,8 @@ public final class MemoryMap: Bus {
         // All writes go to RAM underneath
         ram[addr] = value
         onRAMWrite?(address, value)
+        // The REC watches the address bus for the $FF00 trigger whatever is banked in.
+        if address == 0xFF00 { reu?.writeFF00() }
     }
 
     func finishRead(_ address: UInt16, value: UInt8) -> UInt8 {
@@ -364,7 +416,11 @@ public final class MemoryMap: Bus {
         case 0xDD00...0xDDFF:
             return cia2?.readRegister(address & 0x0F) ?? cpuDataBus
 
-        case 0xDE00...0xDFFF:
+        case 0xDE00...0xDEFF:
+            return cartridge?.readIO(address) ?? cpuDataBus
+
+        case 0xDF00...0xDFFF:
+            if let reu { return reu.readRegister(Int(address & 0x1F)) }
             return cartridge?.readIO(address) ?? cpuDataBus
 
         default:
@@ -405,6 +461,10 @@ public final class MemoryMap: Bus {
             onCartridgeNMIChange?(cartridge?.nmiLineActive == true)
 
         case 0xDF00...0xDFFF:
+            if let reu {
+                reu.writeRegister(Int(address & 0x1F), value: value)
+                return
+            }
             cartridge?.writeIO2(address, value: value)
             onCartridgeNMIChange?(cartridge?.nmiLineActive == true)
 
@@ -458,7 +518,7 @@ public final class MemoryMap: Bus {
 // MARK: - Snapshot state
 
 extension MemoryMap {
-    public static let snapshotStoredPropertyCount = 25
+    public static let snapshotStoredPropertyCount = 27
 
     /// ROMs, the cartridge, and callbacks are not part of the memory state.
     func saveState(to w: inout StateWriter) {

@@ -216,10 +216,12 @@ final class C64ResetTests: XCTestCase {
         XCTAssertEqual(c64.memory.portData, 0x37)
         XCTAssertEqual(c64.memory.read(0x0000), 0x2F)
         XCTAssertEqual(c64.memory.read(0x0001), 0x37)
-        XCTAssertEqual(c64.memory.ram[0x0000], 0xAA)
-        XCTAssertEqual(c64.memory.ram[0x0001], 0xBB)
-        XCTAssertEqual(c64.memory.vicRead(0x0000), 0xAA)
-        XCTAssertEqual(c64.memory.vicRead(0x0001), 0xBB)
+        // Port writes latch the bus byte into the RAM underneath, never the
+        // port value itself, and the VIC sees that RAM (`cpuport` probe).
+        XCTAssertNotEqual(c64.memory.ram[0x0000], 0x2F)
+        XCTAssertNotEqual(c64.memory.ram[0x0001], 0x37)
+        XCTAssertEqual(c64.memory.vicRead(0x0000), c64.memory.ram[0x0000])
+        XCTAssertEqual(c64.memory.vicRead(0x0001), c64.memory.ram[0x0001])
     }
 
     func testResetClearsCapturedCassetteWritePulses() {

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.sidModel) private var sidModel = SIDModelPreference.profileDefault.rawValue
     @AppStorage(PreferenceKey.sidAccuracyMode) private var sidAccuracyMode = SIDAccuracyModePreference.fast.rawValue
     @AppStorage(PreferenceKey.ciaModel) private var ciaModel = CIAModelPreference.profileDefault.rawValue
+    @AppStorage(PreferenceKey.reuModel) private var reuModel = REUPreference.none.rawValue
     @AppStorage(PreferenceKey.joystickRouting) private var joystickRouting = JoystickRoutingPreference.both.rawValue
     @AppStorage(PreferenceKey.basicROMPath) private var basicROMPath = ""
     @AppStorage(PreferenceKey.kernalROMPath) private var kernalROMPath = ""
@@ -91,6 +92,15 @@ struct SettingsView: View {
                             Text(model.title).tag(model.rawValue)
                         }
                     }
+
+                    Picker("RAM Expansion", selection: $reuModel) {
+                        ForEach(REUPreference.allCases) { unit in
+                            Text(unit.title).tag(unit.rawValue)
+                        }
+                    }
+                    Text("A 17xx RAM Expansion Unit on the expansion port. Changing it takes effect with Apply and resets the machine; its contents are kept across C64 resets and in save states.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     Picker("Joystick", selection: $joystickRouting) {
                         ForEach(JoystickRoutingPreference.allCases) { routing in

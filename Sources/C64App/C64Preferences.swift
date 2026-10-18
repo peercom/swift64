@@ -7,6 +7,7 @@ enum PreferenceKey {
     static let sidModel = "c64.sid.model"
     static let sidAccuracyMode = "c64.sid.accuracyMode"
     static let ciaModel = "c64.cia.model"
+    static let reuModel = "c64.expansion.reu"
     static let joystickRouting = "c64.input.joystickRouting"
     static let basicROMPath = "c64.rom.basicPath"
     static let kernalROMPath = "c64.rom.kernalPath"
@@ -310,6 +311,39 @@ enum CIAModelPreference: String, CaseIterable, Identifiable {
         case .profileDefault: return nil
         case .mos6526: return .mos6526
         case .mos6526A: return .mos6526A
+        }
+    }
+}
+
+enum REUPreference: String, CaseIterable, Identifiable {
+    case none
+    case reu1700
+    case reu1764
+    case reu1750
+    case reu2MB
+    case reu16MB
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .reu1700: return "1700 (128 KB)"
+        case .reu1764: return "1764 (256 KB)"
+        case .reu1750: return "1750 (512 KB)"
+        case .reu2MB: return "2 MB"
+        case .reu16MB: return "16 MB"
+        }
+    }
+
+    var model: REU.Model? {
+        switch self {
+        case .none: return nil
+        case .reu1700: return .reu1700
+        case .reu1764: return .reu1764
+        case .reu1750: return .reu1750
+        case .reu2MB: return .reu2MB
+        case .reu16MB: return .reu16MB
         }
     }
 }
