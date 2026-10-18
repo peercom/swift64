@@ -153,7 +153,10 @@ public final class SID {
         var accumulator: UInt32 = 0 {
             didSet { previousPhase = UInt16(accumulator >> 12) }
         }
-        var shiftRegister: UInt32 = 0x7FFFF8
+        /// 23-bit noise LFSR. All ones is the state a long TEST hold pulls it to
+        /// (the public `noisetest`/`oscsample` programs start from it), so a
+        /// fresh voice starts there too.
+        var shiftRegister: UInt32 = 0x7FFFFF
         var envelopeCounter: UInt32 = 0
         var envelopeLevel: UInt8 = 0
         var envelopeState: EnvelopeState = .release
@@ -168,12 +171,20 @@ public final class SID {
         /// pulse comparator works from this one-cycle-old phase; after a sync
         /// or TEST reset it is the reset phase (a model choice, not measured).
         var previousPhase: UInt16 = 0
+        /// Cycles TEST has been held since its rising edge, saturating at
+        /// `SID.noiseShiftRegisterResetCycles`; the noise register is pulled to
+        /// all ones when the count reaches that threshold.
+        var testHoldCycles: Int = 0
+        /// Cycles until a detected bit-19 edge shifts the noise register
+        /// (`SID.noiseShiftPipelineCycles(for:)` when the edge is seen, 0 when idle).
+        var noiseShiftCyclesRemaining: UInt8 = 0
 
         var waveTriangle: Bool { control & 0x10 != 0 }
         var waveSawtooth: Bool { control & 0x20 != 0 }
         var wavePulse: Bool { control & 0x40 != 0 }
         var waveNoise: Bool { control & 0x80 != 0 }
         var hasWaveform: Bool { control & 0xF0 != 0 }
+        var waveNoiseOnly: Bool { control & 0xF0 == 0x80 }
         var ringMod: Bool { control & 0x04 != 0 }
         var sync: Bool { control & 0x02 != 0 }
         var testBit: Bool { control & 0x08 != 0 }
@@ -412,7 +423,8 @@ public final class SID {
 
     /// Per-cycle oscillator MSB rising-edge flags used for hard sync.
     var oscillatorMSBRose = [Bool](repeating: false, count: 3)
-    /// Per-cycle accumulator bit-19 rising-edge flags used to clock noise LFSRs.
+    /// Per-cycle accumulator bit-19 rising-edge flags; the noise LFSR shifts
+    /// `noiseShiftPipelineCycles(for:)` after the flag is set.
     var noiseClockRose = [Bool](repeating: false, count: 3)
 
     /// Ring buffer for audio output
@@ -451,6 +463,26 @@ public final class SID {
     /// 8580 variant allows six times that. The exact curves are not measured.
     static func waveformDACLeakStepCycles(for model: Model) -> Int {
         model == .mos6581 ? 12_000 : 150_000
+    }
+    /// Cycles of a TEST hold after which the noise shift register reads all
+    /// ones. The public `oscsample` dumps show every register bit surviving
+    /// a hold of two PAL frames on both chips, and the `noisetest`/`oscsample`
+    /// programs find all ones after a hold of 23.6 million cycles with the
+    /// 8580 described as taking much longer than the 6581; the values inside
+    /// that window are model parameters, not measurements.
+    static func noiseShiftRegisterResetCycles(for model: Model) -> Int {
+        model == .mos6581 ? 0x10_0000 : 0x100_0000
+    }
+    /// Shift-register bits that drive noise output bits 11 (first) to 4
+    /// (last); the mapping of the public `noisetest` program.
+    static let noiseOutputTaps = [20, 18, 14, 11, 9, 5, 2, 0]
+    /// Cycles between a bit-19 rising edge and the noise register shift. The
+    /// `oscsample` noise dumps place every OSC3 change in the same cycle on
+    /// both chips, while the 6581 reads the accumulator-driven waveforms one
+    /// cycle earlier than the 8580, so relative to its own readback the 6581
+    /// shifts one cycle later.
+    static func noiseShiftPipelineCycles(for model: Model) -> UInt8 {
+        model == .mos6581 ? 2 : 1
     }
     static let paddleScanCycles = 512
     static let voiceMixDivisor: Int32 = 4
@@ -578,7 +610,13 @@ public final class SID {
     public func tick() {
         ageDataBusLatch()
         tickPaddleScan()
-        sampleVoice3Readbacks()
+        sampleEnvelope3Readback()
+        // The public `oscsample` programs detect the chip by reading OSC3
+        // four cycles after releasing TEST with FREQ $4000: the 6581 reads
+        // $01, the 8580 $00 ("the MOS8580 waveform is delayed one cycle").
+        // The 8580 readback therefore samples the oscillator before this
+        // cycle's clock, the 6581 after it.
+        if model == .mos8580 { sampleOscillator3Readback() }
 
         // Update all oscillators before applying sync so source edges are
         // independent of voice iteration order.
@@ -586,6 +624,7 @@ public final class SID {
             clockOscillator(i)
         }
         applyOscillatorSync()
+        if model == .mos6581 { sampleOscillator3Readback() }
 
         for i in 0..<3 {
             clockEnvelope(i)
@@ -608,8 +647,16 @@ public final class SID {
     }
 
     func sampleVoice3Readbacks() {
+        sampleOscillator3Readback()
+        sampleEnvelope3Readback()
+    }
+
+    func sampleOscillator3Readback() {
         oscillator3Readback = UInt8((oscillatorReadbackOutput(2) >> 4) & 0xFF)
         oscillator3ReadbackValid = true
+    }
+
+    func sampleEnvelope3Readback() {
         envelope3Readback = voices[2].envelopeLevel
         envelope3ReadbackValid = true
     }
@@ -792,12 +839,28 @@ public final class SID {
         let phaseBeforeClock = UInt16(voice.accumulator >> 12)
         let prevMSB = voice.accumulator & 0x800000
         let prevNoiseClock = voice.accumulator & 0x080000
+        // A detected bit-19 rising edge shifts the register
+        // `noiseShiftPipelineCycles` later.
+        var shiftNoiseRegisterNow = false
+        if voice.noiseShiftCyclesRemaining > 0 {
+            voice.noiseShiftCyclesRemaining -= 1
+            shiftNoiseRegisterNow = voice.noiseShiftCyclesRemaining == 0
+        }
         let wasNoiseCombined = voice.waveNoise &&
             (voice.waveTriangle || voice.waveSawtooth || voice.wavePulse)
 
         if voice.testBit {
+            // TEST holds the accumulator at zero, so bit 19 never rises and
+            // the noise register keeps its state; only a long hold pulls
+            // every bit to one.
             voice.accumulator = 0
-            voice.shiftRegister = 0
+            let resetCycles = Self.noiseShiftRegisterResetCycles(for: model)
+            if voice.testHoldCycles < resetCycles {
+                voice.testHoldCycles += 1
+                if voice.testHoldCycles == resetCycles {
+                    voice.shiftRegister = 0x7FFFFF
+                }
+            }
         } else {
             voice.accumulator = (voice.accumulator + UInt32(voice.frequency)) & 0xFFFFFF
         }
@@ -806,36 +869,48 @@ public final class SID {
         let newMSB = voice.accumulator & 0x800000
         oscillatorMSBRose[v] = prevMSB == 0 && newMSB != 0
 
-        // Noise shift register clock on accumulator bit 19 rising edge.
+        // Noise shift register clock on accumulator bit 19 rising edge,
+        // applied through the pipeline.
         let newNoiseClock = voice.accumulator & 0x080000
         noiseClockRose[v] = prevNoiseClock == 0 && newNoiseClock != 0
         if noiseClockRose[v] {
-            let bit22 = (voice.shiftRegister >> 22) & 1
-            let bit17 = (voice.shiftRegister >> 17) & 1
-            let newBit = bit22 ^ bit17
-            voice.shiftRegister = ((voice.shiftRegister << 1) | newBit) & 0x7FFFFF
+            voice.noiseShiftCyclesRemaining = Self.noiseShiftPipelineCycles(for: model)
+        }
+        if shiftNoiseRegisterNow {
+            voice.shiftRegister = Self.clockedNoiseShiftRegister(voice.shiftRegister, testBit: false)
         }
         voices[v] = voice
-        if noiseClockRose[v] && wasNoiseCombined && model == .mos6581 {
+        if shiftNoiseRegisterNow && wasNoiseCombined && model == .mos6581 {
             age6581CombinedNoiseRegister(v)
         }
 
         updateWaveformDACLatch(v)
     }
 
+    /// One shift of the noise LFSR: bit 0 receives bit 22 XOR bit 17, with
+    /// TEST ORed into the bit-22 input. The public `noisetest` program
+    /// verifies the forced feedback on a TEST release (bit 0 = NOT bit 17)
+    /// on both chips.
+    static func clockedNoiseShiftRegister(_ shiftRegister: UInt32, testBit: Bool) -> UInt32 {
+        let bit22 = ((shiftRegister >> 22) & 1) | (testBit ? 1 : 0)
+        let bit17 = (shiftRegister >> 17) & 1
+        return ((shiftRegister << 1) | (bit22 ^ bit17)) & 0x7FFFFF
+    }
+
     func age6581CombinedNoiseRegister(_ v: Int) {
         // The 6581's combined noise waveforms feed analog pull-down effects
         // back into the noise generator. This deterministic approximation
         // drains the DAC-tapped bits, so repeated clocks can lock the LFSR at
-        // zero until TEST reseeds it.
-        let dacTappedBits: UInt32 =
-            (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        // zero until a TEST release feeds a one back in.
+        let dacTappedBits = Self.noiseOutputTaps.reduce(UInt32(0)) { $0 | (1 << UInt32($1)) }
         voices[v].shiftRegister &= ~dacTappedBits
     }
 
     func updateWaveformDACLatch(_ v: Int) {
-        if voices[v].hasWaveform && !voices[v].testBit {
+        // Under TEST the accumulator-driven waveforms are silent, but the
+        // noise register keeps its state and stays readable (`noisetest`
+        // reads OSC3 unchanged right after setting TEST).
+        if voices[v].hasWaveform && (!voices[v].testBit || voices[v].waveNoiseOnly) {
             refreshWaveformDACLatch(v)
         } else if voices[v].waveformDACHoldCyclesRemaining > 0 {
             voices[v].waveformDACHoldCyclesRemaining -= 1
@@ -1118,14 +1193,9 @@ public final class SID {
     func noiseWaveformOutput(_ v: Int) -> UInt16 {
         let sr = voices[v].shiftRegister
         var noiseBits: UInt32 = 0
-        noiseBits |= ((sr >> 22) & 1) << 11
-        noiseBits |= ((sr >> 20) & 1) << 10
-        noiseBits |= ((sr >> 16) & 1) << 9
-        noiseBits |= ((sr >> 13) & 1) << 8
-        noiseBits |= ((sr >> 11) & 1) << 7
-        noiseBits |= ((sr >> 7) & 1) << 6
-        noiseBits |= ((sr >> 4) & 1) << 5
-        noiseBits |= ((sr >> 2) & 1) << 4
+        for (index, tap) in Self.noiseOutputTaps.enumerated() {
+            noiseBits |= ((sr >> UInt32(tap)) & 1) << UInt32(11 - index)
+        }
         return UInt16(noiseBits)
     }
 
@@ -1642,14 +1712,24 @@ public final class SID {
 
         if isTestSet {
             voices[voice].accumulator = 0
-            voices[voice].shiftRegister = 0
-            voices[voice].waveformDACOutput = 0
+            if !wasTestSet { voices[voice].testHoldCycles = 0 }
+            // An edge still in the pipeline is dropped (model choice).
+            voices[voice].noiseShiftCyclesRemaining = 0
+            // The noise register is not touched: it keeps its state until a
+            // long hold pulls it to all ones (see `clockOscillator`).
+            let noiseOutput = voices[voice].waveNoiseOnly ? noiseWaveformOutput(voice) : 0
+            voices[voice].waveformDACOutput = noiseOutput
             voices[voice].waveformDACHoldCyclesRemaining = 0
             oscillatorMSBRose[voice] = false
             noiseClockRose[voice] = false
-            if voice == 2 { oscillator3Readback = 0 }
-        } else if wasTestSet && voices[voice].shiftRegister == 0 {
-            voices[voice].shiftRegister = 0x7FFFF8
+            if voice == 2 { oscillator3Readback = UInt8((noiseOutput >> 4) & 0xFF) }
+        } else if wasTestSet {
+            // The TEST release clocks the noise register once with TEST still
+            // in the feedback (`noisetest`; the `oscsample` noise runs each
+            // continue from the previous run's register through exactly this
+            // one shift).
+            voices[voice].shiftRegister = Self.clockedNoiseShiftRegister(voices[voice].shiftRegister, testBit: true)
+            voices[voice].testHoldCycles = 0
         }
     }
 }
@@ -1716,7 +1796,7 @@ extension SID.Voice {
         w.write(envelopeState.snapshotValue)
         w.write(exponentialCounter); w.write(exponentialPeriod); w.write(holdZero); w.write(gate)
         w.write(rateCounter); w.write(waveformDACOutput); w.write(waveformDACHoldCyclesRemaining)
-        w.write(previousPhase)
+        w.write(previousPhase); w.write(testHoldCycles); w.write(noiseShiftCyclesRemaining)
     }
 
     mutating func restoreState(from r: inout StateReader) throws {
@@ -1725,7 +1805,7 @@ extension SID.Voice {
         envelopeState = try SID.EnvelopeState(snapshotValue: try r.read())
         exponentialCounter = try r.read(); exponentialPeriod = try r.read(); holdZero = try r.read(); gate = try r.read()
         rateCounter = try r.read(); waveformDACOutput = try r.read(); waveformDACHoldCyclesRemaining = try r.read()
-        previousPhase = try r.read()
+        previousPhase = try r.read(); testHoldCycles = try r.read(); noiseShiftCyclesRemaining = try r.read()
     }
 }
 

@@ -34,7 +34,7 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.voices[0].frequency, 0)
         XCTAssertEqual(sid.voices[0].control, 0)
         XCTAssertEqual(sid.voices[0].accumulator, 0)
-        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFFF)
         XCTAssertEqual(sid.voices[2].envelopeLevel, 0)
         XCTAssertEqual(sid.readRegister(0x19), 0xFF)
         XCTAssertEqual(sid.readRegister(0x1A), 0xFF)
@@ -1214,8 +1214,9 @@ final class SIDTests: XCTestCase {
         XCTAssertEqual(sid.debugRegisterValue(0x1C), 0x21)
     }
 
-    func testOscillator3ReadbackUsesSampledFirstPhaseValueAfterTick() {
+    func testOscillator3ReadbackUsesSampledFirstPhaseValueAfterTickOn8580() {
         let sid = SID()
+        sid.model = .mos8580
         sid.voices[2].control = 0x20
         sid.voices[2].accumulator = 0x40FFFF
         sid.voices[2].frequency = 1
@@ -1232,6 +1233,39 @@ final class SIDTests: XCTestCase {
 
         XCTAssertEqual(sid.oscillator3Readback, 0x41)
         XCTAssertEqual(sid.readRegister(0x1B), 0x41)
+    }
+
+    /// The public `oscsample` chip probe (FREQ $4000, OSC3 read four cycles
+    /// after the TEST release) reads $01 on a 6581 and $00 on an 8580: the
+    /// 6581 readback samples the oscillator after the cycle's clock.
+    func testOscillator3ReadbackSamplesAfterOscillatorClockOn6581() {
+        let sid = SID()
+        sid.model = .mos6581
+        sid.voices[2].control = 0x20
+        sid.voices[2].accumulator = 0x40FFFF
+        sid.voices[2].frequency = 1
+
+        sid.tick()
+
+        XCTAssertEqual(sid.oscillator3Readback, 0x41)
+        XCTAssertTrue(sid.oscillator3ReadbackValid)
+        XCTAssertEqual(sid.readRegister(0x1B), 0x41)
+        XCTAssertEqual(sid.debugRegisterValue(0x1B), 0x41)
+    }
+
+    func testOscsampleChipProbeReadsOneOn6581AndZeroOn8580() {
+        for model in [SID.Model.mos6581, .mos8580] {
+            let sid = SID()
+            sid.model = model
+            sid.writeRegister(0x12, value: 0x08)
+            sid.writeRegister(0x0E, value: 0x00)
+            sid.writeRegister(0x0F, value: 0x40)
+            sid.tick()
+            sid.writeRegister(0x12, value: 0x20)
+            // LDA $D41B reads in the fourth cycle after the STA completes.
+            for _ in 0..<4 { sid.tick() }
+            XCTAssertEqual(sid.readRegister(0x1B), model == .mos6581 ? 0x01 : 0x00, "\(model)")
+        }
     }
 
     func testVoice3TestWriteInvalidatesSampledOscillator3Readback() {
@@ -1359,6 +1393,7 @@ final class SIDTests: XCTestCase {
 
     func testOscillator3SampledReadbackUpdatesLocalDataBusLatch() {
         let sid = SID()
+        sid.model = .mos8580
         sid.voices[2].control = 0x20
         sid.voices[2].accumulator = 0xA0FFFF
         sid.voices[2].frequency = 1
@@ -1415,12 +1450,12 @@ final class SIDTests: XCTestCase {
     func testNoiseWaveformMapsSIDShiftRegisterOutputBits() {
         let sid = SID()
         sid.voices[0].control = 0x80
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
 
         XCTAssertEqual(sid.oscillatorOutput(0), 0xFF0)
 
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 11) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 9) | (1 << 0)
 
         XCTAssertEqual(sid.oscillatorOutput(0), 0x890)
     }
@@ -1428,8 +1463,8 @@ final class SIDTests: XCTestCase {
     func testCombinedNoiseSawMasksNoiseWithSawtoothOutput() {
         let sid = SID()
         sid.voices[0].control = 0xA0
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x0F0000
 
         XCTAssertEqual(sid.oscillatorOutput(0), 0x0F0)
@@ -1438,8 +1473,8 @@ final class SIDTests: XCTestCase {
     func testCombinedNoiseTriangleMasksNoiseWithTriangleOutput() {
         let sid = SID()
         sid.voices[0].control = 0x90
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x100000
 
         XCTAssertEqual(sid.oscillatorOutput(0), 0x200)
@@ -1449,8 +1484,8 @@ final class SIDTests: XCTestCase {
         let sid = SID()
         sid.model = .mos8580
         sid.voices[0].control = 0xB0
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x700000
 
         XCTAssertEqual(sid.triangleWaveformOutput(0) & sid.sawtoothWaveformOutput(0), 0x600)
@@ -1462,8 +1497,8 @@ final class SIDTests: XCTestCase {
         let sid = SID()
         sid.model = .mos6581
         sid.voices[0].control = 0xB0
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x700000
 
         XCTAssertEqual(sid.triangleWaveformOutput(0) & sid.sawtoothWaveformOutput(0), 0x600)
@@ -1477,8 +1512,8 @@ final class SIDTests: XCTestCase {
         sid.model = .mos6581
         sid.voices[0].control = 0xD0
         sid.voices[0].pulseWidth = 0x0800
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x900000
 
         XCTAssertEqual(sid.triangleWaveformOutput(0) & sid.pulseWaveformOutput(0), 0xDFF)
@@ -1492,8 +1527,8 @@ final class SIDTests: XCTestCase {
         sid.model = .mos6581
         sid.voices[0].control = 0xF0
         sid.voices[0].pulseWidth = 0x0800
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].accumulator = 0x900000
 
         XCTAssertEqual(sid.triangleWaveformOutput(0) & sid.sawtoothWaveformOutput(0) & sid.pulseWaveformOutput(0), 0x900)
@@ -1505,8 +1540,8 @@ final class SIDTests: XCTestCase {
     func testCombinedNoisePulseMasksNoiseWithPulseOutput() {
         let sid = SID()
         sid.voices[0].control = 0xC0
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
         sid.voices[0].pulseWidth = 0x0800
 
         sid.voices[0].accumulator = 0x700000
@@ -1522,12 +1557,16 @@ final class SIDTests: XCTestCase {
         sid.voices[0].control = 0xA0
         sid.voices[0].accumulator = 0x07FFFF
         sid.voices[0].frequency = 1
-        sid.voices[0].shiftRegister = (1 << 22) | (1 << 20) | (1 << 16) | (1 << 13) |
-            (1 << 11) | (1 << 7) | (1 << 4) | (1 << 2)
+        sid.voices[0].shiftRegister = (1 << 20) | (1 << 18) | (1 << 14) | (1 << 11) |
+            (1 << 9) | (1 << 5) | (1 << 2) | (1 << 0)
 
         sid.clockOscillator(0)
-
         XCTAssertTrue(sid.noiseClockRose[0])
+        sid.clockOscillator(0)
+        XCTAssertEqual(sid.noiseWaveformOutput(0), 0xFF0, "the shift lands two cycles after the edge")
+        sid.clockOscillator(0)
+
+        XCTAssertFalse(sid.noiseClockRose[0])
         XCTAssertEqual(sid.noiseWaveformOutput(0), 0)
         XCTAssertNotEqual(sid.voices[0].shiftRegister, 0)
     }
@@ -1538,16 +1577,20 @@ final class SIDTests: XCTestCase {
         sid.voices[0].control = 0xA0
         sid.voices[0].accumulator = 0x07FFFF
         sid.voices[0].frequency = 1
-        sid.voices[0].shiftRegister = (1 << 21) | (1 << 19) | (1 << 15) | (1 << 12) |
-            (1 << 10) | (1 << 6) | (1 << 3) | (1 << 1)
+        // One shift before the tapped pattern; bit 17 (clear bit 22) makes
+        // the feedback (bit 22 XOR bit 17) deliver the one that tap 0 needs.
+        sid.voices[0].shiftRegister = (1 << 19) | (1 << 17) | (1 << 13) |
+            (1 << 10) | (1 << 8) | (1 << 4) | (1 << 1)
 
         sid.clockOscillator(0)
-
         XCTAssertTrue(sid.noiseClockRose[0])
+        XCTAssertEqual(SID.noiseShiftPipelineCycles(for: .mos8580), 1)
+        sid.clockOscillator(0)
+
         XCTAssertEqual(sid.noiseWaveformOutput(0), 0xFF0)
     }
 
-    func testTestBitReseeds6581CombinedNoiseLockup() {
+    func testTestBitReleaseFeedsOneInto6581CombinedNoiseLockup() {
         let sid = SID()
         sid.model = .mos6581
         sid.voices[0].control = 0xA0
@@ -1556,9 +1599,10 @@ final class SIDTests: XCTestCase {
         sid.writeRegister(0x04, value: 0xA8)
         XCTAssertEqual(sid.voices[0].shiftRegister, 0)
 
+        // bit 0 = (bit 22 OR TEST) XOR bit 17 = 1
         sid.writeRegister(0x04, value: 0xA0)
 
-        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 1)
         XCTAssertNotEqual(sid.noiseWaveformOutput(0), 0)
     }
 
@@ -2923,8 +2967,17 @@ final class SIDTests: XCTestCase {
         sid.clockOscillator(0)
 
         XCTAssertTrue(sid.noiseClockRose[0])
-        XCTAssertEqual(sid.voices[0].shiftRegister, 1)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x400000, "the edge is detected; the shift follows two cycles later")
+        XCTAssertEqual(sid.voices[0].noiseShiftCyclesRemaining, SID.noiseShiftPipelineCycles(for: .mos6581))
         XCTAssertFalse(sid.oscillatorMSBRose[0])
+
+        sid.clockOscillator(0)
+        XCTAssertFalse(sid.noiseClockRose[0])
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x400000)
+
+        sid.clockOscillator(0)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 1)
+        XCTAssertEqual(sid.voices[0].noiseShiftCyclesRemaining, 0)
     }
 
     func testNoiseShiftRegisterDoesNotClockOnAccumulatorMSBOnly() {
@@ -2951,7 +3004,7 @@ final class SIDTests: XCTestCase {
         sid.writeRegister(0x12, value: 0x08)
 
         XCTAssertEqual(sid.voices[2].accumulator, 0)
-        XCTAssertEqual(sid.voices[2].shiftRegister, 0)
+        XCTAssertEqual(sid.voices[2].shiftRegister, 0x123456, "TEST freezes the noise register")
         XCTAssertFalse(sid.oscillatorMSBRose[2])
         XCTAssertFalse(sid.noiseClockRose[2])
         XCTAssertEqual(sid.readRegister(0x1B), 0)
@@ -2972,34 +3025,37 @@ final class SIDTests: XCTestCase {
         sid.writeRegister(0x0B, value: 0x28)
 
         XCTAssertEqual(sid.voices[1].accumulator, 0)
-        XCTAssertEqual(sid.voices[1].shiftRegister, 0)
+        XCTAssertEqual(sid.voices[1].shiftRegister, 0x7FFFFF)
         XCTAssertEqual(sid.voices[1].waveformDACOutput, 0)
         XCTAssertEqual(sid.voices[1].waveformDACHoldCyclesRemaining, 0)
         XCTAssertEqual(sid.waveformOutput(1), 0)
     }
 
-    func testHoldingTestBitKeepsNoiseShiftRegisterCleared() {
+    func testHoldingTestBitFreezesNoiseShiftRegisterAndKeepsItReadable() {
         let sid = SID()
         sid.voices[0].frequency = 0xFFFF
+        sid.voices[0].shiftRegister = 0x123456
         sid.writeRegister(0x04, value: 0x88)
 
         sid.clockOscillator(0)
         sid.clockOscillator(0)
 
         XCTAssertEqual(sid.voices[0].accumulator, 0)
-        XCTAssertEqual(sid.voices[0].shiftRegister, 0)
-        XCTAssertEqual(sid.oscillatorOutput(0), 0)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x123456)
+        XCTAssertEqual(sid.oscillatorReadbackOutput(0), sid.noiseWaveformOutput(0))
+        XCTAssertNotEqual(sid.oscillatorReadbackOutput(0), 0)
     }
 
-    func testReleasingTestBitSeedsNoiseShiftRegister() {
+    func testReleasingTestBitClocksNoiseShiftRegisterWithForcedFeedback() {
         let sid = SID()
         sid.writeRegister(0x04, value: 0x88)
-        XCTAssertEqual(sid.voices[0].shiftRegister, 0)
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFFF)
 
         sid.writeRegister(0x04, value: 0x80)
 
-        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFF8)
-        XCTAssertNotEqual(sid.oscillatorOutput(0), 0)
+        // bit 0 = (bit 22 OR TEST) XOR bit 17 = 0 from all ones.
+        XCTAssertEqual(sid.voices[0].shiftRegister, 0x7FFFFE)
+        XCTAssertEqual(sid.oscillatorOutput(0), 0xFE0)
     }
 
     /// The public `osc3-wave0` program (verified on a C64 with a 6581 and a
