@@ -5349,7 +5349,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertEqual(records.last?.finalVICAECLineLow, false)
         XCTAssertEqual(records.last?.finalVICBusOwner, "cpu")
         XCTAssertEqual(records.last?.finalVICBusPhase, "cpu")
-        XCTAssertEqual(records.last?.finalVICLowPhaseAccess, "idle")
+        // Raster cycle 0 is hardware cycle 1, the sprite 3 pointer slot;
+        // p-accesses run on every line whether or not sprite DMA is active.
+        XCTAssertEqual(records.last?.finalVICLowPhaseAccess, "spritePointer(sprite:3)")
         XCTAssertEqual(records.last?.finalVICHighPhaseMemoryReads, [])
         XCTAssertEqual(records.last?.finalVICHighPhaseColorRAMReads, [])
         XCTAssertEqual(records.last?.finalVICLowPhaseMemoryReads, [])
@@ -6248,7 +6250,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 finalVICRasterCycle: 0,
                 finalVICBusOwner: "cpu",
                 finalVICBusPhase: "cpu",
-                finalVICLowPhaseAccess: "idle",
+                finalVICLowPhaseAccess: "spritePointer(sprite:3)",
                 finalVICHighPhaseMemoryReads: [],
                 finalVICHighPhaseColorRAMReads: [],
                 finalVICLowPhaseMemoryReads: [],
@@ -6273,7 +6275,7 @@ final class LocalDiskMatrixTests: XCTestCase {
                 finalVICRasterCycle: 0,
                 finalVICBusOwner: "cpu",
                 finalVICBusPhase: "cpu",
-                finalVICLowPhaseAccess: "idle",
+                finalVICLowPhaseAccess: "spritePointer(sprite:3)",
                 finalVICHighPhaseMemoryReads: [],
                 finalVICHighPhaseColorRAMReads: [],
                 finalVICLowPhaseMemoryReads: [],
@@ -7985,7 +7987,10 @@ final class LocalDiskMatrixTests: XCTestCase {
                 horizontalBorderActive: false,
                 rowCounter: 3,
                 videoCounterBase: 80,
-                displayLineBufferBase: 40,
+                // The bad line starts its matrix DMA in this cycle (hardware
+                // cycle 21 lies inside the c-access window), and the first
+                // c-access of a row latches VCBASE as the line-buffer base.
+                displayLineBufferBase: 80,
                 spriteMC: [0, 3, 6, 9, 12, 15, 18, 21],
                 spriteMCBase: [0, 3, 6, 9, 12, 15, 18, 21],
                 spriteYExpFF: [true, false, true, false, true, false, true, false],
@@ -8120,7 +8125,10 @@ final class LocalDiskMatrixTests: XCTestCase {
             vicBALineLow: true,
             vicAECLineLow: true,
             vicBusOwner: .vicBadLine,
-            vicBusPhase: CompatibilityVICBusPhaseExpectation(type: .badLineCharacterFetch, column: 0),
+            // Matrix (c-)accesses occupy hardware cycles 15-54, raster cycles
+            // 14-53, so raster cycle 15 fetches column 1 in phi2 while its phi1
+            // g-access still belongs to column 0.
+            vicBusPhase: CompatibilityVICBusPhaseExpectation(type: .badLineCharacterFetch, column: 1),
             vicLowPhaseAccess: CompatibilityVICLowPhaseAccessExpectation(type: .displayData, column: 0),
             vicLowPhaseMemoryReads: [0x3FFF],
             screenRAMHash: nil,
@@ -8169,14 +8177,16 @@ final class LocalDiskMatrixTests: XCTestCase {
 
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.category, .vic)
-        XCTAssertTrue(result.reason.contains("VIC baLineLow true != false"))
-        XCTAssertTrue(result.reason.contains("VIC aecLineLow true != false"))
-        XCTAssertTrue(result.reason.contains("VIC busOwner vicBadLine != cpu"))
-        XCTAssertTrue(result.reason.contains("VIC busPhase badLineCharacterFetch(column:0) != cpu"))
-        XCTAssertTrue(result.reason.contains("VIC lowPhaseAccess displayData(column:0) != idle"))
-        XCTAssertTrue(result.reason.contains("VIC highPhaseMemoryReads [] != [$1000]"))
-        XCTAssertTrue(result.reason.contains("VIC highPhaseColorRAMReads [] != [$0001]"))
-        XCTAssertTrue(result.reason.contains("VIC lowPhaseMemoryReads [$3FFF] != [$0400]"))
+        XCTAssertTrue(result.reason.contains("VIC baLineLow true != false"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC aecLineLow true != false"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC busOwner vicBadLine != cpu"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC busPhase badLineCharacterFetch(column:1) != cpu"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC lowPhaseAccess displayData(column:0) != idle"), result.reason)
+        // The cycle just executed (raster cycle 14) performed the column 0
+        // c-access: screen RAM $0400 and color RAM $0000.
+        XCTAssertTrue(result.reason.contains("VIC highPhaseMemoryReads [$0400] != [$1000]"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC highPhaseColorRAMReads [$0000] != [$0001]"), result.reason)
+        XCTAssertTrue(result.reason.contains("VIC lowPhaseMemoryReads [$3FFF] != [$0400]"), result.reason)
     }
 
     func testNamedMilestoneCanRequireNoVICMemoryTraceReads() {
@@ -8218,13 +8228,16 @@ final class LocalDiskMatrixTests: XCTestCase {
         c64.cia1.writeRegister(0x05, value: 0x12)
         c64.cia1.writeRegister(0x0E, value: 0x41)
         c64.cia2.writeRegister(0x02, value: 0x3F)
+        // A 6526 start with force load reads old, latch, latch, latch - 1 over
+        // the first four cycles (CIATimerPipelineTests pins the hardware
+        // table), so the first decrement lands in the fourth cycle.
         let milestone = LocalMilestone(
             url: URL(fileURLWithPath: "/tmp/demo.prg"),
             mediaType: .prg,
             machineProfile: .palC64,
             driveMode: .fastLoad,
             commands: [],
-            maxCycles: 1,
+            maxCycles: 4,
             pcRanges: [],
             minGCRReads: 0,
             minByteReady: 0,
