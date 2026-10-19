@@ -253,6 +253,89 @@ final class REUTests: XCTestCase {
         XCTAssertEqual(runDMA(quiet), 200)
     }
 
+    /// `reutiming2` e/e3: the REC samples BA before the 6510 does. In the
+    /// cycle where sprite 0's DMA is switched on (its BA warning starts in the
+    /// same phi1), the controller still makes its access, and the PLA, which
+    /// already sees BA low, deselects I/O so the read returns the RAM under
+    /// it. On later lines of the same sprite BA falls at the cycle start and
+    /// the controller pauses at once.
+    func testStashStillAccessesInTheCycleSpriteZeroDMAIsSwitchedOnAndReadsRAMUnderIO() {
+        let c64 = makeMachine()
+        let m = c64.memory
+        c64.cia1.timerA = 0x1234  // stopped: $DC04 reads $34
+        m.ram[0xDC04] = 0x42      // marker under I/O, as the programs put there
+        // Sprite 0 enabled on a line without bad lines; the VIC switches its
+        // DMA on in cycle 55 (zero-based 54) of that line.
+        c64.vic.writeRegister(0x15, value: 0x01)
+        c64.vic.writeRegister(0x01, value: 250)
+        c64.vic.rasterLine = 250
+        c64.vic.rasterCycle = 0
+        setupTransfer(c64, c64Address: 0xDC04, reuAddress: 0, length: 130, control: 0x80)
+        m.write(0xDF01, value: 0x90)
+        let cycles = runDMA(c64)
+        let bytes = Array(c64.reu!.ram[0..<130])
+        // Line 250: cycles 0-53 read the CIA, cycle 54 (switch-on) reads RAM,
+        // 55-58 pause (warning + DMA), 59-62 resume: 59 bytes.
+        XCTAssertEqual(bytes[0..<54].filter { $0 != 0x34 }.count, 0)
+        XCTAssertEqual(bytes[54], 0x42, "the access in the switch-on cycle reads the RAM under $DC04")
+        XCTAssertEqual(Array(bytes[55..<59]), [0x34, 0x34, 0x34, 0x34])
+        // Line 251: sprite 0 already fetching, BA falls sharply at cycle 54:
+        // no access until 59. Bytes 59-112 come from cycles 0-53, 113-116
+        // from 59-62, and the rest from line 252 cycles 0-12.
+        XCTAssertEqual(bytes[59..<130].filter { $0 != 0x34 }.count, 0, "no second glitch on the following line")
+        XCTAssertEqual(cycles, 63 * 2 + 13, "one access more on the switch-on line than on the next")
+    }
+
+    /// `reutiming2` e4-e6/f3/f4/g3/g4: a swap's read half only needs the bus
+    /// and runs through the bad-line BA warning (reading RAM under I/O
+    /// there); its write half waits for BA and the byte is read again
+    /// meanwhile, except for the last byte, whose write goes ahead; and a
+    /// transfer takes the bus only while BA is high.
+    func testSwapReadHalfRunsThroughBAWarningWriteHalfWaitsExceptForTheLastByte() {
+        /// A machine ticked to cycle `cycle` of bad line $33 with a swap of
+        /// `length` bytes from the fixed address $DC04 ($34 from the stopped
+        /// timer, $42 in the RAM under it) triggered there.
+        func swap(from cycle: Int, length: UInt16) -> (C64, cycles: Int) {
+            let c64 = makeMachine()
+            c64.cia1.timerA = 0x1234
+            c64.memory.ram[0xDC04] = 0x42
+            c64.vic.writeRegister(0x11, value: 0x1B)
+            c64.vic.badLineDENLatched = true
+            c64.vic.rasterLine = 0x33
+            c64.vic.rasterCycle = 0  // the bad-line check runs at cycle 0
+            for _ in 0..<cycle { c64.tickOneCycle() }
+            setupTransfer(c64, c64Address: 0xDC04, reuAddress: 0, length: length, control: 0x80)
+            c64.memory.write(0xDF01, value: 0x92)
+            return (c64, runDMA(c64))
+        }
+        // From cycle 1: R1 W2 ... R9 W10, then R11 reads RAM under I/O (BA
+        // low, PLA deselects I/O), W12 is blocked, R13 reads RAM again, the
+        // VIC fetches 14-53, W54 commits that $42, R55 W56 R57 W58.
+        let even = swap(from: 1, length: 8)
+        XCTAssertEqual(even.cycles, 58)
+        XCTAssertEqual(Array(even.0.reu!.ram[0..<8]), [0x34, 0x34, 0x34, 0x34, 0x34, 0x42, 0x34, 0x34])
+        XCTAssertEqual(even.0.cia1.timerALatch & 0xFF, 0xFF, "the write halves reached the CIA latch")
+
+        // From cycle 0 the write half is blocked in 11 and 13 instead, the
+        // controller is left in its read half when the VIC takes the bus and
+        // resumes with a read in 54 (g3 first transfer): W55 commits $34.
+        let odd = swap(from: 0, length: 8)
+        XCTAssertEqual(odd.cycles, 60)
+        XCTAssertEqual(Array(odd.0.reu!.ram[0..<8]), [UInt8](repeating: 0x34, count: 8))
+
+        // Six bytes from cycle 0: the sixth byte's write in cycle 11 is the
+        // last one and is not held back; the transfer ends inside the warning.
+        let short = swap(from: 0, length: 6)
+        XCTAssertEqual(short.cycles, 12)
+        XCTAssertEqual(Array(short.0.reu!.ram[0..<6]), [UInt8](repeating: 0x34, count: 6))
+
+        // Triggered in the warning (cycle 11) the controller waits for BA
+        // before its first access (g4): four bytes run R54 W55 ... W61.
+        let late = swap(from: 11, length: 4)
+        XCTAssertEqual(late.cycles, 51)
+        XCTAssertEqual(Array(late.0.reu!.ram[0..<4]), [UInt8](repeating: 0x34, count: 4), "no read during the warning before the bus is taken")
+    }
+
     func testDMABypassesTheCPUPortAndReachesIORegisters() {
         let c64 = makeMachine()
         let m = c64.memory

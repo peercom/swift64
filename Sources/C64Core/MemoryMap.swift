@@ -181,8 +181,21 @@ public final class MemoryMap: Bus {
     /// A DMA read by an expansion-port bus master: it sees the PLA banking
     /// but not the 6510's internal port (`cpuport` probe), drives the shared
     /// data bus, and raises no CPU watchpoints.
-    public func dmaRead(_ address: UInt16) -> UInt8 {
-        let value = address <= 0x0001 ? ram[Int(address)] : bankedRead(address)
+    ///
+    /// The PLA's I/O read terms include BA, so a read performed while the VIC
+    /// holds BA low (AEC still high) falls through to the RAM under I/O; its
+    /// write terms do not. Pass `ioDeselected` for such a cycle (the
+    /// `reutiming2` references read the marker under `$DC04` there).
+    public func dmaRead(_ address: UInt16, ioDeselected: Bool = false) -> UInt8 {
+        let value: UInt8
+        if address <= 0x0001 {
+            value = ram[Int(address)]
+        } else if ioDeselected, address >= 0xD000, address <= 0xDFFF,
+                  cartridge?.usesUltimaxMemoryMap != true, hiram || loram, charen {
+            value = ram[Int(address)]
+        } else {
+            value = bankedRead(address)
+        }
         driveCPUDataBus(value)
         return value
     }

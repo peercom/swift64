@@ -240,6 +240,19 @@ public final class VIC {
         }
     }
 
+    /// BA as an expansion-port bus master samples it at the start of the
+    /// cycle. When a sprite's DMA is switched on in the same phi1 as its BA
+    /// warning begins (sprite 0 in cycle 55), BA falls too late in that cycle
+    /// for the REC, which still performs its access; the 6510 and the PLA
+    /// see it low (`reutiming2` e/e3 hardware references).
+    public var baLineLowAtCycleStart: Bool {
+        guard baLineLow else { return false }
+        if case let .spriteBAWarning(sprite) = busPhase, spriteDMASwitchedOnMask & (1 << sprite) != 0 {
+            return false
+        }
+        return true
+    }
+
     /// VIC-II AEC line state. A low AEC means the CPU is no longer allowed to drive the bus.
     public var aecLineLow: Bool {
         switch busPhase {
@@ -378,6 +391,9 @@ public final class VIC {
     /// Starting sprite 0 at the second Y comparison leaves only two BA
     /// warning clocks before its first high-phase read, rather than three.
     private var spriteZeroDMAStartedLate = false
+    /// Sprites whose DMA was switched on in the current cycle's phi1 check
+    /// (cleared at the start of every cycle).
+    private var spriteDMASwitchedOnMask: UInt8 = 0
 
     /// Per-visible-pixel raster state captured as the beam advances. This keeps
     /// simple raster color bars and mid-line border mode changes observable even
@@ -585,6 +601,7 @@ public final class VIC {
     /// D018/DDR/bank pins cannot change a pointer already read in this phase.
     func beginCycle() {
         cpuPhaseInternalDataBus = 0xFF
+        spriteDMASwitchedOnMask = 0
         spriteXWriteThisCycle = nil
         spriteMulticolorWriteThisCycle = nil
         if recordsBusAccessTraces {
@@ -2040,6 +2057,7 @@ public final class VIC {
             let mask = UInt8(1 << sprite)
             if spriteEnabled & mask != 0 && spriteY[sprite] == lowRaster {
                 spriteDMACheckMask |= mask
+                spriteDMASwitchedOnMask |= mask
                 if sprite == 0 { spriteZeroDMAStartedLate = rasterCycle == spriteDMAFirstStartCycle - 2 }
                 spriteMCBase[sprite] = 0
                 spriteYExpFF[sprite] = true
@@ -2433,7 +2451,7 @@ public final class VIC {
 // MARK: - Snapshot state
 
 extension VIC {
-    public static let snapshotStoredPropertyCount = 124
+    public static let snapshotStoredPropertyCount = 125
 
     /// Scratch line buffers, bus-access diagnostics, and callbacks are not state.
     func saveState(to w: inout StateWriter) {
@@ -2486,6 +2504,7 @@ extension VIC {
         w.write(spriteTraceColorRegister); w.write(spriteTracePriorityBehindBG); w.write(spriteTraceDisplayForeground)
         w.write(spriteTraceSpriteMask); w.write(spriteTraceTouchedPixels)
         w.write(framebuffer); w.write(frameReady); w.write(spriteOccupancyGeneration)
+        w.write(spriteDMASwitchedOnMask)
     }
 
     func restoreState(from r: inout StateReader) throws {
@@ -2562,5 +2581,7 @@ extension VIC {
         // Generation stamps left by earlier lines must not match restored ones.
         for index in spriteOccupancyGenerationScratch.indices { spriteOccupancyGenerationScratch[index] = 0 }
         lastHighPhaseMemoryReads = []; lastHighPhaseColorRAMReads = []; lastLowPhaseMemoryReads = []
+        // Appended after 0.6.0; snapshots written before it end here.
+        spriteDMASwitchedOnMask = r.isAtEnd ? 0 : try r.read()
     }
 }

@@ -8,7 +8,8 @@ import Emu6502
 /// Behaviour follows the REC programming reference and the public REU test
 /// programs: the trigger write pulls /DMA at once, so a CPU write in the
 /// following cycle is lost; transfers pause while VIC BA is low; stash,
-/// fetch and verify move one byte per cycle and swap takes two; REU accesses
+/// fetch and verify move one byte per cycle and swap takes two (its read half
+/// runs through BA warning cycles, its write half waits for BA); REU accesses
 /// bypass the 6510 port at $0000/$0001 but otherwise see the CPU's banking.
 public final class REU {
     public enum Model: String, CaseIterable, Codable, Equatable {
@@ -97,6 +98,10 @@ public final class REU {
     /// Armed by an EXECUTE write with the FF00 bit clear; a write to $FF00 starts it.
     public private(set) var waitingForFF00 = false
     var bytesRemaining = 0
+    /// Set once the controller has made its first access of a transfer. The
+    /// REC takes the bus only while BA is high; after that only a swap's
+    /// write half waits for BA (`reutiming2` g4 transfer starts).
+    var holdsBus = false
     var swapReadDone = false
     var swapC64Byte: UInt8 = 0
     var swapREUByte: UInt8 = 0
@@ -142,6 +147,7 @@ public final class REU {
         dmaActive = false
         waitingForFF00 = false
         bytesRemaining = 0
+        holdsBus = false
         swapReadDone = false
         if wasActive { onInterrupt?(false) }
     }
@@ -236,6 +242,7 @@ public final class REU {
         waitingForFF00 = false
         bytesRemaining = length == 0 ? 0x10000 : Int(length)
         swapReadDone = false
+        holdsBus = false
         dmaActive = true
     }
 
@@ -270,13 +277,52 @@ public final class REU {
         ram[index] = value
     }
 
-    /// One phi2 cycle with the bus granted to the controller.
-    public func performDMACycle(bus: MemoryMap) {
-        guard dmaActive else { return }
+    /// One phi2 cycle while the controller holds /DMA.
+    ///
+    /// `busGranted` is AEC high (the VIC is not fetching); `baLow` is BA as
+    /// the REC samples it at the start of the cycle; `ioReadsDeselected` is
+    /// BA as the PLA sees it, which turns an I/O read into a RAM read.
+    ///
+    /// Calibrated on the `reutiming2` hardware references: a byte-completing
+    /// cycle (stash, fetch, verify, the write half of a swap) needs BA high,
+    /// while the read half of a swap only needs the bus and runs through the
+    /// BA warning cycles. A write half blocked by BA leaves the byte pending
+    /// and the controller reads it again in the next granted cycle, so a
+    /// swap resumes after a VIC fetch with whichever half is due; the write
+    /// half of the final byte is not held back (f3/g3 transfer ends).
+    public func performDMACycle(bus: MemoryMap, busGranted: Bool = true, baLow: Bool = false,
+                                ioReadsDeselected: Bool = false) {
+        guard dmaActive, busGranted else { return }
+        if !holdsBus {
+            guard !baLow else { return }
+            holdsBus = true
+        }
+        if transferType == .swap {
+            if !swapReadDone {
+                dmaCycleCount += 1
+                swapC64Byte = bus.dmaRead(c64Address, ioDeselected: ioReadsDeselected)
+                swapREUByte = readREUByte(reuAddress)
+                swapReadDone = true
+            } else if baLow && bytesRemaining > 1 {
+                // Not the last byte: the write half waits for BA and the
+                // byte is read again first. The final write goes ahead and
+                // the transfer ends inside the warning cycles.
+                swapReadDone = false
+            } else {
+                dmaCycleCount += 1
+                bus.dmaWrite(c64Address, value: swapREUByte)
+                writeREUByte(reuAddress, swapC64Byte)
+                swapReadDone = false
+                advanceAddresses()
+                completeByte()
+            }
+            return
+        }
+        guard !baLow else { return }
         dmaCycleCount += 1
         switch transferType {
         case .stash:
-            let byte = bus.dmaRead(c64Address)
+            let byte = bus.dmaRead(c64Address, ioDeselected: ioReadsDeselected)
             writeREUByte(reuAddress, byte)
             advanceAddresses()
             completeByte()
@@ -286,19 +332,9 @@ public final class REU {
             advanceAddresses()
             completeByte()
         case .swap:
-            if !swapReadDone {
-                swapC64Byte = bus.dmaRead(c64Address)
-                swapREUByte = readREUByte(reuAddress)
-                swapReadDone = true
-            } else {
-                bus.dmaWrite(c64Address, value: swapREUByte)
-                writeREUByte(reuAddress, swapC64Byte)
-                swapReadDone = false
-                advanceAddresses()
-                completeByte()
-            }
+            break
         case .verify:
-            let c64Byte = bus.dmaRead(c64Address)
+            let c64Byte = bus.dmaRead(c64Address, ioDeselected: ioReadsDeselected)
             let reuByte = readREUByte(reuAddress)
             advanceAddresses()
             if c64Byte != reuByte {
@@ -338,6 +374,7 @@ public final class REU {
         dmaActive = false
         bytesRemaining = 0
         swapReadDone = false
+        holdsBus = false
         if !keepLength { length = 1 }
         if command & 0x20 != 0 {
             c64Address = c64AddressLatch
@@ -365,14 +402,14 @@ public final class REU {
 // MARK: - Snapshot state
 
 extension REU {
-    public static let snapshotStoredPropertyCount = 22
+    public static let snapshotStoredPropertyCount = 23
 
     func saveState(to w: inout StateWriter) {
         w.write(model.rawValue); w.write(ram)
         w.write(statusFlags); w.write(command)
         w.write(c64Address); w.write(c64AddressLatch); w.write(reuAddress); w.write(reuAddressLatch)
         w.write(length); w.write(lengthLatch); w.write(interruptMask); w.write(addressControl)
-        w.write(dmaActive); w.write(waitingForFF00); w.write(bytesRemaining)
+        w.write(dmaActive); w.write(waitingForFF00); w.write(bytesRemaining); w.write(holdsBus)
         w.write(swapReadDone); w.write(swapC64Byte); w.write(swapREUByte)
         w.write(lastDataBusByte); w.write(completedTransferCount); w.write(dmaCycleCount)
     }
@@ -384,7 +421,7 @@ extension REU {
         statusFlags = try r.read(); command = try r.read()
         c64Address = try r.read(); c64AddressLatch = try r.read(); reuAddress = try r.read(); reuAddressLatch = try r.read()
         length = try r.read(); lengthLatch = try r.read(); interruptMask = try r.read(); addressControl = try r.read()
-        dmaActive = try r.read(); waitingForFF00 = try r.read(); bytesRemaining = try r.read()
+        dmaActive = try r.read(); waitingForFF00 = try r.read(); bytesRemaining = try r.read(); holdsBus = try r.read()
         swapReadDone = try r.read(); swapC64Byte = try r.read(); swapREUByte = try r.read()
         lastDataBusByte = try r.read(); completedTransferCount = try r.read(); dmaCycleCount = try r.read()
     }

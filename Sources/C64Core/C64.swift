@@ -930,9 +930,11 @@ public final class C64 {
         memory.cpuWritesDisconnected = reuOwnsBus
         cpu.tick(busAvailable: !vic.aecLineLow && !reuOwnsBus)
         memory.cpuWritesDisconnected = false
-        if reuOwnsBus, let reu, !vic.baLineLow {
-            // The controller transfers on phi2 cycles the VIC leaves free.
-            reu.performDMACycle(bus: memory)
+        if reuOwnsBus, let reu {
+            // The controller transfers on phi2 cycles the VIC leaves free; it
+            // samples BA earlier in the cycle than the 6510 and the PLA do.
+            reu.performDMACycle(bus: memory, busGranted: !vic.aecLineLow,
+                                baLow: vic.baLineLowAtCycleStart, ioReadsDeselected: vic.baLineLow)
         }
         vic.endCycle()
 
