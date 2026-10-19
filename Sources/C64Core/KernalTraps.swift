@@ -75,6 +75,9 @@ public final class KernalTraps {
     public private(set) var lastLoadTrapFilename: String?
     public private(set) var lastLoadTrapAddress: UInt16?
     public private(set) var lastLoadTrapEndAddress: UInt16?
+    /// Retained for save-state layout only. The LOAD trap no longer synthesises an entry
+    /// jump for system-area loads: boot files autostart through the stack or vectors they
+    /// overwrite, exactly as they do on hardware.
     public var autostartSystemAreaDiskLoads: Bool = true
 
     private var currentInputChannel: Int?
@@ -178,8 +181,9 @@ public final class KernalTraps {
 
         debugLog("[TRAP] LOAD: device=\(deviceNum) secondary=\(secondaryAddr) filename=\"\(filename)\" verify=\(verifying) A=\(cpu.a) mounted=\(diskDrive?.isMounted ?? false)")
 
-        // Print "SEARCHING FOR <filename>" like the real Kernal
-        printToScreen(memory: memory, text: "\rSEARCHING FOR \(filename)\r")
+        // The Kernal prints "\rSEARCHING FOR <name>" (no trailing CR) and only while
+        // MSGFLG ($9D bit 7) allows Kernal messages, i.e. in BASIC direct mode.
+        printKernalMessage(memory: memory, text: "\rSEARCHING FOR \(filename)")
 
         var loadData: [UInt8]? = nil
 
@@ -233,7 +237,7 @@ public final class KernalTraps {
         lastLoadTrapEndAddress = endAddr
 
         if verifying {
-            printToScreen(memory: memory, text: "VERIFYING\r")
+            printKernalMessage(memory: memory, text: "\rVERIFYING")
             let matches = payload.enumerated().allSatisfy { index, byte in
                 let addr = Int(loadAddr) + index
                 return addr < 0x10000 && memory.ram[addr] == byte
@@ -254,15 +258,14 @@ public final class KernalTraps {
             return true
         }
 
-        // Print "LOADING" on success
-        printToScreen(memory: memory, text: "LOADING\r")
+        // "\rLOADING" is printed before the transfer, as the Kernal does, so the message
+        // never lands on top of data that the file places in screen memory.
+        printKernalMessage(memory: memory, text: "\rLOADING")
 
-        // Save the return address from the stack BEFORE writing file data,
-        // because the file data may overwrite the stack area ($0100-$01FF).
-        let savedRetLo = memory.ram[0x0100 + Int(cpu.sp &+ 1)]
-        let savedRetHi = memory.ram[0x0100 + Int(cpu.sp &+ 2)]
-
-        // Copy data to RAM
+        // Copy data to RAM. The stack page is deliberately not protected: boot files that
+        // load over $0100-$01FF, the Kernal vector table at $0314-$0333 or the BASIC
+        // vectors at $0300-$030B autostart on hardware through the return address or the
+        // vector the Kernal pops or jumps through next, and the trap returns the same way.
         for (i, byte) in payload.enumerated() {
             let addr = Int(loadAddr) + i
             if addr < 0x10000 {
@@ -270,11 +273,7 @@ public final class KernalTraps {
             }
         }
 
-        // Restore the return address on the stack (in case file data overwrote it)
-        memory.ram[0x0100 + Int(cpu.sp &+ 1)] = savedRetLo
-        memory.ram[0x0100 + Int(cpu.sp &+ 2)] = savedRetHi
-
-        debugLog("[LOAD] SUCCESS: \(payload.count) bytes loaded at $\(String(loadAddr, radix: 16, uppercase: true))-$\(String(endAddr - 1, radix: 16, uppercase: true)), endAddr=$\(String(endAddr, radix: 16, uppercase: true))")
+        debugLog("[LOAD] SUCCESS: \(payload.count) bytes loaded at $\(String(loadAddr, radix: 16, uppercase: true))-$\(String(endAddr &- 1, radix: 16, uppercase: true)), endAddr=$\(String(endAddr, radix: 16, uppercase: true))")
 
         // Set end address pointers
         memory.ram[Int(KernalTraps.endAddrLo)] = UInt8(endAddr & 0xFF)
@@ -296,18 +295,6 @@ public final class KernalTraps {
         cpu.x = UInt8(endAddr & 0xFF)
         cpu.y = UInt8(endAddr >> 8)
 
-        if shouldAutostartSystemAreaDiskLoad(
-            device: deviceNum,
-            secondary: secondaryAddr,
-            loadAddress: loadAddr,
-            payload: payload
-        ) {
-            cpu.pc = loadAddr
-            cpu.cycle = 0
-            cpu.servicingInterrupt = false
-            return true
-        }
-
         doRTS(cpu: cpu, memory: memory)
         return true
     }
@@ -323,19 +310,6 @@ public final class KernalTraps {
             return nil
         }
         return code
-    }
-
-    private func shouldAutostartSystemAreaDiskLoad(
-        device: UInt8,
-        secondary: UInt8,
-        loadAddress: UInt16,
-        payload: [UInt8]
-    ) -> Bool {
-        guard autostartSystemAreaDiskLoads else { return false }
-        guard (8...11).contains(device), secondary != 0 else { return false }
-        guard (0x0200..<0x0400).contains(loadAddress) else { return false }
-        guard let firstOpcode = payload.first, firstOpcode != 0x00 else { return false }
-        return true
     }
 
     // MARK: - SAVE trap
@@ -378,7 +352,7 @@ public final class KernalTraps {
         }
 
         debugLog("[TRAP] SAVE: device=\(deviceNum) filename=\"\(filename)\" start=$\(String(startAddress, radix: 16, uppercase: true)) end=$\(String(endAddress, radix: 16, uppercase: true)) bytes=\(payload.count)")
-        printToScreen(memory: memory, text: "\rSAVING \(filename)\r")
+        printKernalMessage(memory: memory, text: "\rSAVING \(filename)")
 
         guard drive.savePRG(filename: filename, data: payload) else {
             debugLog("[TRAP] SAVE failed: filename=\"\(filename)\" mounted=\(drive.isMounted)")
@@ -409,7 +383,7 @@ public final class KernalTraps {
         }
 
         debugLog("[TRAP] TAPE SAVE: filename=\"\(filename)\" start=$\(String(startAddress, radix: 16, uppercase: true)) end=$\(String(endAddress, radix: 16, uppercase: true)) bytes=\(payload.count)")
-        printToScreen(memory: memory, text: "\rSAVING \(filename)\r")
+        printKernalMessage(memory: memory, text: "\rSAVING \(filename)")
 
         guard tape.savePRG(filename: filename, data: payload) else {
             debugLog("[TRAP] TAPE SAVE failed: filename=\"\(filename)\" format=\(String(describing: tape.format))")
@@ -610,10 +584,20 @@ public final class KernalTraps {
     // MARK: - Screen output
 
     /// Write text directly to C64 screen RAM, advancing the cursor.
+    /// Print a Kernal control message ("SEARCHING FOR", "LOADING", "SAVING", ...) the way
+    /// the Kernal's message routine does: only while MSGFLG ($9D) bit 7 is set, which BASIC
+    /// clears for program-mode loads so games that LOAD from a running program keep their
+    /// screen intact.
+    func printKernalMessage(memory: MemoryMap, text: String) {
+        guard memory.ram[0x9D] & 0x80 != 0 else { return }
+        printToScreen(memory: memory, text: text)
+    }
+
     func printToScreen(memory: MemoryMap, text: String) {
         var row = Int(memory.ram[0xD6])
         var col = Int(memory.ram[0xD3])
         let color = memory.ram[0x0286]
+        let screenBase = Int(memory.ram[0x0288]) << 8
 
         for char in text {
             if char == "\r" {
@@ -627,7 +611,7 @@ public final class KernalTraps {
             }
 
             if col < 40 {
-                let screenAddr = 0x0400 + row * 40 + col
+                let screenAddr = (screenBase + row * 40 + col) & 0xFFFF
                 memory.ram[screenAddr] = asciiToScreenCode(char)
                 memory.colorRAM[row * 40 + col] = color & 0x0F
                 col += 1
@@ -636,26 +620,27 @@ public final class KernalTraps {
 
         memory.ram[0xD3] = UInt8(col)
         memory.ram[0xD6] = UInt8(row)
-        let lineStart = 0x0400 + row * 40
+        let lineStart = (screenBase + row * 40) & 0xFFFF
         memory.ram[0xD1] = UInt8(lineStart & 0xFF)
         memory.ram[0xD2] = UInt8((lineStart >> 8) & 0xFF)
     }
 
     /// Scroll the screen up by one line.
     func scrollScreen(memory: MemoryMap, color: UInt8) {
+        let screenBase = Int(memory.ram[0x0288]) << 8
         // Move lines 1-24 up to 0-23
         for row in 0..<24 {
-            let dst = 0x0400 + row * 40
-            let src = 0x0400 + (row + 1) * 40
+            let dst = screenBase + row * 40
+            let src = screenBase + (row + 1) * 40
             for col in 0..<40 {
-                memory.ram[dst + col] = memory.ram[src + col]
+                memory.ram[(dst + col) & 0xFFFF] = memory.ram[(src + col) & 0xFFFF]
                 memory.colorRAM[row * 40 + col] = memory.colorRAM[(row + 1) * 40 + col]
             }
         }
         // Clear last line
-        let lastLine = 0x0400 + 24 * 40
+        let lastLine = screenBase + 24 * 40
         for col in 0..<40 {
-            memory.ram[lastLine + col] = 0x20  // space
+            memory.ram[(lastLine + col) & 0xFFFF] = 0x20  // space
             memory.colorRAM[24 * 40 + col] = color & 0x0F
         }
     }

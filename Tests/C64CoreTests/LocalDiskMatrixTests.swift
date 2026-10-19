@@ -7285,6 +7285,41 @@ final class LocalDiskMatrixTests: XCTestCase {
         XCTAssertTrue(result.passed, result.reason)
     }
 
+    func testNamedMilestoneScreenTextProofSamplesAtFrameBoundaries() throws {
+        // Screen proofs are sampled at the first cycle and then once per completed VIC frame.
+        // A real BASIC boot prints READY. well after power-on, so the milestone must pass on a
+        // later frame boundary rather than at cycle zero or mid-frame.
+        let c64 = C64(machineProfile: .palC64)
+        try loadBundledROMs(into: c64)
+        c64.powerOn()
+        let milestone = LocalMilestone(
+            url: URL(fileURLWithPath: "/tmp/demo.prg"),
+            mediaType: .prg,
+            machineProfile: .palC64,
+            driveMode: .fastLoad,
+            commands: [],
+            maxCycles: 6_000_000,
+            pcRanges: [],
+            minGCRReads: 0,
+            minByteReady: 0,
+            driveStatus: nil,
+            mediaStatus: nil,
+            ramSignatures: [],
+            colorRAMSignatures: [],
+            screenTextContains: ["READY."],
+            screenRAMHash: nil,
+            colorRAMHash: nil,
+            screenshotName: nil
+        )
+
+        let result = runUntilMilestone(c64, milestone: milestone)
+
+        XCTAssertTrue(result.passed, result.reason)
+        XCTAssertGreaterThan(result.elapsedCycles, 100_000)
+        XCTAssertEqual(c64.vic.rasterLine, 0)
+        XCTAssertEqual(c64.vic.rasterCycle, 0)
+    }
+
     func testNamedMilestoneRequiresScreenText() {
         let c64 = C64()
         writeScreenText("READY.", into: c64, row: 4, column: 2)
@@ -9623,11 +9658,29 @@ final class LocalDiskMatrixTests: XCTestCase {
             c64.sid.accuracyMode = sidAccuracyMode
         }
 
+        // A milestone that carries a screen-level proof can only pass at a screen sample point, so
+        // the whole expectation block is evaluated only there; milestones without screen proofs keep
+        // the per-cycle evaluation that raster/bus/register expectations rely on.
+        let hasScreenProof = milestone.framebufferHash != nil
+            || milestone.screenRAMHash != nil
+            || milestone.colorRAMHash != nil
+            || !milestone.screenTextContains.isEmpty
+        var sampledFramebufferHash: String?
+        var sampledCycle: UInt64?
+
         for elapsedCycles in 0..<milestone.maxCycles {
             actionScheduler.applyDueActions(to: c64, elapsedCycles: elapsedCycles)
             c64.tickOneCycle()
+            // Screen-level proofs (screen RAM, color RAM, framebuffer, decoded text) hash whole
+            // buffers, so they are sampled once per completed VIC frame (and at the first cycle so
+            // pre-seeded unit expectations still resolve) instead of on every CPU cycle.
+            let sampleScreenProofs = elapsedCycles == 0
+                || (c64.vic.rasterLine == 0 && c64.vic.rasterCycle == 0)
 
-            if let reason = c64.emulationStatus.lastFailureReason {
+            // `emulationStatus` re-exports the mounted media (full G64/TAP images) on every call,
+            // so the per-cycle loop reads the failure reasons directly and only materialises the
+            // full status at the per-frame sample points.
+            if let reason = c64.lastFailureReason ?? c64.drive1541.lastFailureReason {
                 return MatrixRunResult(passed: false, elapsedCycles: c64.cpu.totalCycles, reason: reason)
             }
             if c64.cpu.jammed || c64.drive1541.cpu.jammed {
@@ -9636,23 +9689,41 @@ final class LocalDiskMatrixTests: XCTestCase {
             if c64.cpu.pc == 0xFFFF {
                 return MatrixRunResult(passed: false, elapsedCycles: c64.cpu.totalCycles, reason: "C64 PC reached $FFFF")
             }
+            if sampleScreenProofs && milestone.framebufferHash != nil {
+                sampledFramebufferHash = CompatibilityHash.framebuffer(
+                    c64.vic.framebuffer,
+                    width: VIC.screenWidth,
+                    height: VIC.screenHeight
+                )
+                sampledCycle = c64.cpu.totalCycles
+            }
+            if hasScreenProof && !sampleScreenProofs {
+                continue
+            }
 
-            let driveStatus = c64.drive1541.statusSnapshot
-            let gcrReads = driveStatus.via2PortAReadCount - baseline.via2PortAReadCount
-            let byteReady = driveStatus.byteReadyCount - baseline.byteReadyCount
-            let syncDetections = driveStatus.syncDetectionCount - baseline.syncDetectionCount
-            let weakBitReads = driveStatus.weakBitReadCount - baseline.weakBitReadCount
-            let variableSpeedZoneSamples = driveStatus.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
-            let gcrWrites = driveStatus.gcrWriteByteCount - baseline.gcrWriteByteCount
-            let gcrWriteSplices = driveStatus.gcrWriteSpliceCount - baseline.gcrWriteSpliceCount
-            let gcrWriteEraseBits = driveStatus.gcrWriteEraseBitCount - baseline.gcrWriteEraseBitCount
+            // The drive status snapshot formats hex summaries, so the per-cycle counters are read
+            // directly and the snapshot is only built at the per-frame sample points.
+            let drive = c64.drive1541
+            let gcrReads = drive.via2PortAReadCount - baseline.via2PortAReadCount
+            let byteReady = drive.byteReadyCount - baseline.byteReadyCount
+            let syncDetections = drive.syncDetectionCount - baseline.syncDetectionCount
+            let weakBitReads = drive.weakBitReadCount - baseline.weakBitReadCount
+            let variableSpeedZoneSamples = drive.variableSpeedZoneSampleCount - baseline.variableSpeedZoneSampleCount
+            let gcrWrites = drive.gcrWriteByteCount - baseline.gcrWriteByteCount
+            let gcrWriteSplices = drive.gcrWriteSpliceCount - baseline.gcrWriteSpliceCount
+            let gcrWriteEraseBits = drive.gcrWriteEraseBitCount - baseline.gcrWriteEraseBitCount
             let pcReached = milestone.pcRanges.isEmpty || milestone.pcRanges.contains { $0.contains(c64.cpu.pc) }
             let driveProgress = gcrReads >= milestone.minGCRReads && byteReady >= milestone.minByteReady
+            let sampledEmulationStatus: C64.EmulationStatus? = sampleScreenProofs
+                && (milestone.driveStatus != nil || milestone.mediaStatus != nil || milestone.tapeStatus != nil)
+                ? c64.emulationStatus
+                : nil
             let driveExpectationMatches = milestone.driveStatus.map { expectation in
-                driveStatusMismatches(
+                guard let sampledEmulationStatus else { return false }
+                return driveStatusMismatches(
                     expectation,
-                    snapshot: driveStatus,
-                    status: c64.emulationStatus,
+                    snapshot: drive.statusSnapshot,
+                    status: sampledEmulationStatus,
                     gcrReads: gcrReads,
                     byteReady: byteReady,
                     syncDetections: syncDetections,
@@ -9664,14 +9735,16 @@ final class LocalDiskMatrixTests: XCTestCase {
                 ).isEmpty
             } ?? true
             let mediaExpectationMatches = milestone.mediaStatus.map { expectation in
-                mediaStatusMismatches(expectation, capabilities: c64.emulationStatus.mediaCapabilities).isEmpty
+                guard let sampledEmulationStatus else { return false }
+                return mediaStatusMismatches(expectation, capabilities: sampledEmulationStatus.mediaCapabilities).isEmpty
             } ?? true
             let lowLevelTrackMatches = lowLevelTrackMismatches(
                 milestone.lowLevelTracks,
                 disk: c64.drive1541.disk
             ).isEmpty
             let tapeExpectationMatches = milestone.tapeStatus.map { expectation in
-                tapeStatusMismatches(expectation, status: c64.emulationStatus).isEmpty
+                guard let sampledEmulationStatus else { return false }
+                return tapeStatusMismatches(expectation, status: sampledEmulationStatus).isEmpty
             } ?? true
             let ramMatches = milestone.ramSignatures.allSatisfy { signature in
                 let start = signature.address
@@ -9732,21 +9805,25 @@ final class LocalDiskMatrixTests: XCTestCase {
                 return (actual & expectation.mask) == (expectation.value & expectation.mask)
             }
             let screenMatches = milestone.screenRAMHash.map {
-                CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
+                sampleScreenProofs
+                    && CompatibilityHash.screenRAM(c64.memory.ram).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
             let colorRAMHashMatches = milestone.colorRAMHash.map {
-                CompatibilityHash.colorRAM(c64.memory.colorRAM).caseInsensitiveCompare($0) == .orderedSame
+                sampleScreenProofs
+                    && CompatibilityHash.colorRAM(c64.memory.colorRAM).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
             let framebufferHashMatches = milestone.framebufferHash.map {
-                CompatibilityHash.framebuffer(
-                    c64.vic.framebuffer,
-                    width: VIC.screenWidth,
-                    height: VIC.screenHeight
-                ).caseInsensitiveCompare($0) == .orderedSame
+                sampleScreenProofs
+                    && CompatibilityHash.framebuffer(
+                        c64.vic.framebuffer,
+                        width: VIC.screenWidth,
+                        height: VIC.screenHeight
+                    ).caseInsensitiveCompare($0) == .orderedSame
             } ?? true
-            let screenTextMatches = milestone.screenTextContains.allSatisfy {
-                screenText(c64.memory.ram).localizedCaseInsensitiveContains($0)
-            }
+            let screenTextMatches = milestone.screenTextContains.isEmpty
+                || (sampleScreenProofs && milestone.screenTextContains.allSatisfy {
+                    screenText(c64.memory.ram).localizedCaseInsensitiveContains($0)
+                })
 
             if pcReached
                 && driveProgress
@@ -9781,7 +9858,9 @@ final class LocalDiskMatrixTests: XCTestCase {
         return MatrixRunResult(
             passed: false,
             elapsedCycles: c64.cpu.totalCycles,
-            reason: namedMilestoneFailureReason(c64, milestone: milestone, baseline: baseline)
+            reason: namedMilestoneFailureReason(c64, milestone: milestone, baseline: baseline),
+            sampledFramebufferHash: sampledFramebufferHash,
+            sampledCycle: sampledCycle
         )
     }
 
@@ -11576,6 +11655,7 @@ final class LocalDiskMatrixTests: XCTestCase {
         _ expectations: [CompatibilitySIDVoiceState],
         sid: SID
     ) -> [String] {
+        guard !expectations.isEmpty else { return [] }
         let voices = sid.debugVoiceStates()
         return expectations.flatMap { expectation -> [String] in
             guard voices.indices.contains(expectation.voice) else {
@@ -11813,6 +11893,10 @@ final class LocalDiskMatrixTests: XCTestCase {
         lowPhaseMemoryReadsSpecified: Bool,
         vic: VIC
     ) -> [String] {
+        guard highPhaseMemoryReadsSpecified || highPhaseColorRAMReadsSpecified || lowPhaseMemoryReadsSpecified
+            || !highPhaseMemoryReads.isEmpty || !highPhaseColorRAMReads.isEmpty || !lowPhaseMemoryReads.isEmpty else {
+            return []
+        }
         var mismatches: [String] = []
         appendVICTraceMismatch(
             &mismatches,
@@ -12161,6 +12245,10 @@ private struct MatrixRunResult {
     let passed: Bool
     let elapsedCycles: UInt64
     let reason: String
+    /// Framebuffer hash at the last per-frame screen sample point, for calibrating
+    /// framebuffer proofs from a placeholder run (the final-cycle hash is mid-frame).
+    var sampledFramebufferHash: String? = nil
+    var sampledCycle: UInt64? = nil
 
     func summary(name: String, command: String, c64: C64) -> String {
         let drive = c64.drive1541.statusSnapshot
@@ -12325,7 +12413,9 @@ private struct MatrixRunResult {
                 width: VIC.screenWidth,
                 height: VIC.screenHeight
             ),
-            screenshotPath: screenshotURL?.path
+            screenshotPath: screenshotURL?.path,
+            sampledFramebufferHash: sampledFramebufferHash,
+            sampledCycle: sampledCycle
         )
     }
 
@@ -13103,6 +13193,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
     let colorRAMHash: String?
     let framebufferHash: String?
     let screenshotPath: String?
+    let sampledFramebufferHash: String?
+    let sampledCycle: UInt64?
 
     init(
         formatVersion: Int? = nil,
@@ -13224,7 +13316,9 @@ private struct MilestoneResultRecord: Codable, Equatable {
         screenRAMHash: String? = nil,
         colorRAMHash: String? = nil,
         framebufferHash: String? = nil,
-        screenshotPath: String? = nil
+        screenshotPath: String? = nil,
+        sampledFramebufferHash: String? = nil,
+        sampledCycle: UInt64? = nil
     ) {
         self.formatVersion = formatVersion
         self.skipped = skipped
@@ -13345,6 +13439,8 @@ private struct MilestoneResultRecord: Codable, Equatable {
         self.screenRAMHash = screenRAMHash
         self.colorRAMHash = colorRAMHash
         self.framebufferHash = framebufferHash
+        self.sampledFramebufferHash = sampledFramebufferHash
+        self.sampledCycle = sampledCycle
         self.screenshotPath = screenshotPath
     }
 

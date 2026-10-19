@@ -43,6 +43,20 @@ final class CartridgeTests: XCTestCase {
         XCTAssertEqual(memory.read(0xA000), 0xA0)
     }
 
+    func testParsesStandard16KCRTStoredAsSingleChipPacket() throws {
+        // Many 16K game dumps carry one $4000 CHIP packet at $8000 instead of two 8K packets.
+        let image = Array(repeating: UInt8(0x80), count: 0x2000) + Array(repeating: UInt8(0xA0), count: 0x2000)
+        let crt = makeCRT(exrom: 0, game: 0, chips: [(address: 0x8000, data: image)])
+        let cartridge = try XCTUnwrap(Cartridge.parseCRT(crt))
+        let memory = MemoryMap()
+        memory.cartridge = cartridge
+
+        XCTAssertEqual(memory.read(0x8000), 0x80)
+        XCTAssertEqual(memory.read(0x9FFF), 0x80)
+        XCTAssertEqual(memory.read(0xA000), 0xA0)
+        XCTAssertEqual(memory.read(0xBFFF), 0xA0)
+    }
+
     func testParsesWestermannLearningCRTAsNormal16KMapping() throws {
         let crt = makeCRT(
             hardwareType: 11,

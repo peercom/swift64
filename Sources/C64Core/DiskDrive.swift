@@ -462,10 +462,11 @@ public final class DiskDrive {
             let nextSector = Int(sectorData[1])
 
             if nextTrack == 0 {
-                // Last sector: nextSector = number of bytes used + 1
-                let bytesUsed = nextSector
-                if bytesUsed >= 2 {
-                    data.append(contentsOf: sectorData[2..<bytesUsed])
+                // Last sector: byte 1 is the index of the last valid data byte (inclusive),
+                // so a full final sector carries $FF and 254 bytes of data.
+                let lastByteIndex = nextSector
+                if lastByteIndex >= 2 {
+                    data.append(contentsOf: sectorData[2...lastByteIndex])
                 }
             } else {
                 data.append(contentsOf: sectorData[2..<256])
@@ -509,9 +510,10 @@ public final class DiskDrive {
             let nextSector = Int(sectorData[1])
 
             if nextTrack == 0 {
-                let bytesUsed = nextSector
-                if bytesUsed >= 2 {
-                    data.append(contentsOf: sectorData[2..<bytesUsed])
+                // Byte 1 of the last sector is the index of its last valid data byte.
+                let lastByteIndex = nextSector
+                if lastByteIndex >= 2 {
+                    data.append(contentsOf: sectorData[2...lastByteIndex])
                 }
             } else {
                 data.append(contentsOf: sectorData[2..<256])
@@ -2189,8 +2191,7 @@ public final class DiskDrive {
 
     private func sectorCountNeeded(forPayloadSize size: Int) -> Int {
         guard size > 0 else { return 0 }
-        if size <= 253 { return 1 }
-        return 1 + Int(ceil(Double(size - 253) / 254.0))
+        return Int(ceil(Double(size) / 254.0))
     }
 
     private func writePRGChain(data: [UInt8], sectors: [(track: Int, sector: Int)]) {
@@ -2202,9 +2203,10 @@ public final class DiskDrive {
             let bytesRemaining = data.count - position
 
             if isLast {
-                let byteCount = min(bytesRemaining, 253)
+                // CBM DOS stores the index of the last valid byte: 254 data bytes give $FF.
+                let byteCount = min(bytesRemaining, 254)
                 sectorData[0] = 0
-                sectorData[1] = UInt8(byteCount + 2)
+                sectorData[1] = UInt8(byteCount + 1)
                 if byteCount > 0 {
                     sectorData.replaceSubrange(2..<(2 + byteCount), with: data[position..<(position + byteCount)])
                     position += byteCount
