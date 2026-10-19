@@ -22,6 +22,16 @@ public final class IECBus {
     public var driveData: Bool = false  // PB1: true = pulling DATA low
     public var driveAtn: Bool = false   // PB4: ATNA output (for XOR gate)
 
+    /// C64 outputs as the drive's input inverters and ATNA gate currently see
+    /// them. A CIA2 write lands at the end of the C64's phi2, after the drive's
+    /// VIA has sampled its inputs for the overlapping drive cycle, and the
+    /// released lines then rise through the bus pull-ups. The drive therefore
+    /// observes a C64 line change no earlier than its next cycle; the C64
+    /// updates these copies once per cycle before its own CPU runs.
+    public private(set) var c64AtnAtDrive: Bool = false
+    public private(set) var c64ClkAtDrive: Bool = false
+    public private(set) var c64DataAtDrive: Bool = false
+
     // MARK: - Combined bus lines (active-high: true = released/high)
 
     /// ATN line. Only driven by C64.
@@ -31,15 +41,26 @@ public final class IECBus {
     public var clockLine: Bool { !c64Clk && !driveClk }
 
     /// DATA line. Wired-AND of all DATA outputs, PLUS the ATN auto-ack XOR gate.
-    /// The XOR gate: when atnLine == driveAtn, DATA is pulled low.
+    /// The XOR gate: when the ATN level at the drive == driveAtn, DATA is pulled low.
     public var dataLine: Bool {
-        let baseData = !c64Data && !driveData
-        // XOR gate: pulls DATA low when atnLine and driveAtn are the SAME
-        // (atnLine XOR driveAtn) = 1 means they differ → no pull
-        // (atnLine XOR driveAtn) = 0 means they match → pull DATA low
-        let xorGate = atnLine != driveAtn  // true when they differ (no pull)
-        return baseData && xorGate
+        !c64Data && !driveData && !atnAcknowledgeGatePullsData
     }
+
+    /// ATN line as the drive's inverter sees it (one C64 cycle behind the CIA).
+    public var atnLineAtDrive: Bool { !c64AtnAtDrive }
+
+    /// CLK line as the drive's inverter sees it.
+    public var clockLineAtDrive: Bool { !c64ClkAtDrive && !driveClk }
+
+    /// DATA line as the drive's inverter sees it.
+    public var dataLineAtDrive: Bool {
+        !c64DataAtDrive && !driveData && !atnAcknowledgeGatePullsData
+    }
+
+    /// The drive's ATNA XOR gate pulls DATA low while the ATN level at the
+    /// drive matches the VIA's ATNA output. It sits on the drive side of the
+    /// cable, so it follows the ATN level the drive sees.
+    public var atnAcknowledgeGatePullsData: Bool { atnLineAtDrive == driveAtn }
 
     // MARK: - C64 reads (for CIA2 port A bits 6-7)
     // The C64 serial bus inputs (PA6, PA7) do NOT go through an inverter.
@@ -60,14 +81,23 @@ public final class IECBus {
     public var drivePortBInput: UInt8 {
         var pb: UInt8 = 0x00
         // Bit 0: DATA IN (inverted: bus low → 1, bus high → 0)
-        if !dataLine { pb |= 0x01 }
+        if !dataLineAtDrive { pb |= 0x01 }
         // Bit 2: CLK IN (inverted: bus low → 1, bus high → 0)
-        if !clockLine { pb |= 0x04 }
+        if !clockLineAtDrive { pb |= 0x04 }
         // Bits 5-6: Device address jumpers. The 1541 ROM rotates these bits
         // into the command address; both low maps to device 8.
         // Bit 7: ATN IN (inverted: bus low → 1, bus high → 0)
-        if !atnLine { pb |= 0x80 }
+        if !atnLineAtDrive { pb |= 0x80 }
         return pb
+    }
+
+    /// Expose the C64's current outputs to the drive side of the bus. The C64
+    /// calls this once per cycle before it clocks its own chips, so a CIA2
+    /// write made during cycle N reaches the drive's inputs from cycle N+1.
+    public func settleC64OutputsAtDrive() {
+        c64AtnAtDrive = c64Atn
+        c64ClkAtDrive = c64Clk
+        c64DataAtDrive = c64Data
     }
 
     // MARK: - Update from C64 side
@@ -115,8 +145,8 @@ public final class IECBus {
 
     /// Check for ATN transitions. The 1541 has an inverter on the ATN line
     /// before CA1, so CA1 sees the INVERTED ATN: ATN low → CA1 high.
-    /// Returns the current CA1 pin state (inverted ATN).
-    public var ca1State: Bool { !atnLine }
+    /// Returns the current CA1 pin state (inverted ATN, as seen at the drive).
+    public var ca1State: Bool { !atnLineAtDrive }
 
     public struct Snapshot: Equatable {
         public let atnLine: Bool
@@ -160,15 +190,17 @@ public final class IECBus {
 // MARK: - Snapshot state
 
 extension IECBus {
-    public static let snapshotStoredPropertyCount = 9
+    public static let snapshotStoredPropertyCount = 12
 
     func saveState(to w: inout StateWriter) {
         w.write(c64Atn); w.write(c64Clk); w.write(c64Data)
         w.write(driveClk); w.write(driveData); w.write(driveAtn)
+        w.write(c64AtnAtDrive); w.write(c64ClkAtDrive); w.write(c64DataAtDrive)
     }
 
     func restoreState(from r: inout StateReader) throws {
         c64Atn = try r.read(); c64Clk = try r.read(); c64Data = try r.read()
         driveClk = try r.read(); driveData = try r.read(); driveAtn = try r.read()
+        c64AtnAtDrive = try r.read(); c64ClkAtDrive = try r.read(); c64DataAtDrive = try r.read()
     }
 }

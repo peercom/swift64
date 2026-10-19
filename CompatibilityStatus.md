@@ -272,5 +272,5 @@ Recent VIC-II work:
 1. Extend machine/chip profiles with additional board/chip revisions and deeper 1541-family hardware differences.
 2. Convert the local compatibility manifest into a reusable corpus runner with deterministic pass/fail reasons and stable aggregate reporting.
 3. Close VIC-II timing gaps that block raster splits, sprite multiplexing, and protected loaders.
-4. Finish robust D64/G64/NIB/NBZ/P64 true-drive loading for representative protected games, then extend persistent low-level format/writeback once read/load stability is proven.
+4. Finish robust D64/G64/NIB/NBZ/P64 true-drive loading for representative protected games, then extend persistent low-level format/writeback once read/load stability is proven. 2026-10-19: The Great Giana Sisters (Rainbow Arts/Time Warp 1987) now runs from its NBZ dump through its custom 2-bit loader and its track-36 sync-length protection into gameplay on the strict `standard1541` drive; see TESTING.md "Protected loaders on the strict true drive" for the three hardware-model fixes, the loaders proven so far, and what still fails.
 5. Extend the cartridge framework with common fastload/freezer formats, bank switching, expansion I/O, and REU hooks.

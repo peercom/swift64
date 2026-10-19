@@ -2902,8 +2902,11 @@ extension DiskDrive {
         let format = try r.readBoxed(DiskImage.Format?.self, label: "disk format")
         unmount()
         if let image {
-            let mounted = format == .g64 ? mountG64(Data(image)) : mount(Data(image))
-            guard mounted else { throw MachineStateError.invalidValue("disk image") }
+            // `imageData` always holds decoded D64 sectors, even for a G64
+            // mount, so restore it as sector data and keep the original
+            // format tag instead of re-running the GCR decoder on it.
+            guard mount(Data(image)) else { throw MachineStateError.invalidValue("disk image") }
+            mountedFormat = format
         }
         let restoredChannels = try r.readBoxed([Channel].self, label: "disk channels")
         channels = try snapshotFixed(restoredChannels, count: 16, "disk channels")

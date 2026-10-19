@@ -429,8 +429,10 @@ public final class GCRDisk {
                 return false
             }
 
-            let trackBytes = Array(bytes[payloadOffset..<(payloadOffset + Self.nibTrackLength)])
+            let rawTrackBytes = Array(bytes[payloadOffset..<(payloadOffset + Self.nibTrackLength)])
             let speedZone = Int(rawDensity % 0x10) & 0x03
+            let cycle = Self.nibTrackCycle(rawTrackBytes, speedZone: speedZone)
+            let trackBytes = cycle.map { Array(rawTrackBytes[0..<(($0 + 7) / 8)]) } ?? rawTrackBytes
             let sectorHeaderStats = G64Parser.sectorHeaderStats(
                 from: trackBytes,
                 track: halfTrack / 2 + 1
@@ -438,6 +440,7 @@ public final class GCRDisk {
             let info = DiskImage.Track(
                 halfTrack: halfTrack,
                 bytes: trackBytes,
+                bitLength: cycle,
                 speedZone: speedZone,
                 isNativeLowLevel: true,
                 duplicateSectorHeaderCount: sectorHeaderStats.duplicateSectorHeaderCount
@@ -1702,6 +1705,115 @@ public final class GCRDisk {
     /// The format is Marcus Geelnard's small LZ77 marker-byte stream as used
     /// by NIBTOOLS `LZ_Uncompress`: byte 0 chooses the marker, marker+0 emits
     /// a literal marker, and marker+varLength+varOffset copies from history.
+    /// Locate one disk revolution inside a raw NIB capture.
+    ///
+    /// A NIB halftrack is a fixed 8192-byte window of the read shift register,
+    /// longer than one revolution at every density, so the data after one
+    /// revolution repeats the window's start, usually at a different bit
+    /// phase, until the capture ends or turns into noise from another read
+    /// pass. The 1541 head must loop at the revolution boundary: looping at
+    /// the buffer end instead splices a partial copy of the track into the
+    /// stream and corrupts whichever sector straddles the wrap. The search
+    /// tries every plausible revolution length for the track's density at all
+    /// eight bit phases and keeps the length whose repeat of the window start
+    /// runs longest before the first mismatch. A repeat shorter than 256 bytes
+    /// can be a gap run matching by chance, and two lengths that repeat equally
+    /// long are a uniform region without positional information; both keep the
+    /// raw window, as do unformatted tracks that never repeat.
+    static func nibTrackCycle(_ bytes: [UInt8], speedZone: Int) -> Int? {
+        let count = bytes.count
+        guard count == nibTrackLength else { return nil }
+        // Nominal revolution lengths at 300 rpm; allow generous spindle and
+        // mastering tolerance on both sides.
+        let nominal = [6250, 6666, 7142, 7692][min(max(speedZone, 0), 3)]
+        let minimumLength = Int(Double(nominal) * 0.92)
+        let maximumLength = min(count - 256, Int(Double(nominal) * 1.08))
+        guard minimumLength < maximumLength else { return nil }
+
+        // Bit-shifted views of the window start so byte compares cover every phase.
+        var shifted: [[UInt8]] = []
+        shifted.reserveCapacity(8)
+        for shift in 0..<8 {
+            if shift == 0 {
+                shifted.append(bytes)
+                continue
+            }
+            var view = [UInt8](repeating: 0, count: count)
+            for index in 0..<(count - 1) {
+                view[index] = (bytes[index] << UInt8(shift)) | (bytes[index + 1] >> UInt8(8 - shift))
+            }
+            view[count - 1] = bytes[count - 1] << UInt8(shift)
+            shifted.append(view)
+        }
+
+        // A length whose repeat runs from the window start to (nearly) the
+        // window end is a complete match; exactly one of those is a clean capture. Several
+        // complete matches mean the overlap is uniform (a gap) and says nothing
+        // about position. With no complete match (the capture's head or tail
+        // is noise from another read pass) the longest run of matching bytes
+        // anywhere in the overlap wins, if it is long and clearly ahead of the
+        // runner-up; gap runs make near-ties, which stay raw.
+        let minimumRepeat = 256
+        let minimumMargin = 64
+        var completeMatches = 0
+        var completeLength: Int?
+        var completeRepeat = 0
+        var bestRun = 0
+        var bestRunLength: Int?
+        var runnerUpRun = 0
+        for length in minimumLength...maximumLength {
+            let overlap = count - 1 - length
+            var prefixForLength = 0
+            var runForLength = 0
+            var shiftForLength = 0
+            for shift in 0..<8 {
+                let view = shifted[shift]
+                var prefix = -1
+                var run = 0
+                var longest = 0
+                var index = 0
+                while index < overlap {
+                    if bytes[length + index] == view[index] {
+                        run += 1
+                        if run > longest { longest = run }
+                    } else {
+                        if prefix < 0 { prefix = index }
+                        run = 0
+                    }
+                    index += 1
+                }
+                if prefix < 0 { prefix = overlap }
+                if prefix > prefixForLength { prefixForLength = prefix }
+                if longest > runForLength {
+                    runForLength = longest
+                    shiftForLength = shift
+                }
+            }
+            // Captures often end in a few dozen torn bytes, so a repeat that
+            // runs from the window start through 90% of the overlap counts
+            // as complete.
+            if prefixForLength >= minimumRepeat && prefixForLength * 10 >= overlap * 9 {
+                completeMatches += 1
+                completeLength = length * 8 - shiftForLength
+                completeRepeat = prefixForLength
+            } else if runForLength > bestRun {
+                runnerUpRun = bestRun
+                bestRun = runForLength
+                bestRunLength = length * 8 - shiftForLength
+            } else if runForLength > runnerUpRun {
+                runnerUpRun = runForLength
+            }
+        }
+        if completeMatches == 1, let completeLength, completeRepeat >= minimumRepeat {
+            return completeLength
+        }
+        guard completeMatches == 0,
+              bestRun >= minimumRepeat,
+              bestRun >= runnerUpRun + minimumMargin,
+              let bestRunLength, bestRunLength > 0 else { return nil }
+        return bestRunLength
+    }
+
     private static func nibtoolsLZUncompressed(_ bytes: [UInt8], maxOutputBytes: Int) -> [UInt8]? {
         guard !bytes.isEmpty, maxOutputBytes > 0 else { return nil }
         let marker = bytes[0]

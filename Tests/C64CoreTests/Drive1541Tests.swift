@@ -1414,6 +1414,7 @@ final class Drive1541Tests: XCTestCase {
 
         _ = drive.via1.readRegister(0x01)
         bus.updateFromC64(0x08, ddra: 0x08) // C64 pulls ATN low
+        bus.settleC64OutputsAtDrive()       // ...and the drive sees it from its next cycle
 
         var sawATNInterrupt = false
         for _ in 0..<256 {
@@ -1427,6 +1428,48 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(sawATNInterrupt, "ATN edge should set VIA1 CA1 interrupt flag")
     }
 
+    func testC64BusWritesReachTheDriveOnTheFollowingCycle() {
+        // A 6510 store to CIA2 lands at the end of the C64's cycle; the drive's
+        // VIA samples its inputs for the overlapping drive cycle before that,
+        // so the drive must not see the new line level until its next cycle.
+        // Custom 2-bit loaders depend on this: they time their bit pairs from
+        // the moment the drive sees ATN released.
+        let c64 = C64()
+        c64.trueDriveEmulationMode = .standard1541
+        c64.powerOn()
+        c64.memory.write(0xDD02, value: 0x3F)
+        c64.memory.write(0xDD00, value: 0x00)
+        c64.iecBus.settleC64OutputsAtDrive()
+        for _ in 0..<4 { c64.tickOneCycle() }
+        XCTAssertTrue(c64.iecBus.atnLine)
+        XCTAssertFalse(c64.drive1541.via1.portBInput & 0x80 != 0)
+
+        // LDA #$08 ; STA $DD00 ; NOP ...
+        let program: [UInt8] = [0xA9, 0x08, 0x8D, 0x00, 0xDD, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA, 0xEA]
+        for (offset, byte) in program.enumerated() { c64.memory.ram[0xC000 + offset] = byte }
+        c64.cpu.pc = 0xC000
+        c64.cpu.cycle = 0
+
+        var writeCycle: Int?
+        for cycle in 0..<12 {
+            c64.tickOneCycle()
+            if c64.iecBus.c64Atn {
+                writeCycle = cycle
+                break
+            }
+        }
+        XCTAssertNotNil(writeCycle, "the store should assert ATN on the bus")
+        XCTAssertFalse(c64.iecBus.atnLine)
+        XCTAssertTrue(c64.iecBus.atnLineAtDrive, "the drive still sees ATN released in the store's own cycle")
+        XCTAssertEqual(c64.drive1541.via1.portBInput & 0x80, 0x00)
+        XCTAssertFalse(c64.drive1541.via1.ca1)
+
+        c64.tickOneCycle()
+        XCTAssertFalse(c64.iecBus.atnLineAtDrive, "the drive sees ATN asserted from the next cycle on")
+        XCTAssertEqual(c64.drive1541.via1.portBInput & 0x80, 0x80)
+        XCTAssertTrue(c64.drive1541.via1.ca1)
+    }
+
     func testC64TrueDriveBooleanUsesCompatibilityMode() {
         let c64 = C64()
 
@@ -1437,7 +1480,8 @@ final class Drive1541Tests: XCTestCase {
 
         c64.trueDriveEmulationMode = .standard1541
         XCTAssertTrue(c64.trueDriveEmulation)
-        XCTAssertEqual(c64.drive1541.driveModel, .model1541)
+        // Strict mode keeps the profile's 1541C board; only the clock ratio changes.
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541C)
         XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 985_248.0)
 
         c64.trueDriveEmulation = false

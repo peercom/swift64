@@ -363,8 +363,13 @@ public final class C64 {
         case .off:
             drive1541.enabled = false
         case .standard1541:
+            // Strict mode differs from compat mode in clocking only. The board
+            // stays the profile's: the 1541C ROM polls the track-0 sensor on
+            // VIA1 PA0 while stepping outward, and a sensor-less board leaves
+            // that input floating high, which the ROM reads as "at track 0"
+            // and stops the seek early.
             driveClockAccumulator = 0
-            drive1541.driveModel = .model1541
+            drive1541.driveModel = machineProfile.driveModel
             driveClockRatio = machineProfile.standardDriveClockRatio
         case .compat1541:
             driveClockAccumulator = 0
@@ -841,6 +846,7 @@ public final class C64 {
         if trueDriveEmulationMode != .off {
             // Sync bus state from current CIA2 output (respecting DDR)
             iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
+            iecBus.settleC64OutputsAtDrive()
             drive1541.powerOn()
         }
     }
@@ -870,6 +876,7 @@ public final class C64 {
 
         if trueDriveEmulationMode != .off {
             iecBus.updateFromC64(cia2.portA, ddra: cia2.ddra)
+            iecBus.settleC64OutputsAtDrive()
             drive1541.reset()
         }
 
@@ -897,6 +904,8 @@ public final class C64 {
     /// Run a single system clock cycle.
     func tickOneCycle() {
         driveTickBudgetConsumedThisC64Cycle = false
+        // CIA2 writes from the previous cycle reach the drive's bus inputs now.
+        iecBus.settleC64OutputsAtDrive()
         switch driveTickPlacement {
         case .beforeC64:
             tickDriveForCurrentC64Cycle()

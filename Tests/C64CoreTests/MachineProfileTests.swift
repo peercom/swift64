@@ -138,8 +138,29 @@ final class MachineProfileTests: XCTestCase {
 
         c64.trueDriveEmulationMode = .standard1541
 
-        XCTAssertEqual(c64.drive1541.driveModel, .model1541)
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541C)
+        XCTAssertTrue(c64.drive1541.is1541C)
         XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 1_022_727.0, accuracy: 0.000001)
+    }
+
+    func testStandardTrueDriveKeepsTheProfileBoardForTheTrackZeroSensor() throws {
+        // The 1541C ROM aborts an outward seek when VIA1 PA0 reads high at
+        // stepper phase 0. A sensor-less 1541 board floats that input high, so
+        // strict mode must present the profile's 1541C board to its ROM.
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let romURL = root.appendingPathComponent("Sources/C64App/ROMS/1541C.251968-02.bin")
+        guard let rom = try? Data(contentsOf: romURL) else { throw XCTSkip("1541C ROM not available") }
+        let c64 = C64(machineProfile: .palC64)
+        c64.loadDriveROM(rom)
+        c64.trueDriveEmulationMode = .standard1541
+
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541C)
+        c64.drive1541.halfTrack = 30
+        c64.drive1541.updateVIA1FromBus()
+        XCTAssertEqual(c64.drive1541.via1.portAInput & 0x01, 0x00, "away from track 1 the sensor reads low")
+        c64.drive1541.halfTrack = 0
+        c64.drive1541.updateVIA1FromBus()
+        XCTAssertEqual(c64.drive1541.via1.portAInput & 0x01, 0x01, "at track 1 the sensor reads high")
     }
 
     func testMachineProfileCarriesRAMPowerOnPattern() {
@@ -167,7 +188,7 @@ final class MachineProfileTests: XCTestCase {
 
         c64.loadDriveROM(makeDetectable1541CROM())
 
-        XCTAssertEqual(c64.drive1541.driveModel, .model1541)
+        XCTAssertEqual(c64.drive1541.driveModel, .model1541II)
         XCTAssertFalse(c64.drive1541.is1541C)
         XCTAssertEqual(c64.driveClockRatio, 1_000_000.0 / 1_022_727.0, accuracy: 0.000001)
     }

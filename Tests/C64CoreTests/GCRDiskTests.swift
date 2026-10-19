@@ -146,6 +146,64 @@ final class GCRDiskTests: XCTestCase {
         XCTAssertTrue(disk.image?.capabilities.unsupportedFeatures.contains("Weak/random bits") == true)
     }
 
+    func testNIBLoadCutsTheCaptureWindowToOneRevolution() {
+        // A NIB window holds more than one revolution; the tail repeats the
+        // head at an arbitrary bit phase. The loaded track must loop at the
+        // revolution length so no sector straddles a splice.
+        var seed: UInt32 = 0x1234_5678
+        var revolution: [UInt8] = []
+        for _ in 0..<7100 {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            revolution.append(UInt8(truncatingIfNeeded: seed >> 24))
+        }
+        var bits: [UInt8] = []
+        for byte in revolution + revolution {
+            for bit in (0..<8).reversed() { bits.append((byte >> UInt8(bit)) & 1) }
+        }
+        let phase = 5
+        var window = [UInt8](repeating: 0, count: 0x2000)
+        for index in 0..<0x2000 {
+            var value: UInt8 = 0
+            for bit in 0..<8 { value = (value << 1) | bits[phase + index * 8 + bit] }
+            window[index] = value
+        }
+        let disk = GCRDisk()
+
+        XCTAssertTrue(disk.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 2, density: 0x12, bytes: window)]))))
+
+        let track = disk.trackInfo(halfTrack: 0)
+        XCTAssertEqual(track?.bitLength, 7100 * 8)
+        XCTAssertEqual(track?.bytes.count, 7100)
+        XCTAssertEqual(track?.bytes.prefix(16), window.prefix(16))
+        XCTAssertEqual(track?.speedZone, 2)
+
+        // A capture whose tail turns into noise from another read pass still
+        // identifies the revolution from the part that repeats.
+        var torn = window
+        for index in 0x1E00..<0x2000 {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            torn[index] = UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        let tornDisk = GCRDisk()
+        XCTAssertTrue(tornDisk.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 2, density: 0x12, bytes: torn)]))))
+        XCTAssertEqual(tornDisk.trackInfo(halfTrack: 0)?.bitLength, 7100 * 8)
+
+        // A window that never repeats keeps its full length.
+        var noise = [UInt8](repeating: 0, count: 0x2000)
+        for index in noise.indices {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            noise[index] = UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        let noisy = GCRDisk()
+        XCTAssertTrue(noisy.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 2, density: 0x12, bytes: noise)]))))
+        XCTAssertEqual(noisy.trackInfo(halfTrack: 0)?.bitLength, 0x2000 * 8)
+
+        // A uniform window repeats at every length and carries no position.
+        let uniform = GCRDisk()
+        XCTAssertTrue(uniform.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 2, density: 0x12, bytes: [UInt8](repeating: 0x55, count: 0x2000))]))))
+        XCTAssertEqual(uniform.trackInfo(halfTrack: 0)?.bitLength, 0x2000 * 8)
+    }
+
     func testNIBLoadRejectsBadMagicOutOfRangeHalfTrackAndTruncatedPayload() {
         let disk = GCRDisk()
         var badMagic = makeNIB(entries: [

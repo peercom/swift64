@@ -227,6 +227,56 @@ final class MachineStateTests: XCTestCase {
         XCTAssertEqual(signature(of: again), signature(of: c64))
     }
 
+    func testHighLevelG64MountSurvivesTheRoundTrip() throws {
+        // The high-level drive keeps decoded sectors for a G64 mount; a restore
+        // must not feed those sectors back through the GCR decoder.
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeDirectoryOnlyG64(), fileName: "blank.g64"))
+        XCTAssertEqual(c64.diskDrive.mountedFormat, .g64)
+        installProbeProgram(on: c64)
+        for _ in 0..<20_000 { c64.tickOneCycle() }
+        let snapshot = try c64.saveState()
+
+        let restored = C64()
+        try restored.restoreState(from: snapshot)
+        XCTAssertTrue(restored.diskDrive.isMounted)
+        XCTAssertEqual(restored.diskDrive.mountedFormat, .g64)
+        XCTAssertTrue(restored.diskDrive.isWriteProtected)
+        XCTAssertEqual(restored.diskDrive.exportedD64Image, c64.diskDrive.exportedD64Image)
+        XCTAssertEqual(restored.mountedDiskName, "blank.g64")
+        for _ in 0..<20_000 { c64.tickOneCycle(); restored.tickOneCycle() }
+        XCTAssertEqual(signature(of: restored), signature(of: c64))
+    }
+
+    /// A G64 with a single track-18 directory track whose BAM sector names the disk.
+    private func makeDirectoryOnlyG64() -> Data {
+        var g64 = [UInt8]()
+        g64.append(contentsOf: Array("GCR-1541".utf8))
+        g64.append(contentsOf: [0x00, 84, 0x00, 0x1E])
+        let offsetTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+        let speedTableStart = g64.count
+        g64.append(contentsOf: [UInt8](repeating: 0, count: 84 * 4))
+
+        var bam = [UInt8](repeating: 0, count: 256)
+        bam[0] = 18; bam[1] = 1; bam[2] = 0x41
+        for offset in 0x90..<0xA0 { bam[offset] = 0x53 }
+        var sectors = (0..<19).map { _ in [UInt8](repeating: 0, count: 256) }
+        sectors[0] = bam
+        sectors[1][1] = 0xFF
+        let trackBytes = GCRDisk().encodeTrack(trackNum: 18, sectors: sectors, diskID: (0x41, 0x42))
+        let trackOffset = g64.count
+        g64.append(UInt8(trackBytes.count & 0xFF))
+        g64.append(UInt8(trackBytes.count >> 8))
+        g64.append(contentsOf: trackBytes)
+        let halfTrack = 34
+        for byte in 0..<4 {
+            g64[offsetTableStart + halfTrack * 4 + byte] = UInt8((trackOffset >> (8 * byte)) & 0xFF)
+        }
+        g64[speedTableStart + halfTrack * 4] = UInt8(GCRDisk.speedZone(for: 18))
+        return Data(g64)
+    }
+
     // MARK: - ROM-dependent true-drive boot
 
     private func localROMs() -> (basic: Data, kernal: Data, charset: Data, drive: Data)? {
