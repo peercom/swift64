@@ -158,7 +158,7 @@ final class DiskDriveTests: XCTestCase {
 
         let fileOffset = geometry.trackOffsets[36]
         image[fileOffset + 0] = 0
-        image[fileOffset + 1] = 4
+        image[fileOffset + 1] = 3
         image[fileOffset + 2] = 0xA9
         image[fileOffset + 3] = 0x2A
 
@@ -166,6 +166,58 @@ final class DiskDriveTests: XCTestCase {
         let entry = try XCTUnwrap(drive.findFile("HELLO"))
 
         XCTAssertEqual(drive.readFileData(entry), [0xA9, 0x2A])
+    }
+
+    func testLastSectorByteIndexIsInclusive() throws {
+        // CBM DOS stores the index of the last valid data byte (inclusive) in byte 1 of a
+        // file's final sector, so byte 5 means offsets 2...5 hold data and $FF means 254 bytes.
+        let drive = DiskDrive()
+        var image = [UInt8](makeMinimalD64(fileBlocks: 1))
+        let fileOffset = DiskDrive.trackOffset[1]
+        image[fileOffset + 0] = 0
+        image[fileOffset + 1] = 5
+        image[fileOffset + 2] = 0x01
+        image[fileOffset + 3] = 0x08
+        image[fileOffset + 4] = 0xA9
+        image[fileOffset + 5] = 0x2A
+        image[fileOffset + 6] = 0xEE  // past the last valid byte, must not be read
+
+        XCTAssertTrue(drive.mount(Data(image)))
+        let entry = try XCTUnwrap(drive.findFile("HELLO"))
+        XCTAssertEqual(drive.readFileData(entry), [0x01, 0x08, 0xA9, 0x2A])
+        XCTAssertEqual(drive.loadFileData(entry), [0x01, 0x08, 0xA9, 0x2A])
+
+        image[fileOffset + 1] = 0xFF
+        for index in 2..<256 { image[fileOffset + index] = UInt8(index) }
+        XCTAssertTrue(drive.mount(Data(image)))
+        let full = drive.readFileData(try XCTUnwrap(drive.findFile("HELLO")))
+        XCTAssertEqual(full.count, 254)
+        XCTAssertEqual(full.first, 2)
+        XCTAssertEqual(full.last, 255)
+    }
+
+    func testSavedFileLastSectorUsesInclusiveByteIndexAndFullSectors() throws {
+        let drive = DiskDrive()
+        XCTAssertTrue(drive.mount(makeBlankWritableD64()))
+        let payload = (0..<254).map { UInt8($0 & 0xFF) }
+        XCTAssertTrue(drive.savePRG(filename: "FULL", data: payload))
+        let entry = try XCTUnwrap(drive.findFile("FULL"))
+        XCTAssertEqual(entry.fileSize, 1)
+        let sector = try XCTUnwrap(drive.readSector(track: Int(entry.firstTrack), sector: Int(entry.firstSector)))
+        XCTAssertEqual(sector[0], 0)
+        XCTAssertEqual(sector[1], 0xFF)
+        XCTAssertEqual(drive.loadFileData(entry), payload)
+
+        let longer = payload + [0x42]
+        XCTAssertTrue(drive.savePRG(filename: "LONGER", data: longer))
+        let entry2 = try XCTUnwrap(drive.findFile("LONGER"))
+        XCTAssertEqual(entry2.fileSize, 2)
+        let first = try XCTUnwrap(drive.readSector(track: Int(entry2.firstTrack), sector: Int(entry2.firstSector)))
+        let last = try XCTUnwrap(drive.readSector(track: Int(first[0]), sector: Int(first[1])))
+        XCTAssertEqual(last[0], 0)
+        XCTAssertEqual(last[1], 2)
+        XCTAssertEqual(last[2], 0x42)
+        XCTAssertEqual(drive.loadFileData(entry2), longer)
     }
 
     func testFileReadStopsOnCyclicSectorChain() throws {
@@ -2557,13 +2609,13 @@ final class DiskDriveTests: XCTestCase {
 
         let prgOffset = DiskDrive.trackOffset[1]
         image[prgOffset + 0] = 0
-        image[prgOffset + 1] = 4
+        image[prgOffset + 1] = 3
         image[prgOffset + 2] = 0xAA
         image[prgOffset + 3] = 0xBB
 
         let seqOffset = DiskDrive.trackOffset[1] + 256
         image[seqOffset + 0] = 0
-        image[seqOffset + 1] = 5
+        image[seqOffset + 1] = 4
         image[seqOffset + 2] = 0x10
         image[seqOffset + 3] = 0x20
         image[seqOffset + 4] = 0x30
@@ -2587,7 +2639,7 @@ final class DiskDriveTests: XCTestCase {
 
         let relOffset = DiskDrive.trackOffset[1]
         image[relOffset + 0] = 0
-        image[relOffset + 1] = 5
+        image[relOffset + 1] = 4
         image[relOffset + 2] = 0x52
         image[relOffset + 3] = 0x45
         image[relOffset + 4] = 0x4C

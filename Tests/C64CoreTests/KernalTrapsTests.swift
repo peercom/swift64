@@ -524,20 +524,141 @@ final class KernalTrapsTests: XCTestCase {
         XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
     }
 
-    func testDiskLoadTrapAutostartsSystemAreaLoader() {
+    func testDiskLoadTrapReturnsThroughBASICVectorsForSystemAreaLoader() {
+        // A boot file that loads over $0300-$0303 autostarts on hardware when BASIC jumps
+        // through its warm-start vector after the LOAD returns; the trap must return
+        // normally and leave the loaded vector in place instead of jumping into the file.
         let c64 = C64()
         XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
-        XCTAssertTrue(c64.diskDrive.savePRG(filename: "BOOT", data: [0xA2, 0x02, 0xEA, 0x60]))
+        var payload = [UInt8](repeating: 0xEA, count: 0x0304 - 0x02A7)
+        payload[0] = 0xA2  // LDX #$02 at $02A7
+        payload[1] = 0x02
+        payload[0x0300 - 0x02A7] = 0x8B  // error vector $E38B
+        payload[0x0301 - 0x02A7] = 0xE3
+        payload[0x0302 - 0x02A7] = 0xA7  // main-loop vector -> $02A7
+        payload[0x0303 - 0x02A7] = 0x02
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "BOOT", data: [0xA7, 0x02] + payload))
         prepareKernalLoadTrap(c64, filename: "BOOT", verify: false, secondary: 1)
 
         XCTAssertTrue(c64.kernalTraps.checkTrap())
 
-        XCTAssertEqual(c64.memory.ram[0x02A2], 0xEA)
-        XCTAssertEqual(c64.memory.ram[0x02A3], 0x60)
-        XCTAssertEqual(c64.cpu.pc, 0x02A2)
-        XCTAssertEqual(c64.cpu.x, 0xA4)
-        XCTAssertEqual(c64.cpu.y, 0x02)
+        XCTAssertEqual(c64.memory.ram[0x02A7], 0xA2)
+        XCTAssertEqual(c64.memory.ram[0x0302], 0xA7)
+        XCTAssertEqual(c64.memory.ram[0x0303], 0x02)
+        XCTAssertEqual(c64.cpu.pc, 0x1235, "trap returns to the caller, BASIC then jumps through $0302")
+        XCTAssertEqual(c64.cpu.x, 0x04)
+        XCTAssertEqual(c64.cpu.y, 0x03)
         XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+    }
+
+    func testDiskLoadTrapReturnsThroughStackOverwrittenByBootFile() {
+        // Boot files that load over the stack page replace the LOAD caller's return address,
+        // so the Kernal's RTS lands in the file. The trap must pop the overwritten slot.
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        // Loads $01F8-$0207: fill the stack slots with $0202 so any popped return lands at $0203.
+        var payload = [UInt8](repeating: 0x02, count: 8)
+        payload += [0xEA, 0xEA, 0xEA, 0xA9, 0x01, 0x4C, 0x03, 0x02]  // $0200..$0207
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "MENU", data: [0xF8, 0x01] + payload))
+        prepareKernalLoadTrap(c64, filename: "MENU", verify: false, secondary: 1)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.memory.ram[0x01FC], 0x02)
+        XCTAssertEqual(c64.memory.ram[0x01FD], 0x02)
+        XCTAssertEqual(c64.cpu.pc, 0x0203)
+        XCTAssertEqual(c64.cpu.sp, 0xFD)
+        XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+    }
+
+    func testDiskLoadTrapKeepsKernalVectorTableLoadedByBootFile() {
+        // Ocean-style boot files load a replacement vector table at $0316 whose CHROUT entry
+        // points into the file; the next Kernal print then starts the loader. The trap must
+        // not execute the table as code.
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        var payload = [UInt8](repeating: 0x00, count: 0x0340 - 0x0316)
+        payload[0x0326 - 0x0316] = 0x3C  // CHROUT -> $033C
+        payload[0x0327 - 0x0316] = 0x03
+        payload[0x033C - 0x0316] = 0x78  // SEI
+        payload[0x033D - 0x0316] = 0x4C  // JMP $4000
+        payload[0x033E - 0x0316] = 0x00
+        payload[0x033F - 0x0316] = 0x40
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "HUDSON", data: [0x16, 0x03] + payload))
+        prepareKernalLoadTrap(c64, filename: "HUDSON", verify: false, secondary: 1)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.cpu.pc, 0x1235)
+        XCTAssertEqual(c64.memory.ram[0x0326], 0x3C)
+        XCTAssertEqual(c64.memory.ram[0x0327], 0x03)
+        XCTAssertEqual(c64.memory.ram[0x033C], 0x78)
+    }
+
+    func testLoadTrapHandlesFileEndingAtTopOfMemory() {
+        // A full 8K file at $E000 ends exactly at $FFFF; the Kernal reports the wrapped end
+        // address $0000 in X/Y and the trap must not trap on the wrap.
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        let payload = [UInt8](repeating: 0xEA, count: 0x2000)
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "TOP", data: [0x00, 0xE0] + payload))
+        prepareKernalLoadTrap(c64, filename: "TOP", verify: false, secondary: 1)
+
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+
+        XCTAssertEqual(c64.memory.ram[0xE000], 0xEA)
+        XCTAssertEqual(c64.memory.ram[0xFFFF], 0xEA)
+        XCTAssertEqual(c64.cpu.x, 0x00)
+        XCTAssertEqual(c64.cpu.y, 0x00)
+        XCTAssertEqual(c64.memory.ram[0xAE], 0x00)
+        XCTAssertEqual(c64.memory.ram[0xAF], 0x00)
+        XCTAssertFalse(c64.cpu.getFlag(Flags.carry))
+    }
+
+    func testLoadTrapPrintsKernalMessagesOnlyInDirectModeBeforeTheTransfer() {
+        let c64 = C64()
+        XCTAssertTrue(c64.mountDisk(makeBlankWritableD64()))
+        // 1,000 bytes of $55 loading at $0400 cover the whole default screen.
+        let payload = [UInt8](repeating: 0x55, count: 1000)
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "SCREEN", data: [0x00, 0x04] + payload))
+
+        // Program mode (MSGFLG bit 7 clear): nothing is printed, the file data is intact.
+        c64.memory.ram[0x9D] = 0x00
+        c64.memory.ram[0x0288] = 0x04
+        c64.memory.ram[0xD6] = 5
+        c64.memory.ram[0xD3] = 0
+        prepareKernalLoadTrap(c64, filename: "SCREEN", verify: false, secondary: 1)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertTrue(c64.memory.ram[0x0400..<0x07E8].allSatisfy { $0 == 0x55 })
+        XCTAssertEqual(c64.memory.ram[0xD6], 5)
+        XCTAssertEqual(c64.memory.ram[0xD3], 0)
+
+        // Direct mode: "\rSEARCHING FOR name" and "\rLOADING" are printed with the Kernal's
+        // line discipline (cursor left on the LOADING line, no trailing CR) and before the
+        // transfer, so the loaded data wins on the rows the messages used.
+        for address in 0x0400..<0x07E8 { c64.memory.ram[address] = 0x20 }
+        c64.memory.ram[0x9D] = 0x80
+        c64.memory.ram[0xD6] = 5
+        c64.memory.ram[0xD3] = 0
+        prepareKernalLoadTrap(c64, filename: "SCREEN", verify: false, secondary: 1)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        XCTAssertTrue(c64.memory.ram[0x0400..<0x07E8].allSatisfy { $0 == 0x55 })
+        XCTAssertEqual(c64.memory.ram[0xD6], 7, "SEARCHING on row 6, LOADING on row 7")
+        XCTAssertEqual(c64.memory.ram[0xD3], 7, "cursor stays after LOADING")
+
+        // A file that does not touch the screen leaves both messages visible.
+        XCTAssertTrue(c64.diskDrive.savePRG(filename: "HIGH", data: [0x00, 0xC0, 0xEA, 0x60]))
+        for address in 0x0400..<0x07E8 { c64.memory.ram[address] = 0x20 }
+        c64.memory.ram[0xD6] = 5
+        c64.memory.ram[0xD3] = 0
+        prepareKernalLoadTrap(c64, filename: "HIGH", verify: false, secondary: 1)
+        XCTAssertTrue(c64.kernalTraps.checkTrap())
+        let row6 = c64.memory.ram[(0x0400 + 6 * 40)..<(0x0400 + 6 * 40 + 18)].map { UInt8($0) }
+        let row7 = c64.memory.ram[(0x0400 + 7 * 40)..<(0x0400 + 7 * 40 + 7)].map { UInt8($0) }
+        XCTAssertEqual(row6, Array("SEARCHING FOR HIGH".utf8).map { $0 >= 0x41 ? $0 - 0x40 : $0 })
+        XCTAssertEqual(row7, Array("LOADING".utf8).map { $0 - 0x40 })
+        XCTAssertEqual(c64.memory.ram[0xD6], 7)
+        XCTAssertEqual(c64.memory.ram[0xD3], 7)
     }
 
     func testSaveTrapReplaceSyntaxOverwritesExistingPRG() throws {
@@ -1447,7 +1568,7 @@ final class KernalTrapsTests: XCTestCase {
 
         let fileOffset = DiskDrive.trackOffset[1]
         image[fileOffset + 0] = 0
-        image[fileOffset + 1] = 6
+        image[fileOffset + 1] = 5
         image[fileOffset + 2] = 0x01
         image[fileOffset + 3] = 0x08
         image[fileOffset + 4] = 0xA9

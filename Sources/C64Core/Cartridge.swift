@@ -828,6 +828,12 @@ public struct Cartridge: Equatable, Codable {
         } else {
             for chip in chips where chip.bank == 0 {
                 switch chip.loadAddress {
+                case 0x8000 where chip.data.count == 0x4000:
+                    // A 16K image stored as one CHIP packet covers ROML and ROMH.
+                    roml = Array(chip.data[0..<0x2000])
+                    romh = Array(chip.data[0x2000..<0x4000])
+                    hasROML = true
+                    hasROMH = true
                 case 0x8000...0x9FFF:
                     guard copy(chip.data, into: &roml, at: Int(chip.loadAddress - 0x8000)) else {
                         return nil
