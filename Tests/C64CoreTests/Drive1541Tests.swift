@@ -2986,7 +2986,7 @@ final class Drive1541Tests: XCTestCase {
 
         let fileOffset = DiskDrive.trackOffset[1]
         image[fileOffset + 0] = 0
-        image[fileOffset + 1] = 6
+        image[fileOffset + 1] = 5  // index of the last valid byte: load address plus two payload bytes
         image[fileOffset + 2] = 0x01
         image[fileOffset + 3] = 0x08
         image[fileOffset + 4] = 0xA9
