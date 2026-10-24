@@ -432,7 +432,8 @@ public final class GCRDisk {
             let rawTrackBytes = Array(bytes[payloadOffset..<(payloadOffset + Self.nibTrackLength)])
             let speedZone = Int(rawDensity % 0x10) & 0x03
             let cycle = Self.nibTrackCycle(rawTrackBytes, speedZone: speedZone)
-            let trackBytes = cycle.map { Array(rawTrackBytes[0..<(($0 + 7) / 8)]) } ?? rawTrackBytes
+                ?? Self.nibTrackCycleConfirmedBySectors(rawTrackBytes, speedZone: speedZone, track: halfTrack / 2 + 1)
+            let trackBytes = cycle.map { Self.nibRevolutionSlice(rawTrackBytes, cycleBits: $0) } ?? rawTrackBytes
             let sectorHeaderStats = G64Parser.sectorHeaderStats(
                 from: trackBytes,
                 track: halfTrack / 2 + 1
@@ -1721,6 +1722,69 @@ public final class GCRDisk {
     /// long are a uniform region without positional information; both keep the
     /// raw window, as do unformatted tracks that never repeat.
     static func nibTrackCycle(_ bytes: [UInt8], speedZone: Int) -> Int? {
+        nibTrackCycleSearch(bytes, speedZone: speedZone, requireMargin: true)
+    }
+
+    /// Fallback for captures whose window starts inside a gap: the overlap
+    /// then repeats at many lengths and `nibTrackCycle` has no margin to pick
+    /// one. A DOS-formatted track still carries its own proof: the right cut
+    /// shows every sector header of the track exactly once, while the raw
+    /// window shows a duplicate. The best repeat is accepted only when the
+    /// cut track has the full sector count for its track number and no
+    /// duplicate header, and the raw window did have one.
+    static func nibTrackCycleConfirmedBySectors(_ bytes: [UInt8], speedZone: Int, track: Int) -> Int? {
+        guard track >= 1 && track < DiskDrive.sectorsPerTrack.count,
+              let candidate = nibTrackCycleSearch(bytes, speedZone: speedZone, requireMargin: false) else {
+            return nil
+        }
+        let expectedSectors = DiskDrive.sectorsPerTrack[track]
+        let raw = G64Parser.sectorHeaderStats(from: bytes, track: track)
+        guard raw.duplicateSectorHeaderCount > 0 else { return nil }
+        let cutBytes = nibRevolutionSlice(bytes, cycleBits: candidate)
+        let cut = G64Parser.sectorHeaderStats(from: cutBytes, track: track)
+        guard cut.validHeaderCount == expectedSectors, cut.duplicateSectorHeaderCount == 0 else { return nil }
+        return candidate
+    }
+
+    /// One revolution of `cycleBits` cut out of the capture window so that the
+    /// loop splice falls inside a sync run rather than at the window start.
+    /// The first bits of a NIB capture are often torn (the nibbler starts
+    /// mid-byte), and a header split across the splice cannot be found by the
+    /// DOS. Any rotation of the revolution is the same track, so the slice
+    /// begins at the first sync run that leaves a whole revolution inside the
+    /// window, or at the window start when none does.
+    static func nibRevolutionSlice(_ bytes: [UInt8], cycleBits: Int) -> [UInt8] {
+        let totalBits = bytes.count * 8
+        guard cycleBits > 0, cycleBits <= totalBits else { return bytes }
+        func bit(_ index: Int) -> UInt8 { (bytes[index >> 3] >> UInt8(7 - (index & 7))) & 1 }
+        var start = 0
+        var ones = 0
+        var index = 0
+        let latestStart = totalBits - cycleBits
+        while index < latestStart + 10 {
+            if bit(index) == 1 {
+                ones += 1
+                if ones == 10 {
+                    let syncStart = index - 9
+                    if syncStart <= latestStart { start = syncStart }
+                    break
+                }
+            } else {
+                ones = 0
+            }
+            index += 1
+        }
+        if start == 0 && (start & 7) == 0 {
+            return Array(bytes[0..<((cycleBits + 7) / 8)])
+        }
+        var slice = [UInt8](repeating: 0, count: (cycleBits + 7) / 8)
+        for offset in 0..<cycleBits where bit(start + offset) == 1 {
+            slice[offset >> 3] |= 0x80 >> UInt8(offset & 7)
+        }
+        return slice
+    }
+
+    private static func nibTrackCycleSearch(_ bytes: [UInt8], speedZone: Int, requireMargin: Bool) -> Int? {
         let count = bytes.count
         guard count == nibTrackLength else { return nil }
         // Nominal revolution lengths at 300 rpm; allow generous spindle and
@@ -1809,7 +1873,7 @@ public final class GCRDisk {
         }
         guard completeMatches == 0,
               bestRun >= minimumRepeat,
-              bestRun >= runnerUpRun + minimumMargin,
+              !requireMargin || bestRun >= runnerUpRun + minimumMargin,
               let bestRunLength, bestRunLength > 0 else { return nil }
         return bestRunLength
     }

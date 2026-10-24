@@ -174,7 +174,7 @@ final class GCRDiskTests: XCTestCase {
         let track = disk.trackInfo(halfTrack: 0)
         XCTAssertEqual(track?.bitLength, 7100 * 8)
         XCTAssertEqual(track?.bytes.count, 7100)
-        XCTAssertEqual(track?.bytes.prefix(16), window.prefix(16))
+        XCTAssertTrue(isRotation(track?.bytes ?? [], of: revolution), "the cut track is one revolution, possibly rotated to a sync")
         XCTAssertEqual(track?.speedZone, 2)
 
         // A capture whose tail turns into noise from another read pass still
@@ -202,6 +202,78 @@ final class GCRDiskTests: XCTestCase {
         let uniform = GCRDisk()
         XCTAssertTrue(uniform.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 2, density: 0x12, bytes: [UInt8](repeating: 0x55, count: 0x2000))]))))
         XCTAssertEqual(uniform.trackInfo(halfTrack: 0)?.bitLength, 0x2000 * 8)
+    }
+
+    func testNIBLoadConfirmsAGapStartedCaptureByItsSectorHeaders() {
+        // A DOS track captured from inside its tail gap: the window's overlap
+        // is mostly gap bytes, so the repeat search has no margin, but the
+        // right cut shows all 21 headers once while the raw window shows a
+        // duplicate.
+        var seed: UInt32 = 0x0BAD_F00D
+        let sectors = (0..<21).map { _ -> [UInt8] in
+            (0..<256).map { _ -> UInt8 in
+                seed = seed &* 1_664_525 &+ 1_013_904_223
+                return UInt8(truncatingIfNeeded: seed >> 24)
+            }
+        }
+        var revolution = GCRDisk().encodeTrack(trackNum: 5, sectors: sectors, diskID: (0x41, 0x42))
+        // Pad the tail gap so the window start and the whole overlap sit in gap bytes.
+        revolution.append(contentsOf: [UInt8](repeating: 0x55, count: 7692 - revolution.count))
+        let gapStart = revolution.count - 600
+        let rotated = Array(revolution[gapStart...]) + Array(revolution[..<gapStart])
+        var window = rotated + Array(rotated.prefix(0x2000 - rotated.count))
+        for index in (0x2000 - 24)..<0x2000 {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            window[index] = UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        // The synthetic gap is regular enough for the plain search; the
+        // sector-confirmed fallback must agree with it on the same window.
+        XCTAssertEqual(GCRDisk.nibTrackCycleConfirmedBySectors(window, speedZone: 3, track: 5), revolution.count * 8)
+        XCTAssertNil(GCRDisk.nibTrackCycleConfirmedBySectors(window, speedZone: 3, track: 6), "a wrong track number finds no headers")
+
+        let disk = GCRDisk()
+        XCTAssertTrue(disk.loadNIB(Data(makeNIB(entries: [(nibHalfTrack: 10, density: 0x13, bytes: window)]))))
+        let track = disk.trackInfo(halfTrack: 8)
+        XCTAssertEqual(track?.bitLength, revolution.count * 8)
+        XCTAssertEqual(track?.duplicateSectorHeaderCount, 0)
+    }
+
+    func testNIBRevolutionSliceStartsAtASyncSoNoHeaderStraddlesTheSplice() {
+        // A capture that begins in the middle of a header: cutting at the
+        // window start would split that header across the loop point.
+        var seed: UInt32 = 0x5151_2323
+        let sectors = (0..<21).map { _ -> [UInt8] in
+            (0..<256).map { _ -> UInt8 in
+                seed = seed &* 1_664_525 &+ 1_013_904_223
+                return UInt8(truncatingIfNeeded: seed >> 24)
+            }
+        }
+        let revolution = GCRDisk().encodeTrack(trackNum: 3, sectors: sectors, diskID: (0x41, 0x42))
+        // Rotate so the window starts 3 bytes into the first header (after its sync).
+        let firstSyncEnd = revolution.firstIndex { $0 != 0xFF } ?? 0
+        let rotation = firstSyncEnd + 3
+        let rotated = Array(revolution[rotation...]) + Array(revolution[..<rotation])
+        var window = rotated + Array(rotated.prefix(0x2000 - rotated.count))
+        window[0] = 0x00  // the torn first byte of a real capture
+
+        let slice = GCRDisk.nibRevolutionSlice(window, cycleBits: revolution.count * 8)
+        XCTAssertEqual(slice.count, revolution.count)
+        XCTAssertEqual(slice.first, 0xFF, "the slice begins in a sync run")
+        let stats = G64Parser.sectorHeaderStats(from: slice, track: 3)
+        XCTAssertEqual(stats.validHeaderCount, 21)
+        XCTAssertEqual(stats.duplicateSectorHeaderCount, 0)
+        XCTAssertEqual(G64Parser.sectorHeaderStats(from: Array(window.prefix(revolution.count)), track: 3).validHeaderCount, 20, "cutting at the torn window start loses the split header")
+    }
+
+    private func isRotation(_ candidate: [UInt8], of revolution: [UInt8]) -> Bool {
+        guard candidate.count == revolution.count, !candidate.isEmpty else { return false }
+        let doubled = revolution + revolution
+        let doubledBits = doubled.flatMap { byte in (0..<8).map { (byte >> UInt8(7 - $0)) & 1 } }
+        let candidateBits = candidate.flatMap { byte in (0..<8).map { (byte >> UInt8(7 - $0)) & 1 } }
+        for start in 0..<(revolution.count * 8) where doubledBits[start] == candidateBits[0] {
+            if Array(doubledBits[start..<(start + candidateBits.count)]) == candidateBits { return true }
+        }
+        return false
     }
 
     func testNIBLoadRejectsBadMagicOutOfRangeHalfTrackAndTruncatedPayload() {
