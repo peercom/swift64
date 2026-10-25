@@ -429,6 +429,70 @@ final class CIATests: XCTestCase {
         XCTAssertEqual(irqStates, [true, false])
     }
 
+    func testTODAlarmFiresOnStartAtAlarmValueThenLatchesUntilComparatorClears() {
+        // Starting the clock already at the alarm value fires the alarm once;
+        // restarting at that value without the clock leaving it does not
+        // re-fire (`0alarm`/`1alarm`/`6tod` edge-and-latch behaviour).
+        let cia = CIA(isCIA1: true)
+        cia.reset()
+        var fires = 0
+        cia.onInterrupt = { if $0 { fires += 1 } }
+        cia.writeRegister(0x0D, value: 0x84)   // enable alarm IRQ
+        // Alarm is the power-up default 00:00:00.0; start the clock there.
+        cia.writeRegister(0x0B, value: 0x00)   // hour (stops the clock)
+        cia.writeRegister(0x0A, value: 0x00)
+        cia.writeRegister(0x09, value: 0x00)
+        cia.writeRegister(0x08, value: 0x00)   // 10ths (starts at the alarm)
+        XCTAssertEqual(fires, 1, "starting at the alarm value fires once")
+        _ = cia.readRegister(0x0D)             // acknowledge
+        cia.writeRegister(0x0B, value: 0x00)
+        cia.writeRegister(0x0A, value: 0x00)
+        cia.writeRegister(0x09, value: 0x00)
+        cia.writeRegister(0x08, value: 0x00)
+        XCTAssertEqual(fires, 1, "restart at the alarm value does not re-fire")
+    }
+
+    func testTODAlarmReArmsWhenAdvancedPastTheRunningClock() {
+        // `stability`: the clock runs continuously while the alarm is marched
+        // forward past it. Changing the alarm re-samples the comparator, so
+        // the next tick into the new alarm fires again.
+        let cia = CIA(isCIA1: true)
+        cia.reset()
+        var fires = 0
+        cia.onInterrupt = { if $0 { fires += 1 } }
+        cia.writeRegister(0x0D, value: 0x84)
+        func setAlarmTenth(_ value: UInt8) {
+            cia.writeRegister(0x0F, value: 0x80)   // CRB: alarm access
+            cia.writeRegister(0x08, value: value)
+            cia.writeRegister(0x0F, value: 0x00)   // CRB: TOD access
+        }
+        cia.writeRegister(0x0F, value: 0x80)
+        cia.writeRegister(0x0B, value: 0x00); cia.writeRegister(0x0A, value: 0x00)
+        cia.writeRegister(0x09, value: 0x00); cia.writeRegister(0x08, value: 0x01)  // alarm = 00:00:00.1
+        cia.writeRegister(0x0F, value: 0x00)
+        cia.writeRegister(0x0B, value: 0x00); cia.writeRegister(0x0A, value: 0x00)
+        cia.writeRegister(0x09, value: 0x00); cia.writeRegister(0x08, value: 0x00)  // clock = 00:00:00.0
+        tickTODTenth(cia)                       // -> 00:00:00.1 == alarm
+        XCTAssertEqual(fires, 1)
+        _ = cia.readRegister(0x0D)
+        setAlarmTenth(0x02)                     // advance alarm past the running clock
+        tickTODTenth(cia)                       // -> 00:00:00.2 == alarm
+        XCTAssertEqual(fires, 2, "the alarm re-arms when advanced past the running clock")
+    }
+
+    func testTODClockIsStoppedAfterResetUntilTenthsWritten() {
+        // `powerup`: the TOD is stopped at power-up/reset and only starts when
+        // software writes the 10ths register.
+        let cia = CIA(isCIA1: true)
+        cia.reset()
+        XCTAssertEqual(cia.readRegister(0x08), 0x00)
+        tickTODTenth(cia)
+        XCTAssertEqual(cia.readRegister(0x08), 0x00, "stopped at power-up: the clock does not advance")
+        cia.writeRegister(0x08, value: 0x00)    // writing 10ths starts it
+        tickTODTenth(cia)
+        XCTAssertEqual(cia.readRegister(0x08), 0x01, "writing 10ths starts the clock")
+    }
+
     func testTODHourWriteOfTwelveFlipsAMPM() {
         // `hour-test`: writing $12 stores $92 and $92 stores $12; other
         // hours are stored with bits 5 and 6 dropped.
