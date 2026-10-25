@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 - 2026-10-25
+
+- Advanced true-drive loading of protected originals. Raw NIB/NBZ captures are now cut at a revolution boundary aligned to a sync and gap-started captures are confirmed by their sectors, so no header straddles the splice. With this, eleven more untouched originals load on the strict true drive: Boulder Dash, Impossible Mission and the Giana Sisters NBZ reach gameplay, and Bubble Bobble, International Karate, Lode Runner, Commando, Arkanoid, Ghostbusters, Hardball and the Hitchhiker's Guide reach their title or menu, none patched.
+- The 1541 now pulses byte-ready in write mode. The read head fires byte-ready every eight bit cells; in write mode the bit clock keeps running and still pulses it, gated by VIA2 SOE exactly as the read path is, so a ROM write or format loop on a write-protected or unwritable track no longer spins forever. A ROM-independent regression covers both write-protected and writable tracks.
+- Documented the remaining open loaders with precise diagnoses: Elite and Paradroid stall in a ROM write loop after their loader disables SOE, and Last Ninja's in-game request path desynchronizes with the drive. These need a cycle reference to fix and are recorded, not worked around. No CPU, VIC, CIA, SID or REU behavior changed since 0.7.0, so the public scoreboards are unchanged (VIC 144/146, CIA 119/143, SID 11/11, REU 66/69).
+
 ## 0.7.0 - 2026-10-19
 
 - Added a RAM Expansion Unit on the expansion port: 1700 (128 KB), 1764 (256 KB), 1750 (512 KB), and 1, 2, 4, 8 and 16 MB clones, selected in Settings > General > RAM Expansion and carried in save states. The 8726 REC registers at `$DF00-$DF1F` mirror through IO2, stash, fetch, swap and verify move data with the documented one- and two-cycle costs, the `$FF00` trigger works from any write including a read-modify-write dummy write, transfers pause while VIC BA is low, DMA accesses bypass the 6510 port but otherwise see the CPU's banking including I/O and colour RAM, end-of-block and verify-fault interrupts follow the mask, and the post-transfer register state matches the public `twoblocks` hardware dumps. Unpopulated 1764 banks read as $FF; the uninitialised-RAM pattern follows the public `raminitpattern` note.
