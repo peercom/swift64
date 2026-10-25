@@ -705,6 +705,40 @@ final class Drive1541Tests: XCTestCase {
         XCTAssertTrue(drive.statusSnapshot.writeProtected)
     }
 
+    func testWriteModeKeepsPulsingByteReadyEvenWhenWriteProtected() {
+        // The ROM's write and format loops wait on SO (`BVC *`); byte-ready
+        // comes from the bit clock, not from a successful write.
+        for writeProtected in [false, true] {
+            let drive = Drive1541()
+            XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [UInt8](repeating: 0x55, count: 64))))
+            drive.setWriteProtected(writeProtected)
+            drive.via2.writeRegister(0x03, value: 0xFF)  // DDR A all output: write mode
+            drive.halfTrack = 36
+            drive.motorOn = true
+            drive.via2.writeRegister(0x01, value: 0xA5)
+            XCTAssertTrue(drive.statusSnapshot.gcrWriteModeActive)
+            XCTAssertEqual(drive.statusSnapshot.gcrWriteGateActive, !writeProtected)
+            let before = drive.statusSnapshot.byteReadyCount
+            var cyclesUntilFirst = 0
+            while drive.statusSnapshot.byteReadyCount == before && cyclesUntilFirst < 100 {
+                drive.tickGCRHead(); cyclesUntilFirst += 1
+            }
+            XCTAssertLessThan(cyclesUntilFirst, 100, "write protected \(writeProtected): byte-ready never fired")
+            XCTAssertTrue(drive.cpu.getFlag(Flags.overflow), "SO reached the drive CPU")
+            // VIA zone bits 0: 32 cycles per byte.
+            let start = drive.statusSnapshot.byteReadyCount
+            for _ in 0..<320 { drive.tickGCRHead() }
+            XCTAssertEqual(drive.statusSnapshot.byteReadyCount - start, 10, "write protected \(writeProtected)")
+            if writeProtected {
+                XCTAssertEqual(drive.disk.trackInfo(halfTrack: 36)?.bytes, [UInt8](repeating: 0x55, count: 64), "nothing written")
+                XCTAssertEqual(drive.statusSnapshot.gcrWriteByteCount, 0)
+                XCTAssertGreaterThan(drive.statusSnapshot.headBitPosition, 0, "the head keeps turning")
+            } else {
+                XCTAssertGreaterThan(drive.statusSnapshot.gcrWriteByteCount, 0)
+            }
+        }
+    }
+
     func testVIA2PortAWriteUpdatesWritableGCRTrackAtHeadPosition() {
         let drive = Drive1541()
         XCTAssertTrue(drive.insertDiskImage(makeDiskImageWithTrack(bytes: [0x00, 0x11, 0x22, 0x33])))

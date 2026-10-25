@@ -1102,22 +1102,39 @@ public final class Drive1541 {
         gcrWriteSpliceCount += 1
     }
 
+    /// Write mode: the UE7/UF4 bit clock keeps running and the byte counter
+    /// still pulses byte-ready every eight bit cells, whether or not the
+    /// write gate is open. The ROM's write loops (`BVC *` at $C01A while
+    /// formatting or writing a sector) depend on those pulses; without them
+    /// a write-protected or unwritable track hung the drive forever
+    /// (Elite and Paradroid on the strict true drive).
     private func tickGCRWriteHead(viaSpeedZone: Int) {
-        guard motorOn,
-              !disk.writeProtected,
-              let target = resolvedWritableTrack(forHalfTrack: halfTrack) else {
+        guard motorOn else {
             clearGCRReadPresentation()
             return
         }
-
-        let totalBits = target.info?.bitLength ?? target.bytes.count * 8
-        guard totalBits > 0 else {
-            clearGCRReadPresentation()
-            return
+        let target = disk.writeProtected ? nil : resolvedWritableTrack(forHalfTrack: halfTrack)
+        let totalBits: Int
+        if let target {
+            totalBits = target.info?.bitLength ?? target.bytes.count * 8
+        } else if let readable = resolvedReadTrack(forHalfTrack: halfTrack) {
+            totalBits = readable.info?.bitLength ?? readable.bytes.count * 8
+        } else {
+            totalBits = 0
         }
-
-        clearGCRReadPresentation()
-        for _ in 0..<16 {
+        // No data byte is presented while writing, but the byte clock and
+        // its pending SO delay must survive from tick to tick.
+        syncDetected = false
+        shiftRegister = 0
+        presentedGCRByteStartBit = 0
+        presentedGCRByteEndBit = 0
+        for subTick in 0..<16 {
+            if soDelay > 0 {
+                soDelay -= 1
+                if soDelay == 0 {
+                    fireByteReady()
+                }
+            }
             ue7Counter += 1
             if ue7Counter >= 16 {
                 ue7Counter = viaSpeedZone
@@ -1126,12 +1143,26 @@ public final class Drive1541 {
                 uf4Counter = (uf4Counter + 1) & 0x0F
 
                 if (uf4Counter & 2) != 0 && (prevUF4 & 2) == 0 {
+                    bitCounter += 1
+                    if bitCounter >= 8 {
+                        bitCounter = 0
+                        if byteReadyActive {
+                            soDelay = scheduledByteReadySODelay(afterSubTick: subTick)
+                        }
+                    }
+                    guard totalBits > 0 else { continue }
                     if headBitPosition >= totalBits { headBitPosition = 0 }
                     let hasFreshDataBit = gcrWriteFreshBitsRemaining > 0
                     let sourceBitIndex = 7 - gcrWriteBitOffset
                     let bit = hasFreshDataBit
                         ? (via2.portAOut >> UInt8(sourceBitIndex)) & 0x01 != 0
                         : false
+                    guard let target else {
+                        // Write-protected or unwritable: the head still turns.
+                        headBitPosition += 1
+                        if headBitPosition >= totalBits { headBitPosition = 0 }
+                        continue
+                    }
                     if disk.writeBitAtBitPosition(
                         bit,
                         halfTrack: target.halfTrack,
