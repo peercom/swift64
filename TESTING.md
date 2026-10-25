@@ -1379,6 +1379,16 @@ How the calibration was derived: a scratch probe (not committed) ran `e`, `e3`, 
 
 ## Real-software corpus run
 
+### Corpus milestone calibration: 2026-10-25
+
+An attempt to turn the placeholder-hash true-drive title milestones into durable automated passes found a hard ceiling, recorded here so it is not re-investigated blind:
+
+- **Text proofs fail on these titles.** `screenTextContains` decodes screen RAM at `$0400` through the ROM charset. Almost every reachable title relocates its screen (Double Dragon `$2800`, Frank Bruno `$4800`, Commando `$E000`, Bubble Bobble `$5000`, Ghostbusters `$5400`) and/or uses a custom charset, so the decode yields non-ASCII. International Karate keeps its screen at `$0400` but still uses a custom font: a `screenTextContains` run for its menu reached game code (`pc=$4040`) yet matched no text, confirming the charset is not the ROM's.
+- **Frame hashes are fragile.** A `framebufferHash` pins one exact frame; any cycle-level timing change (including legitimate future fixes) breaks it, and each one needs a full-budget run to capture. That is why these 15 milestones carry the `0000000000000000` placeholder rather than a real hash.
+- **`driveStatus` is a loader-regression proxy, not a title proof.** Thresholds on GCR reads, byte-ready pulses and sync detections deterministically prove the loader transferred data and would catch the loader breaking again, but they cannot distinguish "reached the title" from "loaded data then hung" — Elite and Paradroid read a few thousand sectors before their write-loop stall, so a read threshold alone would misclassify them.
+
+Conclusion: durable title-level gating of a custom-charset bitmap loader needs either a fragile frame hash or a cycle reference to diff against; the pragmatic state used above (the strict-drive probe with eye-checked screenshots, plus `driveStatus`+`screenTextContains` on the two `*-strict` milestones that do show ROM text) remains the record. The reachable titles are documented by the probe, not hash-gated, by choice.
+
 ### Corpus record: 2026-10-19
 
 This is the first bounded run of the milestone harness over commercial software instead of test programs. It uses the existing opt-in `LocalDiskMatrixTests/testLocalDiskImagesNamedMilestonesWhenEnabled` runner with an untracked `C64/DISKS/compatibility.json`; the manifest, the result logs, the JSON summaries and the PPM captures stay untracked under `C64/DISKS/corpus-captures/2026-10-19/`. Media are the local untracked D64/G64/NBZ images under `C64/DISKS` (the "64 Games" and "Sports Games" compilations, Accolade and Cinemaware disks, the Great Giana Sisters G64 and the nibtools NBZ originals of the preservation collection) plus the one local CRT, copied to `C64/DISKS/corpus/` because the harness only scans `C64/DISKS`. No standalone PRG media exist locally; the PRG column is covered by PRG programs loaded from the compilation disks through the Kernal trap, which injects them exactly like a PRG file. Nothing on any disk was patched.
